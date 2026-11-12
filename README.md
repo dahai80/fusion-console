@@ -54,14 +54,85 @@ first login.
 
 Open `http://127.0.0.1:11480`, sign in, then:
 
-1. Settings → add a provider (e.g. type `gateway`, base URL
-   `http://127.0.0.1:11432/v1`, model `glm-5`), store its API key
-   (keychain ref id must match the provider's `api_key_id`).
+1. Settings → add a provider (see the fusion-gateway guide below, or a cloud
+   provider), store its API key (keychain ref id must match the provider's
+   `api_key_id`).
 2. Chat → pick the provider, send a message; or pick an agent + workdir and
    press the agent button to hand the task to the CLI.
 
 Headless hosts without a keychain: export
 `FUSION_CONSOLE_APIKEY_<KEY_ID_UPPERCASE>` instead.
+
+## End-to-end setup with fusion-gateway
+
+fusion-gateway is the local mixed-inference gateway (OpenAI-compatible,
+default port `11432`). The console talks to it like any OpenAI-compatible
+provider — verified end to end with `glm-5`.
+
+### 1. Start the gateway
+
+On the same host (or any reachable host):
+
+```bash
+~/fusion/fusion-gateway/start.sh start     # listens on 0.0.0.0:11432
+curl -s http://127.0.0.1:11432/api/health  # health check
+```
+
+### 2. Get (or create) a gateway client API key
+
+Gateway client keys live in `~/fusion/fusion-gateway/config.yaml` under
+`auth.api_keys`. Pick a key whose `allowed_models` covers your model (e.g.
+`glm*`), or add one:
+
+```yaml
+auth:
+  api_keys:
+    - name: fusion-console
+      key: fsx-fusion-console-<random-hex>
+      allowed_models: ["glm*", "gpt-4o*", "claude-*"]
+      rpm: 60
+      tpm: 100000
+```
+
+Restart the gateway after editing. The console never needs the upstream
+provider keys — the gateway holds those.
+
+### 3. Store the key in the console
+
+Console UI → Settings → **API key (stored in OS keychain)**:
+
+- key id: `gw-main` (any stable id; this is the keychain reference name)
+- secret: paste the gateway client key (`fsx-...`)
+
+### 4. Add the gateway provider
+
+Same page, **Edit / add provider**:
+
+| Field | Value |
+|---|---|
+| id | `gw-main` (must match the key id above) |
+| name | `fusion-gateway` |
+| type | `fusion-gateway` |
+| base URL | `http://127.0.0.1:11432/v1` (use the host IP if the gateway runs on another machine) |
+| model | `glm-5` |
+| enabled | ✓ |
+
+Click **Save provider**, then **Fetch models** to list what the gateway
+exposes and pick one.
+
+### 5. Verify
+
+Chat page → select the `fusion-gateway` provider → send "Reply with exactly:
+E2E-OK". You should see a streamed reply plus token usage under the bubble.
+The message and usage are persisted in SQLite and show up in the cost report
+(`GET /api/costs`).
+
+Troubleshooting:
+
+- `401 auth_error` — the key is wrong or not in the gateway config
+- `model not allowed` — the key's `allowed_models` does not cover `glm-5`
+- Connection refused — gateway not running, or the console and gateway are
+  on different hosts with a firewall in between
 
 ## Remote access (Tailscale only)
 

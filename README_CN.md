@@ -39,10 +39,69 @@ make test       # go test ./...
 
 浏览器打开 `http://127.0.0.1:11480`，登录后：
 
-1. Settings → 添加 provider（如 type=gateway、baseURL=`http://127.0.0.1:11432/v1`、model=`glm-5`），并存入 apiKey（keychain 引用 id 与 provider 的 `api_key_id` 一致）。
+1. Settings → 添加 provider（fusion-gateway 端到端配置见下节），并存入 apiKey（keychain 引用 id 与 provider 的 `api_key_id` 一致）。
 2. Chat → 选 provider 直接对话；或选 agent + 工作目录，点 agent 按钮把任务交给 CLI。
 
 无 keychain 的 headless 主机：改用环境变量 `FUSION_CONSOLE_APIKEY_<KEY_ID大写>`。
+
+## fusion-gateway 端到端配置
+
+fusion-gateway 是本地混合推理网关（OpenAI 兼容，默认端口 `11432`）。console 把它当一个普通 OpenAI 兼容 provider 接入 — 已用 `glm-5` 端到端真机验证。
+
+### 1. 启动网关
+
+```bash
+~/fusion/fusion-gateway/start.sh start     # 监听 0.0.0.0:11432
+curl -s http://127.0.0.1:11432/api/health  # 健康检查
+```
+
+### 2. 获取（或新建）网关客户端 API key
+
+网关客户端 key 在 `~/fusion/fusion-gateway/config.yaml` 的 `auth.api_keys` 下。选一个 `allowed_models` 覆盖目标模型（如 `glm*`）的 key，或新增：
+
+```yaml
+auth:
+  api_keys:
+    - name: fusion-console
+      key: fsx-fusion-console-<随机hex>
+      allowed_models: ["glm*", "gpt-4o*", "claude-*"]
+      rpm: 60
+      tpm: 100000
+```
+
+改完重启网关。console 不需要上游 provider 的真实 key — 那些由网关持有。
+
+### 3. 把 key 存入 console
+
+Console UI → Settings → **API key (stored in OS keychain)**：
+
+- key id：`gw-main`（任意稳定 id，这是 keychain 引用名）
+- secret：粘贴网关客户端 key（`fsx-...`）
+
+### 4. 添加 gateway provider
+
+同一页面 **Edit / add provider**：
+
+| 字段 | 值 |
+|---|---|
+| id | `gw-main`（必须与上面的 key id 一致） |
+| name | `fusion-gateway` |
+| type | `fusion-gateway` |
+| base URL | `http://127.0.0.1:11432/v1`（网关在别的机器就填那台机器的 IP） |
+| model | `glm-5` |
+| enabled | ✓ |
+
+点 **Save provider**，再点 **Fetch models** 拉取网关暴露的模型列表并选择。
+
+### 5. 验证
+
+Chat 页 → 选 `fusion-gateway` provider → 发送任意消息，应看到流式回复和气泡下方的 token 统计。消息与用量持久化在 SQLite，成本报表（`GET /api/costs`）可见。
+
+排错：
+
+- `401 auth_error` — key 错误或网关配置里没有
+- `model not allowed` — key 的 `allowed_models` 不含 `glm-5`
+- Connection refused — 网关没起，或 console 与网关不同机且防火墙拦截
 
 ## 远程访问（只走 Tailscale）
 
