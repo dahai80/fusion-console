@@ -1,5 +1,7 @@
 # fusion-console
 
+[English](README.md) | [中文文档](README_CN.md)
+
 A cross-platform coding-agent console in a single Go binary: browser thin
 client (desktop + phone), server runs on any office host (Windows / Ubuntu /
 macOS). Chat with cloud LLM providers or the local `fusion-gateway`, and hand
