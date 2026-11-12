@@ -48,7 +48,7 @@ make test       # go test ./...
 
 ## fusion-gateway 端到端配置
 
-fusion-gateway 是本地混合推理网关（OpenAI 兼容，默认端口 `11432`）。console 把它当一个普通 OpenAI 兼容 provider 接入 — 已用 `glm-5` 端到端真机验证。
+[fusion-gateway](https://github.com/dahai80/fusion-gateway) 是本地混合推理网关（OpenAI 兼容，默认端口 `11432`）。console 把它当一个普通 OpenAI 兼容 provider 接入 — 已用 `glm-5` 端到端真机验证。
 
 ### 1. 启动网关
 

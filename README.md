@@ -67,9 +67,10 @@ Headless hosts without a keychain: export
 
 ## End-to-end setup with fusion-gateway
 
-fusion-gateway is the local mixed-inference gateway (OpenAI-compatible,
-default port `11432`). The console talks to it like any OpenAI-compatible
-provider — verified end to end with `glm-5`.
+[fusion-gateway](https://github.com/dahai80/fusion-gateway) is the local
+mixed-inference gateway (OpenAI-compatible, default port `11432`). The
+console talks to it like any OpenAI-compatible provider — verified end to
+end with `glm-5`.
 
 ### 1. Start the gateway
 
