@@ -134,6 +134,86 @@ Troubleshooting:
 - Connection refused — gateway not running, or the console and gateway are
   on different hosts with a firewall in between
 
+## Appendix: configuring models in fusion-gateway
+
+The console only sees models the gateway exposes. A model must exist in the
+gateway config (all in `~/fusion/fusion-gateway/config.yaml`), then restart
+the gateway (`~/fusion/fusion-gateway/start.sh restart`). Three places:
+
+### 1. Backend — where the model actually runs
+
+`backends:` maps a backend name to an upstream endpoint. One entry per
+upstream; `type` decides the wire protocol (`openai-compatible` or
+`anthropic`):
+
+```yaml
+backends:
+  glm-5:                        # backend name (referenced by supply below)
+    api_key: <upstream-key>     # the REAL provider key lives here, not in the console
+    base_url: https://<upstream-host>
+    enabled: true
+    timeout: 300s
+    type: anthropic             # or: openai-compatible
+  fusion-mlx:                   # local MLX engine is just another backend
+    api_key: mlx-<token>
+    base_url: http://127.0.0.1:11434
+    enabled: true
+    type: openai-compatible
+```
+
+### 2. Model supply — model name → backends
+
+`models.supply:` declares which model names the gateway serves and which
+backends can serve them (list = failover order):
+
+```yaml
+models:
+  supply:
+    glm-5:
+      - glm-5                  # model "glm-5" served by backend "glm-5"
+    glm-5.3-flash:
+      - volc-coding
+    qwen3.5-9b:
+      - fusion-mlx             # local model, appears after fusion-mlx loads it
+```
+
+A model name here is exactly what the console's model dropdown shows and
+what goes into the provider's `model` field.
+
+### 3. Routing — cloud model registration and fallback
+
+`routing.cloud_models:` lists cloud model names (supports `claude-*`
+wildcards); `routing.fallback.model_mapping:` aliases other model names
+onto served ones, and `routing.fallback.cloud_default:` is the catch-all
+used when a request names an unknown cloud model:
+
+```yaml
+routing:
+  cloud_models:
+    - glm-5
+    - glm-5.3-flash
+    # ... add new cloud models here
+  fallback:
+    enabled: true
+    cloud_default: glm-5       # unknown cloud models land here
+    model_mapping:
+      claude-sonnet-4-6: glm-5  # claude-family requests route to glm-5
+```
+
+### 4. Verify from the console side
+
+```bash
+curl -s http://127.0.0.1:11432/v1/models \
+  -H "Authorization: Bearer <gateway-client-key>" | python3 -m json.tool | grep '"id"'
+```
+
+Then in the console: Settings → select provider → **Fetch models** → pick
+the new model (or just type it into the provider's `model` field) → chat.
+
+Minimal path for "it must run today": gateway already ships with `glm-5`
+configured on the `glm-5` backend — steps 1–3 are only needed when adding a
+new model.
+
 ## Remote access (Tailscale only)
 
 See [deploy/README.md](deploy/README.md). Short version: run

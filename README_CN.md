@@ -103,6 +103,74 @@ Chat 页 → 选 `fusion-gateway` provider → 发送任意消息，应看到流
 - `model not allowed` — key 的 `allowed_models` 不含 `glm-5`
 - Connection refused — 网关没起，或 console 与网关不同机且防火墙拦截
 
+## 附录：fusion-gateway 侧的模型配置
+
+console 能看到哪些模型，取决于网关暴露了哪些。模型配置全部在 `~/fusion/fusion-gateway/config.yaml`，改完 `~/fusion/fusion-gateway/start.sh restart`。共三处：
+
+### 1. backend — 模型真正跑在哪
+
+`backends:` 把后端名映射到上游端点。每个上游一条；`type` 决定协议（`openai-compatible` 或 `anthropic`）：
+
+```yaml
+backends:
+  glm-5:                        # 后端名（下面 supply 引用）
+    api_key: <上游真实key>       # 真 provider key 放这里，不放 console
+    base_url: https://<上游地址>
+    enabled: true
+    timeout: 300s
+    type: anthropic             # 或 openai-compatible
+  fusion-mlx:                   # 本地 MLX 引擎就是一个普通 backend
+    api_key: mlx-<token>
+    base_url: http://127.0.0.1:11434
+    enabled: true
+    type: openai-compatible
+```
+
+### 2. models.supply — 模型名 → 后端
+
+`models.supply:` 声明网关对外提供哪些模型名、由哪些后端服务（列表即故障切换顺序）：
+
+```yaml
+models:
+  supply:
+    glm-5:
+      - glm-5                  # 模型 "glm-5" 由后端 "glm-5" 服务
+    glm-5.3-flash:
+      - volc-coding
+    qwen3.5-9b:
+      - fusion-mlx             # 本地模型，fusion-mlx 加载后即出现
+```
+
+这里的模型名就是 console 模型下拉框显示的名字，也是 provider `model` 字段该填的值。
+
+### 3. routing — 云端模型注册与兜底
+
+`routing.cloud_models:` 登记云端模型名（支持 `claude-*` 通配）；`routing.fallback.model_mapping:` 把别的模型名别名到已登记模型；`routing.fallback.cloud_default:` 是未知云端模型的兜底：
+
+```yaml
+routing:
+  cloud_models:
+    - glm-5
+    - glm-5.3-flash
+    # ... 新云端模型加这里
+  fallback:
+    enabled: true
+    cloud_default: glm-5       # 未知云端模型落到这
+    model_mapping:
+      claude-sonnet-4-6: glm-5  # claude 系列请求路由到 glm-5
+```
+
+### 4. console 侧验证
+
+```bash
+curl -s http://127.0.0.1:11432/v1/models \
+  -H "Authorization: Bearer <网关客户端key>" | python3 -m json.tool | grep '"id"'
+```
+
+然后 console：Settings → 选 provider → **Fetch models** → 选新模型（或直接在 provider `model` 字段手填）→ 对话。
+
+最小可用路径：网关出厂已配好 `glm-5`（backend `glm-5`）— 只有加新模型才需要上面 1–3 步。
+
 ## 远程访问（只走 Tailscale）
 
 见 [deploy/README.md](deploy/README.md)。一句话：办公室主机执行 `tailscale serve --bg 127.0.0.1:11480`，tailnet 内设备访问 `https://<主机名>.<tailnet>.ts.net`。应用层登录始终开启；永不暴露公网。
