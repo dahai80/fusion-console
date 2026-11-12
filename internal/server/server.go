@@ -25,6 +25,7 @@ type Server struct {
 	models    *chat.ModelList
 	agents    map[string]agent.Adapter
 	agentRuns sync.Mutex // one agent subprocess per host at a time
+	autoToken string     // one-time auto-login token for --open; empty = disabled
 	mux       *http.ServeMux
 }
 
@@ -51,8 +52,12 @@ func (s *Server) routes() {
 	m := s.mux
 	m.HandleFunc("GET /api/health", s.handleHealth)
 	m.HandleFunc("POST /api/login", s.handleLogin)
+	m.HandleFunc("POST /api/autologin", s.handleAutoLogin)
 	m.HandleFunc("POST /api/logout", s.handleLogout)
 	m.HandleFunc("GET /api/me", s.auth.Require(s.handleMe))
+	m.HandleFunc("GET /api/gateway/status", s.auth.Require(s.handleGatewayStatus))
+	m.HandleFunc("POST /api/gateway/install", s.auth.Require(s.handleGatewayInstall))
+	m.HandleFunc("POST /api/gateway/sso", s.auth.Require(s.handleGatewaySSO))
 
 	m.HandleFunc("GET /api/conversations", s.auth.Require(s.handleListConversations))
 	m.HandleFunc("POST /api/conversations", s.auth.Require(s.handleCreateConversation))
@@ -96,6 +101,38 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": u.Name})
+}
+
+// SetAutoLoginToken arms a one-time auto-login token (used by --open so the
+// browser that the console itself launched signs in without typing
+// credentials). Only the first redemption succeeds.
+func (s *Server) SetAutoLoginToken(token string) { s.autoToken = token }
+
+// handleAutoLogin redeems the one-time auto-login token for a session cookie.
+func (s *Server) handleAutoLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	if s.autoToken == "" || req.Token != s.autoToken {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid auto-login token"})
+		return
+	}
+	if len(s.cfg.Users) == 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "no users configured"})
+		return
+	}
+	u := s.cfg.Users[0]
+	s.autoToken = "" // one-time use
+	if err := s.auth.LoginHash(w, r, u.Name); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "auto-login failed"})
+		return
+	}
+	log.Printf("server: auto-login ok user=%s (one-time token)", u.Name)
 	writeJSON(w, http.StatusOK, map[string]any{"user": u.Name})
 }
 

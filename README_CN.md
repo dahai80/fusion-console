@@ -39,7 +39,13 @@ make test       # go test ./...
 ./bin/fusion-console            # 监听 127.0.0.1:11480
 ```
 
-数据目录 `~/.fusion-console`（可用 `FUSION_CONSOLE_DIR` 覆盖）。首次启动在日志打印一次生成的 admin 密码，首次登录后请修改。
+数据目录 `~/.fusion-console`（可用 `FUSION_CONSOLE_DIR` 覆盖）。首次启动创建 `admin` 用户，出厂默认密码 `fusion-admin-2026`（首次启动前可用 `FUSION_CONSOLE_ADMIN_PASSWORD` 覆盖）；非本机部署首次登录后请修改。
+
+开发者一键启动：一条命令拉起 gateway（随包附带时）、console，并用系统默认浏览器打开已自动登录的页面：
+
+```bash
+./start.sh        # macOS / Linux    （Windows 用 start.cmd）
+```
 
 浏览器打开 `http://127.0.0.1:11480`，登录后：
 

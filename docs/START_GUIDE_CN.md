@@ -46,13 +46,20 @@ fusion-console.exe             # Windows
 首次启动会：
 
 1. 创建 `~/.fusion-console/`（配置 + SQLite 数据库）
-2. 创建 `admin` 用户并生成随机密码，**只在控制台日志打印一次**，务必复制：
-   ```
-   console: FIRST RUN: created user 'admin' with generated password: xxxx...
-   ```
+2. 创建 `admin` 用户，密码为出厂默认 `fusion-admin-2026`（首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD` 可覆盖）
 3. 监听 `http://127.0.0.1:11480`
 
-浏览器打开 `http://127.0.0.1:11480`，用 `admin` + 打印的密码登录，登录后修改密码（加用户：编辑 `~/.fusion-console/config.json` 加 bcrypt hash 后重启）。
+浏览器打开 `http://127.0.0.1:11480`，用 `admin` / `fusion-admin-2026` 登录。
+
+> 出厂默认密码仅为本机开发便利。console 暴露到本机之外（如 Tailscale）时，请首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD`，或登录后修改密码（加用户：编辑 `~/.fusion-console/config.json` 加 bcrypt hash 后重启）。
+
+一键启动（macOS / Linux `./start.sh`，Windows `start.cmd`）：同时拉起随包附带的 fusion-gateway 和 console，并用系统默认浏览器打开已自动登录的页面。只需要再配 LLM（下一节）。
+
+## 4. 接 LLM — fusion-gateway（推荐）
+
+release 包里已经附带对应平台的 `fusion-gateway` 二进制（代码仓独立，仅打包在一起），无需单独下载。Gateway 菜单点 **Download & install** 时优先使用包内副本，没有才从 GitHub 下载。
+
+1. **拿网关客户端 key** — 找网关管理员，或看 `fusion-gateway/config.yaml` → `auth.api_keys`。key 的 `allowed_models` 要覆盖目标模型（如用 `glm-5` 需要 `glm*`）。
 
 ## 4. 接 LLM — fusion-gateway（推荐）
 
@@ -97,7 +104,8 @@ agent 是办公室主机上的本地 CLI，至少装一个：
 
 | 现象 | 处理 |
 |---|---|
-| 登录密码丢失 | 删 `~/.fusion-console/config.json` 重启，重新打印新生成的 admin 密码 |
+| 登录密码丢失 | 删 `~/.fusion-console/config.json` 重启，重新创建 `admin`（出厂默认 `fusion-admin-2026` 或 `FUSION_CONSOLE_ADMIN_PASSWORD` 指定值） |
+| Gateway 管理界面又要登录 | 在 Gateway 页保存一次网关管理员用户名/密码（存 OS keychain），之后 "Open Admin GUI" 自动登录 |
 | 网关返回 `401 auth_error` | 客户端 key 错误，或网关 `auth.api_keys` 里没有 |
 | `model not allowed` | key 的 `allowed_models` 不含目标模型 |
 | agent 灰显 | CLI 不在 PATH — 安装或在 config.json 填绝对路径 |

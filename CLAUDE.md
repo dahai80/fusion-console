@@ -24,14 +24,20 @@ make test         # go test ./... -count=1
 make vet / fmt    # go vet / gofmt
 
 ./scripts/build-web.sh   # SPA only (required before go build; embed needs webdist)
+./scripts/package.sh vNX # release packages; bundle the matching fusion-gateway binary
+./scripts/start.sh       # start gateway+console, open default browser with one-time auto-login
 ```
 
 Run: `./bin/fusion-console` → `http://127.0.0.1:11480` (port registered in
 the monorepo `architecture/port-registry.yaml`; validate changes with
-`python scripts/check-ports.py` from the repo root).
+`python scripts/check-ports.py` from the repo root). `--open` launches the
+OS default browser at `/?fc_token=<one-time token>` which redeems itself via
+`POST /api/autologin`.
 
 Data dir `~/.fusion-console` (override: `FUSION_CONSOLE_DIR`). First run
-prints a generated admin password to the log. API keys resolve from env
+creates `admin` with the factory default password `fusion-admin-2026`
+(override before first start: `FUSION_CONSOLE_ADMIN_PASSWORD`). API keys and
+the gateway admin credentials resolve from env
 `FUSION_CONSOLE_APIKEY_<KEY_ID_UPPERCASE>` first, then OS keychain — env
 override exists for CI/headless hosts.
 

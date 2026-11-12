@@ -11,13 +11,16 @@ import {
   Plus,
   RefreshCw,
   KeyRound,
+  Network,
+  Download,
+  ExternalLink,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, type AgentInfo, type Conversation, type Message, type Provider } from "./api";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "chat" | "agents" | "settings";
+type Page = "chat" | "agents" | "gateway" | "settings";
 
 export default function App() {
   return (
@@ -33,7 +36,23 @@ function Shell() {
   const [page, setPage] = useState<Page>("chat");
 
   useEffect(() => {
-    api.me().then((r) => setUser(r.user)).catch(() => setUser(null));
+    // One-time auto-login token (console launched with --open puts it in the
+    // URL); redeem it, then strip it from the address bar.
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("fc_token");
+    const stripToken = () => {
+      params.delete("fc_token");
+      const qs = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    };
+    const boot = token
+      ? api
+          .autoLogin(token)
+          .then((r) => r.user)
+          .catch(() => null)
+          .finally(stripToken)
+      : api.me().then((r) => r.user).catch(() => null);
+    boot.then((u) => setUser(u));
     const onLogout = () => setUser(null);
     window.addEventListener("fc:logout", onLogout);
     return () => window.removeEventListener("fc:logout", onLogout);
@@ -48,6 +67,7 @@ function Shell() {
       <main className="flex-1 min-h-0">
         {page === "chat" && <ChatPage />}
         {page === "agents" && <AgentsPage />}
+        {page === "gateway" && <GatewayPage />}
         {page === "settings" && <SettingsPage />}
       </main>
     </div>
@@ -84,6 +104,7 @@ function TopBar({
         <nav className="flex gap-1">
           {tab("chat", "Chat", MessageSquare)}
           {tab("agents", "Agents", Bot)}
+          {tab("gateway", "Gateway", Network)}
           {tab("settings", "Settings", SettingsIcon)}
         </nav>
       </div>
@@ -404,6 +425,130 @@ function AgentsPage() {
           </div>
         </Card>
       ))}
+    </div>
+  );
+}
+
+function GatewayPage() {
+  const [status, setStatus] = useState<Awaited<ReturnType<typeof api.gatewayStatus>> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [adminUser, setAdminUser] = useState("");
+  const [adminPass, setAdminPass] = useState("");
+
+  const load = useCallback(() => {
+    api.gatewayStatus().then(setStatus).catch((e) => setErr((e as Error).message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const install = async () => {
+    setBusy(true);
+    setMsg("");
+    setErr("");
+    try {
+      const r = await api.gatewayInstall();
+      setMsg(`${r.note} (v${r.version}, ${r.binary})`);
+      load();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveAdminCreds = async () => {
+    setMsg("");
+    setErr("");
+    try {
+      await api.storeApiKey("gateway-admin-user", adminUser);
+      await api.storeApiKey("gateway-admin-pass", adminPass);
+      setMsg("Gateway admin credentials saved (OS keychain).");
+      setAdminPass("");
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+
+  const openAdmin = async () => {
+    setMsg("");
+    setErr("");
+    try {
+      await api.gatewaySSO();
+    } catch (ex) {
+      setErr(`Gateway admin auto-login failed: ${(ex as Error).message}`);
+    } finally {
+      window.open(status?.admin_url, "_blank");
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4 p-6">
+      <h2 className="text-lg font-semibold">fusion-gateway</h2>
+      <Card className="space-y-3 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="font-medium flex items-center gap-2">
+              <Network size={16} /> {status?.base_url || "…"}
+              {status?.reachable ? <Badge tone="ok">running</Badge> : <Badge tone="warn">not reachable</Badge>}
+            </p>
+            <p className="text-xs text-zinc-500 mt-1">
+              {status?.installed ? `installed: ${status.binary}` : "binary not installed by console"}
+            </p>
+          </div>
+          {status?.reachable && (
+            <Button onClick={openAdmin}>
+              <ExternalLink size={14} /> Open Admin GUI
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      {!status?.reachable && (
+        <Card className="space-y-3 p-4">
+          <h3 className="font-medium flex items-center gap-2"><Download size={16} /> Install gateway</h3>
+          <p className="text-sm text-zinc-500">
+            Downloads the latest <a className="underline" href="https://github.com/dahai80/fusion-gateway/releases" target="_blank" rel="noreferrer">fusion-gateway release</a> for this
+            host (detected automatically) into <code>~/.fusion-console/bin/</code>. Then start it with your
+            gateway <code>config.yaml</code> and refresh this page.
+          </p>
+          <Button onClick={install} disabled={busy}>
+            {busy ? "Downloading…" : "Download & install"}
+          </Button>
+        </Card>
+      )}
+
+      {status?.reachable && (
+        <Card className="space-y-3 p-4">
+          <h3 className="font-medium flex items-center gap-2"><KeyRound size={16} /> Gateway admin login</h3>
+          <p className="text-sm text-zinc-500">
+            Save the gateway admin account here once — "Open Admin GUI" then signs in automatically,
+            no second login. Credentials live in the OS keychain. Also configure gateway as a chat
+            provider under Settings (type <code>fusion-gateway</code>, base URL <code>{status.base_url}/v1</code>).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              className="w-40 rounded-lg border border-zinc-200/80 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              placeholder="admin username"
+              value={adminUser}
+              onChange={(e) => setAdminUser(e.target.value)}
+            />
+            <input
+              className="w-40 rounded-lg border border-zinc-200/80 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              type="password"
+              placeholder="admin password"
+              value={adminPass}
+              onChange={(e) => setAdminPass(e.target.value)}
+            />
+            <Button onClick={saveAdminCreds} disabled={!adminUser || !adminPass}>
+              Save credentials
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {msg && <p className="text-sm text-indigo-500">{msg}</p>}
+      {err && <p className="text-sm text-red-500">{err}</p>}
     </div>
   );
 }

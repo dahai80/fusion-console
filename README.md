@@ -53,8 +53,16 @@ make test       # go test ./...
 ```
 
 Data dir: `~/.fusion-console` (override with `FUSION_CONSOLE_DIR`).
-First run prints a generated `admin` password to the log — change it after
-first login.
+First run creates user `admin` with the factory default password
+`fusion-admin-2026` (set `FUSION_CONSOLE_ADMIN_PASSWORD` before first start
+to override) — change it after first login on any non-local deployment.
+
+Developer quick start — one command starts everything (gateway if bundled,
+console, then your default browser with one-time auto-login):
+
+```bash
+./start.sh        # macOS / Linux    (Windows: start.cmd)
+```
 
 Open `http://127.0.0.1:11480`, sign in, then:
 

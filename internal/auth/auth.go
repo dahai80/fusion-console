@@ -80,6 +80,31 @@ func (m *Manager) Login(w http.ResponseWriter, r *http.Request, user, hash, pw s
 	return nil
 }
 
+// LoginHash issues a session for a user whose password hash is already
+// verified by the caller (e.g. one-time auto-login tokens). It performs no
+// password check.
+func (m *Manager) LoginHash(w http.ResponseWriter, r *http.Request, user string) error {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return fmt.Errorf("auth: generate session: %w", err)
+	}
+	tok := hex.EncodeToString(raw)
+	m.mu.Lock()
+	m.sessions[tok] = session{user: user, expires: time.Now().Add(sessionTTL)}
+	m.mu.Unlock()
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    tok,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   isHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(sessionTTL.Seconds()),
+	})
+	log.Printf("auth: session issued user=%s remote=%s", user, r.RemoteAddr)
+	return nil
+}
+
 // User returns the logged-in user for the request, or empty string.
 func (m *Manager) User(r *http.Request) string {
 	c, err := r.Cookie(sessionCookie)

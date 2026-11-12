@@ -1,13 +1,65 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestOpenAICompatRequestFields pins the wire format: lowercase
+// role/content json tags (regression: 422 from providers on {"Role":...}).
+func TestOpenAICompatRequestFields(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(r.Body)
+		gotBody = buf.String()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	p := &OpenAICompatProvider{BaseURL: srv.URL}
+	ch, err := p.ChatStream(context.Background(), "m", "k", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for range ch {
+	}
+	if !strings.Contains(gotBody, `"role":"user"`) || !strings.Contains(gotBody, `"content":"hi"`) {
+		t.Fatalf("wire format wrong: %s", gotBody)
+	}
+	if strings.Contains(gotBody, `"Role"`) {
+		t.Fatalf("capitalized fields leaked into wire format: %s", gotBody)
+	}
+}
+
+// TestAnthropicBaseURLVariants pins /v1 handling — never /v1/v1/messages.
+func TestAnthropicBaseURLVariants(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+	}))
+	defer srv.Close()
+	for _, base := range []string{srv.URL, srv.URL + "/v1"} {
+		p := &AnthropicCompatProvider{BaseURL: base}
+		ch, err := p.ChatStream(context.Background(), "m", "k", nil)
+		if err != nil {
+			t.Fatalf("ChatStream(%s): %v", base, err)
+		}
+		for range ch {
+		}
+		if gotPath != "/v1/messages" {
+			t.Fatalf("base %q hit %q, want /v1/messages", base, gotPath)
+		}
+	}
+}
 
 // TestOpenAICompatStream spins a fake SSE provider and checks delta/usage/done.
 func TestOpenAICompatStream(t *testing.T) {

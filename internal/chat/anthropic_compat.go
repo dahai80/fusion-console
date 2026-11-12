@@ -52,7 +52,12 @@ func (p *AnthropicCompatProvider) ChatStream(ctx context.Context, model, apiKey 
 	if err != nil {
 		return nil, fmt.Errorf("chat: encode request: %w", err)
 	}
-	url := strings.TrimRight(p.BaseURL, "/") + "/v1/messages"
+	// Accept both https://host and https://host/v1 — never produce /v1/v1.
+	base := strings.TrimRight(p.BaseURL, "/")
+	url := base + "/v1/messages"
+	if strings.HasSuffix(base, "/v1") {
+		url = base + "/messages"
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("chat: build request: %w", err)

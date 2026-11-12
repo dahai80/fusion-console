@@ -26,8 +26,8 @@ type Event struct {
 
 // Message is a chat transcript entry sent to the provider.
 type Message struct {
-	Role    string
-	Content string
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // Provider streams one chat completion. Implementations must close the

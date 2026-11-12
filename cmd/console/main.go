@@ -3,11 +3,16 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"github.com/dahai80/fusion-console/internal/auth"
 	"github.com/dahai80/fusion-console/internal/config"
@@ -18,6 +23,9 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.SetOutput(os.Stdout)
+
+	openBrowser := flag.Bool("open", false, "open the default browser with one-time auto-login after start")
+	flag.Parse()
 
 	dir := config.DefaultDir()
 	cfg, err := config.Load(dir)
@@ -47,21 +55,71 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	srv := server.New(cfg, dir, st)
+	if *openBrowser {
+		url, err := armAutoLogin(srv, cfg)
+		if err != nil {
+			log.Printf("console: auto-login setup failed: %v", err)
+		} else {
+			url = fmt.Sprintf("http://%s/?fc_token=%s", addr, url)
+			go openDefaultBrowser(url)
+		}
+	}
 	log.Printf("console: listening on http://%s (data dir %s)", addr, cfg.Server.DataDir)
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatalf("console: server stopped: %v", err)
 	}
 }
 
-// ensureFirstAdmin creates the initial admin account with a generated
-// password when no users exist, printing it once to the log.
+// armAutoLogin generates a one-time token and registers it with the server.
+// Returns the raw token for the browser URL.
+func armAutoLogin(srv *server.Server, cfg *config.Config) (string, error) {
+	if len(cfg.Users) == 0 {
+		return "", fmt.Errorf("no users configured")
+	}
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	tok := hex.EncodeToString(raw)
+	srv.SetAutoLoginToken(tok)
+	return tok, nil
+}
+
+// openDefaultBrowser opens the OS default browser (macOS: open, Windows:
+// rundll32 url.dll handler, Linux: xdg-open). Best-effort; failures log only.
+func openDefaultBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	cmd.SysProcAttr = sysProcDetach()
+	if err := cmd.Run(); err != nil {
+		log.Printf("console: open browser: %v (open %s manually)", err, url)
+	}
+}
+
+// defaultAdminPassword is the factory default for the first-run admin
+// account. Override per deployment with FUSION_CONSOLE_ADMIN_PASSWORD.
+const defaultAdminPassword = "fusion-admin-2026"
+
+// ensureFirstAdmin creates the initial admin account when no users exist,
+// using FUSION_CONSOLE_ADMIN_PASSWORD if set, otherwise the factory default,
+// and prints the effective source to the log.
 func ensureFirstAdmin(cfg *config.Config, dir string) error {
 	if len(cfg.Users) > 0 {
 		return nil
 	}
-	pw, err := auth.GeneratePassword()
-	if err != nil {
-		return err
+	pw := os.Getenv("FUSION_CONSOLE_ADMIN_PASSWORD")
+	source := "factory default"
+	if pw == "" {
+		pw = defaultAdminPassword
+	} else {
+		source = "FUSION_CONSOLE_ADMIN_PASSWORD"
 	}
 	hash, err := auth.HashPassword(pw)
 	if err != nil {
@@ -74,7 +132,7 @@ func ensureFirstAdmin(cfg *config.Config, dir string) error {
 	if err := cfg.Save(dir); err != nil {
 		return err
 	}
-	log.Printf("console: FIRST RUN: created user 'admin' with generated password: %s", pw)
+	log.Printf("console: FIRST RUN: created user 'admin' with %s password", source)
 	log.Printf("console: change it after first login (see README)")
 	return nil
 }

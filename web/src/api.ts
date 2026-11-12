@@ -61,6 +61,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   login: (user: string, password: string) =>
     req<{ user: string }>("/api/login", { method: "POST", body: JSON.stringify({ user, password }) }),
+  autoLogin: (token: string) =>
+    req<{ user: string }>("/api/autologin", { method: "POST", body: JSON.stringify({ token }) }),
   logout: () => req<{ ok: boolean }>("/api/logout", { method: "POST" }),
   me: () => req<{ user: string }>("/api/me"),
   conversations: () => req<{ conversations: Conversation[] }>("/api/conversations"),
@@ -80,6 +82,20 @@ export const api = {
   models: (provider: string) =>
     req<{ models: string[] }>(`/api/settings/models?provider=${encodeURIComponent(provider)}`),
   costs: () => req<{ report: Record<string, unknown>[] }>("/api/costs"),
+  gatewayStatus: () =>
+    req<{
+      base_url: string;
+      admin_url: string;
+      reachable: boolean;
+      installed: boolean;
+      binary: string;
+    }>("/api/gateway/status"),
+  gatewayInstall: () =>
+    req<{ ok: boolean; binary: string; version: string; note: string }>(
+      "/api/gateway/install",
+      { method: "POST" }
+    ),
+  gatewaySSO: () => req<{ ok: boolean }>("/api/gateway/sso", { method: "POST" }),
 };
 
 // streamPOST performs a POST that yields SSE "data:" JSON events.

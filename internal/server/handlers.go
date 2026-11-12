@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/dahai80/fusion-console/internal/agent"
 	"github.com/dahai80/fusion-console/internal/chat"
@@ -386,7 +387,11 @@ func modelBaseURL(p *config.Provider) string {
 	case config.ProviderGateway:
 		return "http://127.0.0.1:11432/v1"
 	case config.ProviderAnthropic:
-		return p.BaseURL + "/v1"
+		base := strings.TrimRight(p.BaseURL, "/")
+		if strings.HasSuffix(base, "/v1") {
+			return base
+		}
+		return base + "/v1"
 	default:
 		return p.BaseURL
 	}
