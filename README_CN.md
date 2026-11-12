@@ -1,6 +1,6 @@
 # fusion-console（中文说明）
 
-[English](README.md) | [中文](README_CN.md) | [🚀 配置指南](docs/START_GUIDE.md)
+[English](README.md) | [中文](README_CN.md) | [🚀 配置指南](docs/START_GUIDE_CN.md)
 
 单 Go 二进制的跨平台 Coding Agent 控制台：浏览器瘦客户端（含手机），服务端跑在办公室任一主机（Windows / Ubuntu / macOS）。聊天直连云端 LLM 或本地 fusion-gateway，也可把任务交给 headless coding agent（Claude Code、fusion-code、Codex、OpenCode）。
 
@@ -33,7 +33,7 @@ make test       # go test ./...
 
 ## 运行
 
-> 从 release 下载开始的逐步配置指南：[docs/START_GUIDE.md](docs/START_GUIDE.md)（中英双语）
+> 从 release 下载开始的逐步配置指南：[docs/START_GUIDE_CN.md](docs/START_GUIDE_CN.md) · [English](docs/START_GUIDE.md)
 
 ```bash
 ./bin/fusion-console            # 监听 127.0.0.1:11480

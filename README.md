@@ -1,6 +1,6 @@
 # fusion-console
 
-[English](README.md) | [中文](README_CN.md) | [🚀 Start Guide / 配置指南](docs/START_GUIDE.md)
+[English](README.md) | [中文](README_CN.md) | [🚀 Start Guide](docs/START_GUIDE.md)
 
 A cross-platform coding-agent console in a single Go binary: browser thin
 client (desktop + phone), server runs on any office host (Windows / Ubuntu /
@@ -46,7 +46,7 @@ make test       # go test ./...
 
 ## Run
 
-> Step-by-step setup from a release download: [docs/START_GUIDE.md](docs/START_GUIDE.md)
+> Step-by-step setup from a release download: [docs/START_GUIDE.md](docs/START_GUIDE.md) · [中文版](docs/START_GUIDE_CN.md)
 
 ```bash
 ./bin/fusion-console            # listens on 127.0.0.1:11480
