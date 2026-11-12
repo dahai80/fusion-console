@@ -46,6 +46,8 @@ make test       # go test ./...
 
 ## Run
 
+> Step-by-step setup from a release download: [docs/START_GUIDE.md](docs/START_GUIDE.md)
+
 ```bash
 ./bin/fusion-console            # listens on 127.0.0.1:11480
 ```

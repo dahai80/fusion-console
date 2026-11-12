@@ -33,6 +33,8 @@ make test       # go test ./...
 
 ## 运行
 
+> 从 release 下载开始的逐步配置指南：[docs/START_GUIDE.md](docs/START_GUIDE.md)（中英双语）
+
 ```bash
 ./bin/fusion-console            # 监听 127.0.0.1:11480
 ```
