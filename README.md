@@ -1,6 +1,6 @@
 # fusion-console
 
-[English](README.md) | [中文](README_CN.md)
+[English](README.md) | [中文](README_CN.md) | [🚀 Start Guide / 配置指南](docs/START_GUIDE.md)
 
 A cross-platform coding-agent console in a single Go binary: browser thin
 client (desktop + phone), server runs on any office host (Windows / Ubuntu /
