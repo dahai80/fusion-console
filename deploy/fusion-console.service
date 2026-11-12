@@ -1,0 +1,13 @@
+[Unit]
+Description=fusion-console coding agent console
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fusion-console
+Restart=on-failure
+RestartSec=3
+User=%i
+
+[Install]
+WantedBy=multi-user.target

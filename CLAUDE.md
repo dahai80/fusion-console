@@ -2,39 +2,76 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> Placeholder — written when `fusion-console/` was still empty. Update this file with real
-> build/test/lint commands and architecture notes as soon as code lands.
+## What this is
 
-## Status
+fusion-console — single Go binary (server + embedded SPA) exposing a browser
+console for cloud/local LLM chat and headless coding agents (claude,
+fusion-code, codex, opencode). Design docs live in the fusion monorepo:
+`insight/fusion-console-design-2026-11.md` and
+`insight/fusion-console-remote-access-plan-2026-11.md`.
 
-`fusion-console` is a new sub-project of the Fusion monorepo (`/Users/dahai/fusion`). Directory
-currently contains no source code. Like every `fusion-*` sub-project it is an independent git
-repository (`git init` here when work starts); commit/branch/PR inside this directory, never at
-the repo root.
+Hard boundaries (from the design doc): no orchestration (that is
+fusion-cowork / fusion-agent-studio), no PTY terminal (v2), no public internet
+exposure — remote access is Tailscale only, app auth always on.
 
-## Environment
-
-Shared monorepo venv — activate before any Python work:
+## Commands
 
 ```bash
-cd /Users/dahai/fusion
-source .venv/bin/activate
+make web          # build SPA (bun) into internal/server/webdist (go:embed)
+make build        # host binary -> bin/fusion-console
+make cross        # darwin/linux/windows amd64+arm64
+make test         # go test ./... -count=1
+make vet / fmt    # go vet / gofmt
+
+./scripts/build-web.sh   # SPA only (required before go build; embed needs webdist)
 ```
 
-## Monorepo conventions (apply from first line of code)
+Run: `./bin/fusion-console` → `http://127.0.0.1:11480` (port registered in
+the monorepo `architecture/port-registry.yaml`; validate changes with
+`python scripts/check-ports.py` from the repo root).
 
-- Python: 3.12 (repo-root `.python-version`), setuptools backend, `pytest tests/` with
-  `asyncio_mode=auto`. Dependencies go through root `requirements.lock` via
-  `scripts/sync-deps.sh`; internal cross-projects use `pip install -e`.
-- If the project exposes an HTTP service: register its port in
-  `/Users/dahai/fusion/architecture/port-registry.yaml` and validate with
-  `python scripts/check-ports.py`. Fixed core ports: fusion-mlx 11434, fusion-gateway 11432,
-  fusion-memory 11435.
-- Reuse in-tree foundations instead of rebuilding: `fusion-core` (LLM client / JSON parse /
-  config / logging / FastAPI factory), `fusion-harness` (agent kernel), `fusion-identity`
-  (auth), `fusion-gateway` routing instead of hitting `:11434` directly.
-- Code comments and log messages: English only. GitHub artifacts: English only. User-facing
-  product docs: bilingual (README.md English, README_CN.md Chinese).
-- Code style: 4-space multiples indentation, no docstrings, logging on all code paths.
-- Frontend (if applicable): React/Next.js + Tailwind + shadcn/ui, `lucide-react` icons only,
-  Slate/Zinc neutrals + Indigo/Violet/Emerald accents, full dark-mode support.
+Data dir `~/.fusion-console` (override: `FUSION_CONSOLE_DIR`). First run
+prints a generated admin password to the log. API keys resolve from env
+`FUSION_CONSOLE_APIKEY_<KEY_ID_UPPERCASE>` first, then OS keychain — env
+override exists for CI/headless hosts.
+
+## Architecture
+
+Two abstractions only:
+
+- `internal/chat.Provider` — `ChatStream(ctx, model, apiKey, msgs) -> Event
+  channel` (delta/usage/error/done). Implementations: OpenAI-compatible SSE
+  (also used by fusion-gateway), Anthropic-compatible SSE.
+- `internal/agent.Adapter` — `Run(ctx, RunOpts) -> Event channel`
+  (text/tool/result/usage/error/done). One thin JSONL parser per CLI; claude
+  and fusion-code share the stream-json parser. `process.go` owns subprocess
+  lifecycle: process-group kill, 30min timeout, budget-cap kill (cost arrives
+  on the `result` event for claude, not only `usage`).
+
+Events flow to the browser over SSE (`fetch` + ReadableStream parsing in
+`web/src/api.ts`). Sessions/messages/cost rows persist in SQLite
+(`internal/store`, modernc.org pure-Go driver — keep it cgo-free so
+cross-compilation keeps working).
+
+`internal/server/webdist` is build output committed to the embed; the server
+binary must be rebuilt after `make web` or it serves stale assets.
+
+## Conventions
+
+- Go: gofmt (tabs) wins over the monorepo 4-space rule; CI enforces gofmt -l.
+- Comments/logs/CI/GitHub: English only. User-facing docs bilingual:
+  README.md (EN) + README_CN.md (CN).
+- Config file never contains API key material — keychain references only
+  (`internal/config/keyring.go`).
+- Agent parse failures must fail visible (error events), never silently drop.
+- Frontend: React + Tailwind v4 + shadcn-style tokens (zinc neutrals, indigo
+  accent), `lucide-react` icons only, dark mode default with light toggle.
+
+## Testing
+
+Unit tests cover both parsers with recorded fixtures (see
+`internal/agent/agent_test.go`), provider SSE via httptest, auth round-trip,
+SQLite store. Real E2E (done at implementation, rerun on protocol changes):
+start server with temp `FUSION_CONSOLE_DIR`, login, stream chat through
+fusion-gateway glm-5, run a real `claude` agent task in a temp workdir,
+verify artifact + cost report, then clean up temp data.
