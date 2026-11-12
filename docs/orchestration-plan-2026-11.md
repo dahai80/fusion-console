@@ -1,8 +1,16 @@
 # fusion-console Orchestration Plan — Chat as the Main Brain
 
-Status: proposal (no code yet)
-Date: 2026-11-12
+Status: proposal v2, under review (no code yet)
+Date: 2026-11-13 (v2 after review feedback)
 Owner: dahai80
+
+Review decisions baked into v2:
+1. **fusion-harness first** — integrate the harness into the chat pipeline
+   before any orchestration, so long conversations stay grounded (no drift)
+2. **Native tool-calls** — verified working: gateway glm-5 passthrough,
+   streaming tool_call deltas + finish_reason OK (2026-11-13 spike)
+3. **Per-agent dedicated workspace** — fixed directory per agent, isolated
+   by default, configurable
 
 [English](#english) | [中文](docs/orchestration-plan-2026-11.md) — single file, EN first, CN follows.
 
@@ -62,19 +70,36 @@ browser ──SSE── console orchestrator loop ──► chat.Provider (plann
 is bounded: max tool iterations per turn (default 8), per-conversation budget
 funnel (extends the existing per-run cap), wall-clock cap.
 
-#### 4.2 Tool protocol: JSON, not provider tool-calls
+#### 4.2 Step 1 (first) — fusion-harness in the chat pipeline
 
-Phase 1 uses a prompt-declared JSON tool protocol (the planner replies with a
-fenced `{"tool": ..., "args": {...}}` block), parsed with the same strict
-tolerance rules as the rest of the fusion stack. Rationale:
+Console is Go; the harness is pure-stdlib Python. Console ships a small
+sidecar (`sidecar/harnessd.py` inside the fusion-console repo) that imports
+`fusion_harness` (already installed in the monorepo venv) and speaks
+JSON-RPC over stdio. Console starts it on boot, restarts it on crash, and
+every chat turn passes through it:
 
-- Provider-agnostic: works with glm-5 through the gateway regardless of
-  whether tool-call passthrough is supported end to end
-- No new provider surface; SSE event schema unchanged
-- Phase 3 can add native OpenAI `tools` passthrough as an optimization once
-  the gateway path is verified — same tool set, different wire format
+- **Compaction**: when the persisted conversation exceeds the token
+  threshold, the Compactor summarizes old turns and keeps the recent N turns
+  verbatim — the model never sees an unbounded, drifting context ("no
+  hallucinations")
+- **Budget funnel (LLMFunnel)**: per-conversation token budget metered
+  before each LLM call; breach = visible refusal, never a silent truncation
+- **Audit**: LifecycleBus events persist to
+  `~/.fusion-console/log/harness.jsonl`
 
-#### 4.3 Tools exposed to the planner (phase 1)
+No Go re-implementation, no contract drift — the harness runs as-is.
+
+#### 4.3 Tool protocol: native tool-calls (verified)
+
+The planner uses native OpenAI `tools` / `tool_calls` through the gateway.
+Spike result (2026-11-13, real glm-5 via gateway `:11432`): non-streaming
+`finish_reason=tool_calls` with correct arguments; streaming emits the
+tool_call id/name in the first delta and streams argument fragments — the
+console provider gains tool-call parsing (accumulate `arguments` by index,
+emit a `tool_call` event on `finish_reason`). Same behavior for the
+Anthropic-compat provider (`tool_use` blocks) for non-gateway providers.
+
+#### 4.4 Tools exposed to the planner
 
 | Tool | Backing | Notes |
 |---|---|---|
@@ -92,22 +117,17 @@ Phase 2 adds:
 Phase 3 candidates: `schedule` (cron a workflow), `memory` (fusion-memory
 lookup), file tools beyond the workdir (permission-gated).
 
-#### 4.4 fusion-harness integration (Go side)
+#### 4.5 fusion-harness on the orchestration path
 
-Console does not import the Python kernel. It conforms to the same behavior
-contract (`fusion-harness/docs/contract.md`) in Go, mirroring how fusion-code
-(TypeScript) stays compatible:
+The same sidecar guards the planner loop: every tool call passes
+`ToolFunnel.admit()` semantics (lifecycle → hooks → permission → budget →
+execute) via the sidecar, so the 12 dangerous-pattern content scans, the
+deny-first permission chain, and the per-conversation budget funnel are the
+harness implementation, not a Go copy. Agent-dispatch permissions:
+`orchestrator.mode` in config — `off` / `confirm` / `auto`; `confirm`
+(default) requires one click before any `run_agent` / `run_workflow`.
 
-- Budget funnel: per-run cap exists; add per-conversation and per-day caps,
-  enforced before each tool execution, kill on breach (fail visible)
-- Permission engine: planner tool allow-list per conversation
-  (`orchestrator.mode` in config: `off` / `confirm` / `auto`); `confirm`
-  (default) requires one click before any `run_agent` / `run_workflow`
-- Compaction: tool transcripts larger than N KiB are summarized into the
-  tool result before re-entering the planner context
-- Contract parity tests in Go against the same fixtures the harness uses
-
-#### 4.5 fusion-cowork integration
+#### 4.6 fusion-cowork integration
 
 - Console → cowork over HTTP `:11438` with `FUSION_CLIENT_KEY` (env, same
   keychain pattern as gateway keys); cowork is optional — when unreachable,
@@ -118,34 +138,41 @@ contract (`fusion-harness/docs/contract.md`) in Go, mirroring how fusion-code
 - Approval gates (cowork `review` endpoints) surface as interactive cards;
   user clicks resume → console calls `POST /api/runs/{id}/resume`
 
-#### 4.6 UX
+#### 4.7 UX
 
 - Composer toggle: "Orchestrator" (off by default; config default)
 - Inline cards: agent run card (live text/tool events, cost), workflow card
   (DAG progress), confirmation card (mode `confirm`)
 - All costs roll into the existing cost report with a `planner` row
 
-#### 4.7 Persistence
+#### 4.8 Persistence and agent workspaces
 
 - `messages.meta` already JSON — tool calls/results serialize there
 - Agent runs gain a `conversation_id` column; cowork run ids are stored in
   the message meta for resume/replay
+- **Per-agent dedicated workspace** (review decision 3): each agent gets a
+  fixed, isolated directory — default `~/.fusion-console/agents/<name>/`,
+  overridable per agent in `config.json` (`agents[].workdir`). Orchestrator
+  dispatches always run inside the agent's own workspace; agents never share
+  scratch state. Manual runs still allow an explicit workdir override.
 
 ### 5. Milestones
 
-1. **M1 — planner loop + `run_agent`**: JSON tool protocol in Go providers,
-   orchestrator loop with iteration/budget caps, agent run card in UI.
+1. **M1 — harness in the chat pipeline** (review decision 1): sidecar
+   process, compaction before every LLM call, per-conversation LLM budget
+   funnel, harness audit log. Success: a 100-turn conversation keeps coherent
+   context and stays within budget; breach fails visibly.
+2. **M2 — planner loop with native tool-calls + `run_agent`**: tool-call
+   parsing in providers (verified passthrough), bounded loop, per-agent
+   dedicated workspaces, agent run card in UI, ToolFunnel-guarded dispatch.
    Success: in chat, "fix the failing test in ~/fusion/fusion-console" ends
    with a verified artifact and a cost row, hands-free.
-2. **M2 — cowork workflows**: `run_workflow` / `run_status`, DAG progress
+3. **M3 — cowork workflows**: `run_workflow` / `run_status`, DAG progress
    card, approval/resume cards. Success: a stored workflow runs from chat and
    its result lands in the conversation.
-3. **M3 — harness-grade guardrails**: per-conversation budget funnel,
-   permission modes, transcript compaction, contract parity tests.
 4. **M4 (optional) — planner-in-cowork mode**: move the planner loop into a
-   cowork-hosted agent (it already imports harness) for workflow-heavy
-   setups; console keeps the chat UX and proxies events. Decide after M2
-   usage data.
+   cowork-hosted agent for workflow-heavy setups; console keeps the chat UX
+   and proxies events. Decide after M3 usage data.
 
 ### 6. Risks / open questions
 
@@ -182,15 +209,39 @@ cowork 工作流，跟踪执行、读取结果、继续对话。fusion-console �
 - fusion-harness：纯标准库 Python 内核（预算漏斗、生命周期钩子、权限引擎、上下文压缩），
   cowork/agent-studio 直接 import；fusion-code 用契约测试对齐。
 
-### 4. 设计
+### 4. 设计（v2）
 
-#### 4.1 编排循环放在 console（Go）
+#### 4.1 第一步：fusion-harness 进 chat 管线（评审决定 1）
 
-循环三要素（会话、agent 适配器、成本记账）console 都已拥有，所以循环留在
-console；cowork 与 harness 提供能力，而不是接管循环。
+console 是 Go，harness 是纯标准库 Python。console 仓库内自带一个轻量
+sidecar（`sidecar/harnessd.py`），import `fusion_harness`（monorepo venv 已
+安装），走 stdio JSON-RPC。console 启动时拉起、崩溃自动重启，每次 chat
+请求先过它：
+
+- **上下文压缩**：持久化会话超过 token 阈值时，Compactor 摘要旧轮次、保留
+  最近 N 轮原文 — 模型永远看不到无界漂移的上下文（"不胡言乱语"）
+- **预算漏斗（LLMFunnel）**：按会话计量 token 预算，每次 LLM 调用前检查；
+  超限 = 可见拒绝，绝不静默截断
+- **审计**：LifecycleBus 事件落 `~/.fusion-console/log/harness.jsonl`
+
+不重写、不翻译 harness — 原样运行，零契约漂移。
+
+#### 4.2 工具协议：原生 tool-calls（已验证）
+
+规划模型经 gateway 用原生 OpenAI `tools`/`tool_calls`。Spike 结果
+（2026-11-13，gateway `:11432` 真 glm-5）：非流式 `finish_reason=tool_calls`
+且参数正确；流式首 delta 带 tool_call id/name、arguments 分片增量到达 —
+console provider 增加工具调用解析（按 index 累积 `arguments`，
+`finish_reason` 触发 `tool_call` 事件）。Anthropic-compat provider 同步支持
+（`tool_use` 块），覆盖非 gateway 场景。
+
+#### 4.3 编排循环放在 console（Go）
+
+循环三要素（会话、agent 适配器、成本记账）console 都已拥有；cowork 与
+harness 提供能力，而不是接管循环。
 
 ```
-浏览器 ──SSE── console 编排循环 ──► chat.Provider（规划 LLM）
+浏览器 ──SSE── console 编排循环 ──► chat.Provider（规划 LLM，原生 tool-calls）
                   │  ▲
       tool_call   ▼  │ tool_result
                   │
@@ -200,50 +251,30 @@ console；cowork 与 harness 提供能力，而不是接管循环。
  (本地子进程)   (cowork :11438)    (结束本轮，等用户输入)
 ```
 
-`ask_user` 结束本轮，用户下一条消息继续循环。循环有界：每轮最大工具迭代数
-（默认 8）、会话级预算漏斗（扩展现有单次 cap）、墙钟上限。
+循环有界：每轮最大工具迭代数（默认 8）、墙钟上限。
 
-#### 4.2 工具协议：JSON，而非 provider 原生 tool-calls
-
-一期用提示词声明的 JSON 工具协议（规划模型回复 fenced
-`{"tool": ..., "args": {...}}` 块），按全栈统一的严格容错规则解析。理由：
-
-- 与 provider 无关：不依赖 gateway 是否端到端透传 tool-calls
-- 不新增 provider 面；SSE 事件结构不变
-- 三期可在验证 gateway 透传后加原生 `tools` 支持 — 同一套工具，换线格式
-
-#### 4.3 一期暴露给规划模型的工具
+#### 4.4 规划模型可用的工具
 
 | 工具 | 后端 | 说明 |
 |---|---|---|
-| `run_agent(agent, task, workdir)` | 现有 `agent.Adapter` | 返回 run id；事件流入会话作为 tool result；预算/超时上限不变 |
-| `read_artifact(path)` | run 工作目录内沙箱读 | 限大小；让规划模型自己验收 |
+| `run_agent(agent, task)` | 现有 `agent.Adapter` | 在该 agent 专属工作区内运行；事件流入会话作为 tool result；预算/超时上限不变 |
+| `read_artifact(path)` | agent 工作区内沙箱读 | 限大小；让规划模型自己验收 |
 | `list_agents()` | 配置 | 仅列出已检测到的 CLI |
-
-二期增加：
-
-| 工具 | 后端 | 说明 |
-|---|---|---|
-| `run_workflow(workflow_id, params)` | cowork `POST /api/runs` | console 代理并尾随 cowork 事件；DAG 进度渲染为会话内卡片 |
-| `run_status(run_id)` | cowork / console | 轮询或事件尾随 |
+| `run_workflow(workflow_id, params)`（二期） | cowork `POST /api/runs` | console 代理并尾随 cowork 事件；DAG 进度渲染为会话内卡片 |
+| `run_status(run_id)`（二期） | cowork / console | 轮询或事件尾随 |
 
 三期候选：`schedule`（定时跑工作流）、`memory`（fusion-memory 检索）、
-工作目录之外的文件工具（需权限门）。
+工作区之外的文件工具（需权限门）。
 
-#### 4.4 fusion-harness 集成（Go 侧）
+#### 4.5 fusion-harness 守护编排路径
 
-console 不 import Python 内核，而是按同一行为契约
-（`fusion-harness/docs/contract.md`）在 Go 内对齐 — 与 fusion-code（TS）的
-做法一致：
+编排循环的工具调用同样过 sidecar 的 `ToolFunnel.admit()` 语义（lifecycle →
+hooks → permission → budget → execute）：12 类危险模式内容扫描、deny-first
+权限链、会话预算漏斗都是 harness 本体实现，不是 Go 复制品。派活权限：
+`orchestrator.mode`（`off`/`confirm`/`auto`），默认 `confirm` — 任何
+`run_agent`/`run_workflow` 执行前需一次点击确认。
 
-- 预算漏斗：单次 cap 已有；增加会话级与按日 cap，每次工具执行前检查，超限
-  熔断且失败可见
-- 权限引擎：按会话的规划工具白名单（`orchestrator.mode`：`off`/`confirm`/`auto`）；
-  默认 `confirm` — 任何 `run_agent`/`run_workflow` 执行前需要一次点击确认
-- 压缩：超过阈值的工具输出先摘要再回到规划上下文
-- 用 harness 同款 fixture 写 Go 契约对齐测试
-
-#### 4.5 fusion-cowork 集成
+#### 4.6 fusion-cowork 集成
 
 - console → cowork 走 HTTP `:11438`，鉴权用 `FUSION_CLIENT_KEY`（env +
   keychain，同 gateway key 模式）；cowork 可选 — 不可达时 `run_workflow`
@@ -253,33 +284,39 @@ console 不 import Python 内核，而是按同一行为契约
 - cowork 审批门（`review` 接口）渲染为交互卡片；点击恢复 →
   `POST /api/runs/{id}/resume`
 
-#### 4.6 交互
+#### 4.7 交互与持久化、agent 专属工作区
 
 - 输入框 "Orchestrator" 开关（默认关，可配默认值）
 - 内联卡片：agent 运行卡（实时事件+成本）、工作流卡（DAG 进度）、确认卡
 - 成本计入现有成本报表，planner 单列一行
-
-#### 4.7 持久化
-
 - `messages.meta` 本就是 JSON — 工具调用/结果直接序列化进去
 - agent runs 增加 `conversation_id` 列；cowork run id 存消息 meta，支持回放
+- **每 agent 固定专属工作区**（评审决定 3）：默认
+  `~/.fusion-console/agents/<name>/`，可在 `config.json` 按 agent 覆盖
+  （`agents[].workdir`）。编排派活永远在 agent 自己的工作区内执行，互相
+  不共享状态；手动运行仍可显式指定目录覆盖。
 
-### 5. 里程碑
+### 5. 里程碑（v2 顺序）
 
-1. **M1 — 规划循环 + `run_agent`**：Go 侧 JSON 工具协议、有界编排循环、
-   UI agent 运行卡。验收：在 chat 里说"修复 fusion-console 里失败的测试"，
+1. **M1 — harness 进 chat 管线**：sidecar、每次 LLM 调用前压缩、会话级
+   预算漏斗、harness 审计日志。验收：100 轮长对话上下文保持连贯且预算内；
+   超限可见失败。
+2. **M2 — 原生 tool-calls 规划循环 + `run_agent`**：provider 工具调用解析
+   （透传已验证）、有界循环、每 agent 专属工作区、UI agent 运行卡、
+   ToolFunnel 守护派活。验收：chat 里说"修复 fusion-console 失败的测试"，
    无人值守产出验证过的产物和成本记录。
-2. **M2 — cowork 工作流**：`run_workflow`/`run_status`、DAG 进度卡、审批/恢复卡。
-   验收：从 chat 发起已保存工作流并拿到结果。
-3. **M3 — harness 级护栏**：会话预算漏斗、权限模式、压缩、契约对齐测试。
+3. **M3 — cowork 工作流**：`run_workflow`/`run_status`、DAG 进度卡、
+   审批/恢复卡。验收：从 chat 发起已保存工作流并拿到结果。
 4. **M4（可选）— planner-in-cowork 模式**：把规划循环搬进 cowork 托管的
-   agent（它已 import harness），适配工作流重度场景；console 保留聊天 UX 并
-   代理事件。M2 上线后看使用数据再定。
+   agent，适配工作流重度场景；console 保留聊天 UX 并代理事件。M3 上线后看
+   使用数据再定。
 
 ### 6. 风险 / 待定
 
-- glm-5 对 JSON 工具协议的稳定性 — 严格解析 + 一次修复重试 + 迭代上限兜底
-- gateway tool-call 透传未验证 — 一期刻意绕开
-- 双份成本记账（规划 token + agent 成本）— planner 用量已有 usage 事件，分行记录
-- cowork 鉴权模型（client key vs identity JWT）— 先沿用 `FUSION_CLIENT_KEY`，
-  后续随 fusion-identity 演进
+- glm-5 原生 tool-calls 已验证可用（2026-11-13 spike）；剩余风险是复杂参数
+  的多轮工具调用稳定性 — 迭代上限 + 解析失败可见报错兜底
+- sidecar 生命周期（venv 路径、Python 版本）— console 启动时探测
+  `fusion_harness` 可导入，失败则降级为无压缩直连并日志告警
+- 双份成本记账（规划 token + agent 成本）— 分行记录
+- cowork 鉴权模型（client key vs identity JWT）— 先沿用
+  `FUSION_CLIENT_KEY`，后续随 fusion-identity 演进
