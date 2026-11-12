@@ -30,6 +30,7 @@ mkdir -p "$DIST/cache"
 # the source tree is absent.
 fetch_gateway() {
     local os="$1" arch="$2" out="$3" asset
+    out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
     if [ "$os" = "windows" ]; then
         asset="fusion-gateway-${os}-${arch}.zip"
     else
