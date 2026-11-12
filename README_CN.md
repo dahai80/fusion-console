@@ -61,3 +61,7 @@ internal/store/       SQLite 持久化（会话/消息/成本账）
 web/                  React + Tailwind SPA 源码
 deploy/               launchd / systemd / schtasks + Tailscale 指南
 ```
+
+## 许可
+
+Apache License 2.0 — 见 [LICENSE](LICENSE)。

@@ -86,4 +86,4 @@ deploy/               launchd / systemd / schtasks + Tailscale guide
 
 ## License
 
-Private project — see the fusion monorepo for context.
+Apache License 2.0 — see [LICENSE](LICENSE).
