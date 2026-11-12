@@ -19,18 +19,48 @@ if [ ! -f internal/server/webdist/index.html ]; then
 fi
 
 DIST=dist
+GATEWAY_SRC="${FUSION_GATEWAY_SRC:-$(cd .. && pwd)/fusion-gateway}"
 rm -rf "$DIST"
-mkdir -p "$DIST"
+mkdir -p "$DIST/cache"
 
-fetch_gateway() { # fetch_gateway <os> <arch> <outfile>
-    local os="$1" arch="$2" out="$3" asset url tmp
-    if [ "$os" = "windows" ]; then asset="fusion-gateway-${os}-${arch}.zip"; else asset="fusion-gateway-${os}-${arch}.tar.gz"; fi
-    url="https://github.com/dahai80/fusion-gateway/releases/latest/download/${asset}"
-    tmp=$(mktemp -d)
-    echo "gateway: fetching ${asset}" >&2
-    curl -fsSL "$url" -o "$tmp/$asset"
+# fetch_gateway <os> <arch> <outfile>
+# Bundling at packaging time only — the two code repos stay separate.
+# Source of truth is the local ../fusion-gateway checkout (release assets
+# on GitHub only cover darwin-arm64). Falls back to a release asset when
+# the source tree is absent.
+fetch_gateway() {
+    local os="$1" arch="$2" out="$3" asset
     if [ "$os" = "windows" ]; then
-        unzip -p "$tmp/$asset" "*/fusion-gateway.exe" > "$out" 2>/dev/null || unzip -p "$tmp/$asset" "fusion-gateway.exe" > "$out"
+        asset="fusion-gateway-${os}-${arch}.zip"
+    else
+        asset="fusion-gateway-${os}-${arch}.tar.gz"
+    fi
+    if [ -d "$GATEWAY_SRC" ]; then
+        echo "gateway: cross-build $os/$arch from $GATEWAY_SRC" >&2
+        (cd "$GATEWAY_SRC" && CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+            go build -trimpath -o "$out" ./cmd/gateway)
+        chmod 0755 "$out" 2>/dev/null || true
+        return 0
+    fi
+    if [ -f "$DIST/cache/$asset" ]; then
+        echo "gateway: using cached ${asset}" >&2
+    elif [ -n "${GATEWAY_ALLOW_DOWNLOAD:-}" ]; then
+        # Release assets only cover darwin-arm64 today; kept as fallback.
+        curl -fsSL --max-time 600 \
+            "https://github.com/dahai80/fusion-gateway/releases/latest/download/${asset}" \
+            -o "$DIST/cache/$asset" ||
+            curl -fsSL --max-time 600 "https://gh-proxy.com/https://github.com/dahai80/fusion-gateway/releases/latest/download/${asset}" \
+                -o "$DIST/cache/$asset"
+    else
+        echo "no gateway source at $GATEWAY_SRC and no cached asset; packaging console alone for $os/$arch" >&2
+        return 1
+    fi
+    local tmp found
+    tmp=$(mktemp -d)
+    cp "$DIST/cache/$asset" "$tmp/$asset"
+    if [ "$os" = "windows" ]; then
+        unzip -p "$tmp/$asset" "*/fusion-gateway.exe" > "$out" 2>/dev/null ||
+            unzip -p "$tmp/$asset" "fusion-gateway.exe" > "$out"
     else
         tar -xzf "$tmp/$asset" -C "$tmp" 2>/dev/null || true
         found=$(find "$tmp" -name fusion-gateway -type f | head -1)
@@ -45,7 +75,9 @@ stage_dir() { # stage_dir <name> <console-bin> <gateway-bin|"-">
     local d="$DIST/$1"
     mkdir -p "$d"
     cp "$2" "$d/fusion-console"
-    [ "$3" != "-" ] && cp "$3" "$d/fusion-gateway"
+    if [ "$3" != "-" ]; then
+        cp "$3" "$d/fusion-gateway"
+    fi
     chmod 0755 "$d"/fusion-* 2>/dev/null || true
     cp README.md LICENSE "$d/"
 }
@@ -55,18 +87,18 @@ for t in "${TARGETS[@]}"; do
     ./scripts/build.sh "$t"
     gwtmp=$(mktemp -d)
     if [ "$os" = "windows" ]; then
-        fetch_gateway "$os" "$arch" "$gwtmp/fusion-gateway.exe"
         GW="$gwtmp/fusion-gateway.exe"
+        fetch_gateway "$os" "$arch" "$GW" || GW="-"
     else
-        fetch_gateway "$os" "$arch" "$gwtmp/fusion-gateway"
         GW="$gwtmp/fusion-gateway"
+        fetch_gateway "$os" "$arch" "$GW" || GW="-"
     fi
 
     if [ "$os" = "windows" ]; then
         d="$DIST/fusion-console-$VERSION-$t"
         mkdir -p "$d"
         cp "bin/fusion-console-$t" "$d/fusion-console.exe"
-        cp "$GW" "$d/fusion-gateway.exe"
+        [ "$GW" != "-" ] && cp "$GW" "$d/fusion-gateway.exe"
         cp README.md LICENSE "$d/"
         (cd "$DIST" && zip -qr "fusion-console-$VERSION-$t.zip" "$(basename "$d")")
         rm -rf "$d"
