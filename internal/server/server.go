@@ -69,6 +69,12 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/gateway/keys", s.auth.Require(s.handleGatewayKeys))
 	m.HandleFunc("DELETE /api/gateway/keys/{name}", s.auth.Require(s.handleGatewayKeyDelete))
 	m.HandleFunc("GET /api/gateway/models", s.auth.Require(s.handleGatewayModels))
+	m.HandleFunc("GET /api/skills", s.auth.Require(s.handleSkillsList))
+	m.HandleFunc("GET /api/skills/read", s.auth.Require(s.handleSkillsRead))
+	m.HandleFunc("POST /api/skills", s.auth.Require(s.handleSkillsSave))
+	m.HandleFunc("DELETE /api/skills/{name}", s.auth.Require(s.handleSkillsDelete))
+	m.HandleFunc("POST /api/skills/draft", s.auth.Require(s.handleSkillsDraft))
+	m.HandleFunc("POST /api/skills/import", s.auth.Require(s.handleSkillsImport))
 
 	m.HandleFunc("GET /api/conversations", s.auth.Require(s.handleListConversations))
 	m.HandleFunc("POST /api/conversations", s.auth.Require(s.handleCreateConversation))

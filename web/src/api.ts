@@ -127,6 +127,18 @@ export const api = {
     req<{ ok: boolean }>(`/api/gateway/keys/${encodeURIComponent(name)}`, { method: "DELETE" }),
   gatewayModels: () =>
     req<{ models: string[] }>("/api/gateway/models"),
+  skills: (repo?: string) =>
+    req<{ skills: SkillEntry[] }>(`/api/skills${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`),
+  readSkill: (path: string, repo?: string) =>
+    req<{ content: string }>(`/api/skills/read?path=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`),
+  saveSkill: (s: { name: string; description: string; body: string; scope: string; repo?: string }) =>
+    req<{ ok: boolean; path: string }>("/api/skills", { method: "POST", body: JSON.stringify(s) }),
+  deleteSkill: (name: string, scope: string, repo?: string) =>
+    req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}?scope=${scope}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`, { method: "DELETE" }),
+  draftSkill: (d: { hint: string; text: string }) =>
+    req<{ content: string }>("/api/skills/draft", { method: "POST", body: JSON.stringify(d) }),
+  importSkill: (source: string) =>
+    req<{ content: string }>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) }),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>
@@ -159,6 +171,13 @@ export type GatewayKey = {
   key_prefix?: string;
   created_at?: string;
   in_use?: boolean;
+};
+
+export type SkillEntry = {
+  name: string;
+  description: string;
+  scope: "global" | "project";
+  path: string;
 };
 
 export type DashboardBucket = {

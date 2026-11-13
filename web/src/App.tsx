@@ -29,6 +29,7 @@ import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
 import Dashboard from "./Dashboard";
+import { SkillsPanel } from "./SkillsPanel";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
 type Page = "dashboard" | "chat" | "agents" | "gateway" | "onboard";
@@ -608,7 +609,7 @@ function ChatPage() {
 
 function AgentsPage() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [tab, setTab] = useState<"tools" | "workers">("tools");
+  const [tab, setTab] = useState<"tools" | "workers" | "skills">("tools");
   const load = () => api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
   useEffect(() => { load(); }, []);
   return (
@@ -622,6 +623,7 @@ function AgentsPage() {
           [
             ["tools", "Agents (tools)"],
             ["workers", "Workers"],
+            ["skills", "Skills"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -660,6 +662,7 @@ function AgentsPage() {
           <WorkersPanel />
         </Card>
       )}
+      {tab === "skills" && <SkillsPanel />}
     </div>
   );
 }
