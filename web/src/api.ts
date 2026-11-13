@@ -119,14 +119,14 @@ export const api = {
     req<{ backends: GatewayBackend[] }>("/api/gateway/backends"),
   addGatewayBackend: (b: { name: string; type: string; base_url: string; api_key: string; models: string[] }) =>
     req<{ ok: boolean; note?: string }>("/api/gateway/backend", { method: "POST", body: JSON.stringify(b) }),
-  deleteGatewayBackend: (name: string) =>
-    req<{ ok: boolean }>(`/api/gateway/backend/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  deleteGatewayBackend: (name: string, models?: string[]) =>
+    req<{ ok: boolean }>(`/api/gateway/backend/${encodeURIComponent(name)}${models?.length ? `?models=${encodeURIComponent(models.join(","))}` : ""}`, { method: "DELETE" }),
   gatewayKeys: () =>
     req<{ keys: GatewayKey[] }>("/api/gateway/keys"),
   deleteGatewayKey: (name: string) =>
     req<{ ok: boolean }>(`/api/gateway/keys/${encodeURIComponent(name)}`, { method: "DELETE" }),
   gatewayModels: () =>
-    req<{ models: string[] }>("/api/gateway/models"),
+    req<{ models: string[]; items: GatewayModelItem[] }>("/api/gateway/models"),
   skills: (repo?: string) =>
     req<{ skills: SkillEntry[] }>(`/api/skills${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`),
   readSkill: (path: string, repo?: string) =>
@@ -171,6 +171,16 @@ export type GatewayKey = {
   key_prefix?: string;
   created_at?: string;
   in_use?: boolean;
+};
+
+// One selectable gateway model. value is what clients must send — bare id
+// for local backends, qualified "backend/id" for cloud backends (the gateway
+// pins qualified ids to their backend).
+export type GatewayModelItem = {
+  id: string;
+  backend: string;
+  value: string;
+  local: boolean;
 };
 
 export type SkillEntry = {

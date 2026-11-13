@@ -10,6 +10,7 @@ import {
   Moon,
 
   Send,
+  Sparkles,
   Sun,
   Terminal,
   Plus,
@@ -20,11 +21,10 @@ import {
   Trash2,
   Download,
   ExternalLink,
-  Workflow,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type Conversation, type Message, type GatewayKey, type Provider } from "./api";
+import { api, streamPOST, type AgentInfo, type Conversation, type Message, type GatewayKey, type GatewayModelItem, type Provider } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -91,10 +91,10 @@ function Shell() {
 
   return (
     <div className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} />
+      <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} onWizard={() => setPage("onboard")} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
-          <Onboarding onDone={() => setPage("dashboard")} />
+          <Onboarding onDone={() => setPage("chat")} />
         )}
         {page === "dashboard" && <Dashboard />}
         {page === "chat" && <ChatPage />}
@@ -110,9 +110,9 @@ function Splash() {
 }
 
 function TopBar({
-  user, page, setPage, onLogout,
+  user, page, setPage, onLogout, onWizard,
 }: {
-  user: string; page: Page; setPage: (p: Page) => void; onLogout: () => void;
+  user: string; page: Page; setPage: (p: Page) => void; onLogout: () => void; onWizard: () => void;
 }) {
   const { dark, toggle } = useTheme();
   const tab = (id: Page, label: string, Icon: typeof Bot) => (
@@ -143,7 +143,7 @@ function TopBar({
         <button onClick={toggle} className="rounded-xl p-2 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
           {dark ? <Sun size={16} /> : <Moon size={16} />}
         </button>
-        <UserMenu user={user} onLogout={onLogout} />
+        <UserMenu user={user} onLogout={onLogout} onWizard={onWizard} />
       </div>
     </header>
   );
@@ -151,8 +151,9 @@ function TopBar({
 
 // UserMenu is the top-right account dropdown. Besides logout it offers the
 // wizard's one-click gateway API key creation so users who skipped the
-// wizard can mint (and copy) a key from any page.
-function UserMenu({ user, onLogout }: { user: string; onLogout: () => void }) {
+// wizard can mint (and copy) a key from any page, plus a re-run of the
+// setup wizard itself.
+function UserMenu({ user, onLogout, onWizard }: { user: string; onLogout: () => void; onWizard: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rawKey, setRawKey] = useState("");
@@ -210,6 +211,9 @@ function UserMenu({ user, onLogout }: { user: string; onLogout: () => void }) {
               <p className="text-xs text-zinc-400">
                 Issues a gateway API key via one click (stored in the OS keychain). Also available on the Gateway page.
               </p>
+              <Button variant="outline" onClick={() => { setOpen(false); onWizard(); }} className="w-full">
+                <Sparkles size={14} /> Run setup wizard
+              </Button>
             </div>
           )}
           {err && <p className="mt-2 text-xs text-red-500">{err}</p>}
@@ -283,14 +287,11 @@ function ChatPage() {
   const [active, setActive] = useState<Conversation | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [gwProvider, setGwProvider] = useState<Provider | null>(null);
-  const [gwModels, setGwModels] = useState<string[]>([]);
+  const [gwModels, setGwModels] = useState<GatewayModelItem[]>([]);
   const [brainModel, setBrainModel] = useState("");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [agentName, setAgentName] = useState("");
-  const [workdir, setWorkdir] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [orchestrate, setOrchestrate] = useState(false);
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
   const [err, setErr] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -320,11 +321,11 @@ function ChatPage() {
       // the Gateway page brain card. Gateway unreachable: fall back to the
       // provider's stored model so chat still works.
       api.gatewayModels().then((m) => {
-        const ids = m.models ?? [];
-        setGwModels(ids);
-        setBrainModel((cur) => cur || (gw.model && ids.includes(gw.model) ? gw.model : ids[0] || gw.model || ""));
+        const items = m.items ?? [];
+        setGwModels(items);
+        setBrainModel((cur) => cur || (gw.model && items.some((i) => i.value === gw.model) ? gw.model : items[0]?.value || gw.model || ""));
       }).catch(() => {
-        setGwModels(gw.model ? [gw.model] : []);
+        setGwModels(gw.model ? [{ id: gw.model, backend: "", value: gw.model, local: false }] : []);
         setBrainModel((cur) => cur || gw.model || "");
       });
     }).catch(() => {});
@@ -389,6 +390,14 @@ function ChatPage() {
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
+    // @agent mention hands the message off explicitly; anything else is a
+    // plain brain chat turn (orchestration lets the brain dispatch workers).
+    const mm = text.match(/@([a-zA-Z0-9_-]+)/);
+    const mentioned = mm ? detectedAgents.find((a) => a.name === mm[1]) : null;
+    if (mentioned) {
+      await runAgentTask(text, mentioned.name);
+      return;
+    }
     if (!gwProvider) {
       setErr("no gateway provider — open the Gateway page and click Create API key first");
       return;
@@ -406,7 +415,7 @@ function ChatPage() {
       }
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: text, orchestrate }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: text, orchestrate: true }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -437,22 +446,21 @@ function ChatPage() {
     }
   };
 
-  const runAgent = async () => {
-    const text = input.trim();
-    if (!text || busy || !agentName) return;
+  const runAgentTask = async (text: string, agent: string) => {
+    if (!text || busy || !agent) return;
     setBusy(true);
     setErr("");
     setInput("");
     try {
       let conv = active;
-      if (!conv || conv.Kind !== "agent" || conv.AgentName !== agentName) {
-        const r = await api.createConversation(text.slice(0, 40), "agent", agentName, workdir);
-        conv = { ID: r.id, Title: text.slice(0, 40), Kind: "agent", User: "", AgentName: agentName, Workdir: workdir, CreatedAt: "" };
+      if (!conv || conv.Kind !== "agent" || conv.AgentName !== agent) {
+        const r = await api.createConversation(text.slice(0, 40), "agent", agent, "");
+        conv = { ID: r.id, Title: text.slice(0, 40), Kind: "agent", User: "", AgentName: agent, Workdir: "", CreatedAt: "" };
         setActive(conv);
         await refreshConvs();
       }
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
-      await streamPOST("/api/agent/run", { conversation_id: conv.ID, agent: agentName, task: text, workdir }, (ev) => {
+      await streamPOST("/api/agent/run", { conversation_id: conv.ID, agent, task: text, workdir: "" }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -473,6 +481,21 @@ function ChatPage() {
   };
 
   const detectedAgents = agents.filter((a) => a.detected);
+
+  // @mention: while typing an "@name" token at the end of the input, offer
+  // completing agents; sending a message that @mentions one hands it off.
+  const mm = /@([a-zA-Z0-9_-]*)$/.exec(input);
+  const mentionQuery = mm ? mm[1] : null;
+  const mentionOptions = mentionQuery === null
+    ? []
+    : detectedAgents.filter((a) => a.name.toLowerCase().startsWith(mentionQuery.toLowerCase()));
+  const insertMention = (name: string) => {
+    setInput(input.replace(/@([a-zA-Z0-9_-]*)$/, `@${name} `));
+  };
+  const mentionedAgent = (() => {
+    const m = input.match(/@([a-zA-Z0-9_-]+)/);
+    return m ? detectedAgents.find((a) => a.name === m[1]) : null;
+  })();
 
   return (
     <div className="flex h-full">
@@ -524,48 +547,21 @@ function ChatPage() {
             <Brain size={14} className="text-indigo-500" /> brain
           </label>
           <Select value={brainModel} onChange={(e) => changeBrain(e.target.value)} className="w-48"
-            title="Model served by fusion-gateway — the list comes from the gateway's /v1/models">
+            title="Model served by fusion-gateway — cloud models are pinned to their backend via the qualified backend/model id">
             {gwModels.length === 0 && brainModel && <option value={brainModel}>{brainModel}</option>}
             {gwModels.map((m) => (
-              <option key={m} value={m}>{m}</option>
+              <option key={m.value} value={m.value}>{m.id}{m.backend && !m.local ? ` · ${m.backend}` : ""}</option>
             ))}
           </Select>
           {!gwProvider && (
             <span className="text-xs text-amber-600 dark:text-amber-400">no gateway provider — create an API key on the Gateway page</span>
           )}
-          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="Optional: pick a coding-agent CLI, set a workdir, then use the bot button next to Send to hand the message to it as a task. Plain chat ignores this.">
-            agent
-          </label>
-          <Select value={agentName} onChange={(e) => setAgentName(e.target.value)} className="w-44"
-            title="Optional: coding-agent CLI used when handing off a task (bot button). Leave empty for plain chat.">
-            <option value="">none (plain chat)</option>
-            {detectedAgents.map((a) => (
-              <option key={a.name} value={a.name}>{a.name}</option>
-            ))}
-          </Select>
-          <Input
-            value={workdir}
-            onChange={(e) => setWorkdir(e.target.value)}
-            placeholder="agent workdir (e.g. /Users/me/proj)"
-            className="flex-1 min-w-40"
-          />
-          <button
-            onClick={() => setOrchestrate((v) => !v)}
-            title="Orchestration: chat as main brain — it may dispatch agents with native tool calls (consent per turn)"
-            className={`flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs transition-colors ${
-              orchestrate
-                ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
-                : "border-zinc-200/80 dark:border-zinc-800 text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
-            }`}
-          >
-            <Workflow size={14} /> orchestrate {orchestrate ? "on" : "off"}
-          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {entries.length === 0 && (
             <div className="flex h-full items-center justify-center text-sm text-zinc-400">
-              Send a message to chat — or pick an agent + workdir above and hand it a task.
+              Send a message to chat — type @ to hand the task to a coding agent.
             </div>
           )}
           {entries.map((m, i) => (
@@ -614,26 +610,37 @@ function ChatPage() {
 
         {err && <p className="px-4 pb-1 text-sm text-red-500">{err}</p>}
 
-        <div className="border-t border-zinc-200/80 dark:border-zinc-800 p-3">
+        <div className="relative border-t border-zinc-200/80 dark:border-zinc-800 p-3">
+          {mentionOptions.length > 0 && (
+            <div className="absolute bottom-full left-3 right-3 mb-1 max-h-48 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white p-1 shadow-md shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-900">
+              {mentionOptions.map((a) => (
+                <button key={a.name} onClick={() => insertMention(a.name)}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                  <Bot size={14} className="text-indigo-500" /> @{a.name}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex gap-2">
             <Textarea
               rows={2}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
+                if (mentionOptions.length > 0 && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) {
+                  e.preventDefault();
+                  insertMention(mentionOptions[0].name);
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               }}
-              placeholder={agentName ? `Task for ${agentName}…` : "Message…"}
+              placeholder="Message…  (@ to hand off to an agent)"
             />
             <div className="flex flex-col gap-2">
-              <Button onClick={send} disabled={busy || !input.trim()} title="Send as chat">
-                <Send size={16} />
+              <Button onClick={send} disabled={busy || !input.trim()}
+                title={mentionedAgent ? `Run with ${mentionedAgent.name}` : "Send as chat"}>
+                {mentionedAgent ? <Bot size={16} /> : <Send size={16} />}
               </Button>
-              {agentName && (
-                <Button variant="outline" onClick={runAgent} disabled={busy || !input.trim()} title={`Run with ${agentName}`}>
-                  <Bot size={16} />
-                </Button>
-              )}
             </div>
           </div>
         </div>
@@ -711,7 +718,7 @@ function GatewayPage() {
   const [adminPass, setAdminPass] = useState("");
   const [keys, setKeys] = useState<GatewayKey[]>([]);
   const [brainModel, setBrainModel] = useState("");
-  const [gwModels, setGwModels] = useState<string[]>([]);
+  const [gwModels, setGwModels] = useState<GatewayModelItem[]>([]);
 
   const load = useCallback(() => {
     api.gatewayStatus().then(setStatus).catch((e) => setErr((e as Error).message));
@@ -726,7 +733,7 @@ function GatewayPage() {
       const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled);
       if (gw) setBrainModel(gw.model || "");
     }).catch(() => {});
-    api.gatewayModels().then((r) => setGwModels(r.models ?? [])).catch(() => setGwModels([]));
+    api.gatewayModels().then((r) => setGwModels(r.items ?? [])).catch(() => setGwModels([]));
   }, []);
   useEffect(() => {
     if (!status?.reachable) return;
@@ -859,12 +866,14 @@ function GatewayPage() {
           <h3 className="font-medium flex items-center gap-2"><Cpu size={16} /> Brain model</h3>
           <p className="text-sm text-zinc-500">
             Model the brain (chat planner) uses. Requests still go through the gateway —
-            pick any model exposed by the cloud providers above.
+            cloud models are pinned to their backend via the qualified <code>backend/model</code> id.
           </p>
           <div className="flex flex-wrap gap-2">
             <Select className="w-72" value={brainModel} onChange={(e) => setBrainModel(e.target.value)}>
               {!brainModel && <option value="">choose model...</option>}
-              {gwModels.map((m) => <option key={m} value={m}>{m}</option>)}
+              {gwModels.map((m) => (
+                <option key={m.value} value={m.value}>{m.id}{m.backend && !m.local ? ` · ${m.backend}` : ""}</option>
+              ))}
             </Select>
             <Button onClick={saveBrainModel} disabled={!brainModel}>Save</Button>
           </div>

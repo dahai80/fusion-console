@@ -132,27 +132,6 @@ export function SkillsPanel() {
                 Scope only applies to the Claude agent.
             </p>
 
-            <div className="space-y-2">
-                {skills.map((s) => (
-                    <Card key={s.path} className="flex items-center justify-between p-3 text-sm">
-                        <div className="min-w-0">
-                            <p className="font-medium flex items-center gap-2">
-                                {s.name} <Badge>{s.scope}</Badge>
-                            </p>
-                            <p className="truncate text-xs text-zinc-500">{s.description || s.path}</p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                            <Button variant="ghost" onClick={() => editSkill(s)}>edit</Button>
-                            <button onClick={() => remove(s)} title={`Delete skill ${s.name}`}
-                                className="rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
-                                delete
-                            </button>
-                        </div>
-                    </Card>
-                ))}
-                {skills.length === 0 && <p className="text-sm text-zinc-400">No skills installed yet.</p>}
-            </div>
-
             {!editing && (
                 <div className="flex flex-wrap gap-2">
                     <Button variant="outline" onClick={() => openEditor()}>New skill</Button>
@@ -207,6 +186,30 @@ export function SkillsPanel() {
 
             {msg && <p className="text-sm text-indigo-500">{msg}</p>}
             {err && <p className="text-sm text-red-500">{err}</p>}
+
+            <div className="space-y-2">
+                <p className="text-xs font-medium text-zinc-500">Installed skills ({skills.length})</p>
+                <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                    {skills.map((s) => (
+                        <Card key={s.path} className="flex items-center justify-between p-3 text-sm">
+                            <div className="min-w-0">
+                                <p className="font-medium flex items-center gap-2">
+                                    {s.name} <Badge>{s.scope}</Badge>
+                                </p>
+                                <p className="truncate text-xs text-zinc-500">{s.description || s.path}</p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                                <Button variant="ghost" onClick={() => editSkill(s)}>edit</Button>
+                                <button onClick={() => remove(s)} title={`Delete skill ${s.name}`}
+                                    className="rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
+                                    delete
+                                </button>
+                            </div>
+                        </Card>
+                    ))}
+                    {skills.length === 0 && <p className="text-sm text-zinc-400">No skills installed yet.</p>}
+                </div>
+            </div>
         </div>
     );
 

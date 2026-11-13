@@ -34,11 +34,11 @@ export function GatewayBackendsPanel({ compact = false }: { compact?: boolean })
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const deleteBackend = async (name: string) => {
+  const deleteBackend = async (b: { name: string; models?: string[] }) => {
     setErr(""); setMsg("");
     try {
-      await api.deleteGatewayBackend(name);
-      setMsg(`backend "${name}" removed from the gateway`);
+      await api.deleteGatewayBackend(b.name, b.models ?? []);
+      setMsg(`backend "${b.name}" removed from the gateway`);
       load();
     } catch (ex) {
       setErr((ex as Error).message);
@@ -90,9 +90,12 @@ export function GatewayBackendsPanel({ compact = false }: { compact?: boolean })
         <Input className="w-56" type="password" placeholder="API key" value={bKey}
           onChange={(e) => setBKey(e.target.value)} />
       </div>
-      <Input placeholder="models, comma separated (e.g. deepseek-chat, deepseek-reasoner)" value={bModels}
-        onChange={(e) => setBModels(e.target.value)} />
-      <Button onClick={addBackend} disabled={busy || (!bURL && !bKey)}>Add provider</Button>
+      <div>
+        <Input placeholder="models, comma separated — required (e.g. deepseek-chat, deepseek-reasoner)" value={bModels}
+          onChange={(e) => setBModels(e.target.value)} />
+        <p className="mt-1 text-xs text-zinc-400">At least one model name is required — the gateway only advertises models it is told about. Use the exact ids the upstream API expects.</p>
+      </div>
+      <Button onClick={addBackend} disabled={busy || (!bURL && !bKey) || !bModels.trim()}>Add provider</Button>
       {backends.length > 0 && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-zinc-500">Backends currently in the gateway</p>
@@ -102,7 +105,7 @@ export function GatewayBackendsPanel({ compact = false }: { compact?: boolean })
               <Badge tone={b.enabled ? "ok" : "warn"}>{b.type}</Badge>
               <span className="text-zinc-400">{b.base_url}</span>
               {b.models?.length > 0 && <span className="text-zinc-400">models: {b.models.join(", ")}</span>}
-              <button onClick={() => deleteBackend(b.name)} title={`Remove backend ${b.name}`}
+              <button onClick={() => deleteBackend(b)} title={`Remove backend ${b.name}`}
                 className="ml-auto rounded-lg px-2 py-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
                 remove
               </button>

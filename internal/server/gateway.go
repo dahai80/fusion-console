@@ -508,49 +508,111 @@ func (s *Server) handleGatewayBackendDelete(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": gatewayErrMsg(data, code, "backend delete")})
 		return
 	}
+	// Prune the backend's models from routing.cloud_models so the pickers
+	// do not keep dead entries. The frontend passes them as ?models=; only
+	// entries this console added for this backend are pruned. Failure is
+	// logged inside, never fatal.
+	if modelsParam := strings.Split(r.URL.Query().Get("models"), ","); len(modelsParam) > 0 && modelsParam[0] != "" {
+		s.gatewayCloudModelsRemove(r, base, name, modelsParam)
+	}
 	log.Printf("server: gateway backend %s deleted", name)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleGatewayModels lists the models the gateway exposes
-// (GET /v1/models with the stored gateway-key) so the UI can offer a brain
-// model picker without leaving the console.
-// gatewayModelIDs fetches /v1/models with the stored gateway-key and returns
-// the bare model ids. Used by the brain pickers and the post-backend-add
-// verification; error means the gateway or its key is unavailable.
-func (s *Server) gatewayModelIDs() ([]string, error) {
+// gatewayModelItem is one selectable model for the brain pickers. Value is
+// what the client must send: bare id for local (fusion-*) backends, qualified
+// "backend/id" for cloud backends — the gateway pins a qualified id to its
+// backend, while a bare cloud id with no models.supply entry falls through
+// to the cloud_default backend (wrong target).
+type gatewayModelItem struct {
+	ID      string `json:"id"`
+	Backend string `json:"backend"`
+	Value   string `json:"value"`
+	Local   bool   `json:"local"`
+}
+
+// isLocalBackend reports whether a gateway backend name is a local engine
+// (fusion-mlx, fusion-model-hub, ...) rather than a cloud provider.
+func isLocalBackend(name string) bool {
+	return strings.HasPrefix(name, "fusion-")
+}
+
+// gatewayModelItems fetches /v1/models plus the admin backend list and
+// returns the merged picker entries. Cloud models that only exist as
+// routing.cloud_models entries (no backend attribution in /v1/models) are
+// attributed via the backend's configured models list.
+func (s *Server) gatewayModelItems(r *http.Request) ([]gatewayModelItem, error) {
 	base := s.gatewayBase()
 	key, err := config.GetAPIKey("gateway-key")
 	if err != nil || key == "" {
 		return nil, fmt.Errorf("no gateway API key stored — create one first")
 	}
-	req, err := http.NewRequest(http.MethodGet, base+"/v1/models", nil)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/v1/models", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("gateway unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	var out struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID      string `json:"id"`
+			Backend string `json:"backend"`
 		} `json:"data"`
 	}
 	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&out) != nil {
 		return nil, fmt.Errorf("gateway models returned HTTP %d", resp.StatusCode)
 	}
-	ids := make([]string, 0, len(out.Data))
-	for _, m := range out.Data {
-		ids = append(ids, m.ID)
+
+	// backend -> configured models (admin list), used to attribute
+	// cloud_models-synthesized entries and to know which backend serves what.
+	backendModels := map[string]string{} // model id -> backend name
+	enabled := map[string]bool{}
+	code, data, derr := s.gatewayAdminDo(r, base, http.MethodGet, "/admin/api/config/backends", nil)
+	if derr == nil && code == http.StatusOK {
+		var list []struct {
+			Name    string   `json:"name"`
+			Enabled bool     `json:"enabled"`
+			Models  []string `json:"models"`
+		}
+		if json.Unmarshal(data, &list) == nil {
+			for _, b := range list {
+				enabled[b.Name] = b.Enabled
+				for _, m := range b.Models {
+					if _, taken := backendModels[m]; !taken {
+						backendModels[m] = b.Name
+					}
+				}
+			}
+		}
 	}
-	return ids, nil
+
+	items := make([]gatewayModelItem, 0, len(out.Data))
+	seen := map[string]bool{}
+	for _, m := range out.Data {
+		backend := m.Backend
+		if backend == "" {
+			backend = backendModels[m.ID]
+		}
+		value := m.ID
+		local := isLocalBackend(backend)
+		if backend != "" && !local {
+			value = backend + "/" + m.ID
+		}
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		items = append(items, gatewayModelItem{ID: m.ID, Backend: backend, Value: value, Local: local})
+	}
+	return items, nil
 }
 
 func (s *Server) handleGatewayModels(w http.ResponseWriter, r *http.Request) {
-	ids, err := s.gatewayModelIDs()
+	items, err := s.gatewayModelItems(r)
 	if err != nil {
 		if strings.Contains(err.Error(), "no gateway API key") {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -559,7 +621,11 @@ func (s *Server) handleGatewayModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": ids})
+	values := make([]string, 0, len(items))
+	for _, it := range items {
+		values = append(values, it.Value)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": values, "items": items})
 }
 
 // handleGatewayBackends lists the backends configured in the gateway
@@ -616,6 +682,10 @@ func (s *Server) handleGatewayBackendAdd(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and type are required"})
 		return
 	}
+	if len(req.Models) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one model name is required — the gateway can only advertise models it is told about"})
+		return
+	}
 	base := s.gatewayBase()
 	token, err := s.gatewayAdminLogin(r, base)
 	if err != nil {
@@ -647,43 +717,226 @@ func (s *Server) handleGatewayBackendAdd(w http.ResponseWriter, r *http.Request)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		var e struct {
-			Error string `json:"error"`
-		}
-		msg := fmt.Sprintf("gateway returned HTTP %d", resp.StatusCode)
-		if json.NewDecoder(resp.Body).Decode(&e) == nil && e.Error != "" {
-			msg = e.Error
+		body, _ := io.ReadAll(resp.Body)
+		msg := gatewayErrMsg(body, resp.StatusCode, "backend create")
+		// The gateway rejects duplicate base URLs — the usual cause is
+		// re-adding a backend that already exists (e.g. without models).
+		if strings.Contains(msg, "base_url conflict") || strings.Contains(msg, "already exists") {
+			msg += " — delete the existing backend on the list above, then add it again with its models filled in"
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": msg})
 		return
 	}
 	log.Printf("server: gateway backend %s (%s) created", req.Name, req.Type)
-	// The gateway reloads its config on write, but /v1/models aggregates each
-	// backend's LIVE ListModels call (3s timeout) — an unreachable upstream or
-	// wrong API key silently drops the backend's models from every picker.
-	// Verify right after the add and tell the user instead of staying silent.
+
+	// Wire the models so they are callable and visible:
+	// 1. routing.cloud_models — the gateway's allowlist for cloud model ids.
+	//    Anthropic-type backends only ever advertise the standard claude-*
+	//    catalog via ListModels, so a custom id is invisible AND blocked by
+	//    the allowlist until it is listed here. Merge (never replace) with
+	//    the current list.
+	// 2. Verification: /v1/models aggregates each backend's LIVE ListModels
+	//    (3s timeout) — if the id still does not show up, the upstream is
+	//    unreachable or the key is wrong and the note says so.
+	if err := s.gatewayCloudModelsMerge(r, base, token, req.Name, req.Models); err != nil {
+		log.Printf("server: cloud_models merge for %s failed: %v", req.Name, err)
+	}
 	note := ""
-	if len(req.Models) > 0 {
-		if ids, merr := s.gatewayModelIDs(); merr == nil {
-			found := false
-			for _, m := range req.Models {
-				for _, id := range ids {
-					if id == m {
-						found = true
-						break
-					}
-				}
-				if found {
+	if items, merr := s.gatewayModelItems(r); merr == nil {
+		found := false
+		for _, m := range req.Models {
+			for _, it := range items {
+				if it.ID == m {
+					found = true
 					break
 				}
 			}
-			if !found {
-				note = "backend saved, but none of its models appear in /v1/models yet — check the base URL, API key and network reachability of " + req.BaseURL
-				log.Printf("server: backend %s models %v not visible in /v1/models", req.Name, req.Models)
+			if found {
+				break
 			}
+		}
+		if !found {
+			note = "backend saved, but none of its models appear in /v1/models yet — check the base URL, API key and network reachability of " + req.BaseURL
+			log.Printf("server: backend %s models %v not visible in /v1/models", req.Name, req.Models)
 		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "note": note})
+}
+
+// gatewayCloudModelsMerge appends model ids to the gateway's
+// routing.cloud_models via the admin routing endpoint (GET then PUT, so the
+// existing entries — including the "claude-*" wildcard — are preserved). Only
+// the ids this call actually added are recorded as owned by the backend, so a
+// later delete never prunes pre-existing (user-curated) entries.
+func (s *Server) gatewayCloudModelsMerge(r *http.Request, base, token, name string, models []string) error {
+	code, data, err := s.gatewayAdminDo(r, base, http.MethodGet, "/admin/api/config/routing", nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusOK {
+		return fmt.Errorf("routing read returned HTTP %d", code)
+	}
+	var cur struct {
+		CloudModels []string `json:"cloud_models"`
+	}
+	_ = json.Unmarshal(data, &cur)
+	merged := cur.CloudModels
+	changed := false
+	var added []string
+	for _, m := range models {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		exists := false
+		for _, c := range merged {
+			if c == m {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			merged = append(merged, m)
+			added = append(added, m)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	payload, _ := json.Marshal(map[string]any{"cloud_models": merged})
+	code, data, err = s.gatewayAdminDo(r, base, http.MethodPut, "/admin/api/config/routing", json.RawMessage(payload))
+	if err != nil {
+		return err
+	}
+	if code != http.StatusOK {
+		return fmt.Errorf("routing update returned HTTP %d: %s", code, gatewayErrMsg(data, code, "cloud_models update"))
+	}
+	if err := s.ownedModelsRecord(name, added); err != nil {
+		log.Printf("server: recording owned cloud models for %s failed: %v", name, err)
+	}
+	log.Printf("server: routing.cloud_models now %d entries (added %v)", len(merged), added)
+	return nil
+}
+
+// gatewayCloudModelsRemove drops model ids from routing.cloud_models when
+// their backend is deleted, so the picker does not keep dead entries. Only ids
+// previously added by this console for this backend are pruned — entries the
+// user curated by hand (or another tool added) are never touched.
+func (s *Server) gatewayCloudModelsRemove(r *http.Request, base, name string, models []string) {
+	owned, err := s.ownedModelsTake(name)
+	if err != nil {
+		log.Printf("server: reading owned cloud models for %s failed: %v", name, err)
+		return
+	}
+	if len(owned) == 0 {
+		log.Printf("server: no console-added cloud models recorded for %s — cloud_models left untouched", name)
+		return
+	}
+	own := map[string]bool{}
+	for _, m := range owned {
+		own[m] = true
+	}
+	var drop []string
+	for _, m := range models {
+		if own[m] {
+			drop = append(drop, m)
+		}
+	}
+	if len(drop) == 0 {
+		return
+	}
+	code, data, err := s.gatewayAdminDo(r, base, http.MethodGet, "/admin/api/config/routing", nil)
+	if err != nil || code != http.StatusOK {
+		return
+	}
+	var cur struct {
+		CloudModels []string `json:"cloud_models"`
+	}
+	if json.Unmarshal(data, &cur) != nil || len(cur.CloudModels) == 0 {
+		return
+	}
+	dropSet := map[string]bool{}
+	for _, m := range drop {
+		dropSet[m] = true
+	}
+	merged := make([]string, 0, len(cur.CloudModels))
+	for _, c := range cur.CloudModels {
+		if !dropSet[c] {
+			merged = append(merged, c)
+		}
+	}
+	if len(merged) == len(cur.CloudModels) {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{"cloud_models": merged})
+	if code, _, err = s.gatewayAdminDo(r, base, http.MethodPut, "/admin/api/config/routing", json.RawMessage(payload)); err == nil && code == http.StatusOK {
+		log.Printf("server: routing.cloud_models pruned after backend delete (removed %v)", drop)
+	}
+}
+
+// ownedModelsPath is the state file recording which cloud_models entries this
+// console added per backend — the delete path prunes only those.
+func (s *Server) ownedModelsPath() string {
+	return filepath.Join(s.cfgDir, "gateway-added-models.json")
+}
+
+func (s *Server) ownedModelsLoad() (map[string][]string, error) {
+	data, err := os.ReadFile(s.ownedModelsPath())
+	if os.IsNotExist(err) {
+		return map[string][]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return map[string][]string{}, nil
+	}
+	return out, nil
+}
+
+func (s *Server) ownedModelsSave(m map[string][]string) error {
+	data, err := json.MarshalIndent(m, "", "    ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.ownedModelsPath(), data, 0o600)
+}
+
+// ownedModelsRecord appends ids to the backend's owned set (dedup).
+func (s *Server) ownedModelsRecord(name string, ids []string) error {
+	if name == "" || len(ids) == 0 {
+		return nil
+	}
+	all, err := s.ownedModelsLoad()
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, e := range all[name] {
+		seen[e] = true
+	}
+	for _, id := range ids {
+		if !seen[id] {
+			all[name] = append(all[name], id)
+		}
+	}
+	return s.ownedModelsSave(all)
+}
+
+// ownedModelsTake returns and clears the backend's owned set.
+func (s *Server) ownedModelsTake(name string) ([]string, error) {
+	all, err := s.ownedModelsLoad()
+	if err != nil || len(all[name]) == 0 {
+		return nil, err
+	}
+	owned := all[name]
+	delete(all, name)
+	if err := s.ownedModelsSave(all); err != nil {
+		log.Printf("server: clearing owned cloud models for %s failed: %v", name, err)
+	}
+	return owned, nil
 }
 
 // gatewayDefaultModel queries /v1/models with the fresh key and returns the

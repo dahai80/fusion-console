@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/dahai80/fusion-console/internal/config"
@@ -136,4 +137,50 @@ func indexOf(h, n string) int {
 		}
 	}
 	return -1
+}
+
+func TestOwnedModelsRecordAndTake(t *testing.T) {
+	s := newGatewayTestServer(t)
+	if err := s.ownedModelsRecord("b1", []string{"m1", "m2"}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	// Recording again dedups.
+	if err := s.ownedModelsRecord("b1", []string{"m2", "m3"}); err != nil {
+		t.Fatalf("record 2: %v", err)
+	}
+	got, err := s.ownedModelsTake("b1")
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("owned %v, want [m1 m2 m3]", got)
+	}
+	// Take clears the entry; second take is empty.
+	again, err := s.ownedModelsTake("b1")
+	if err != nil || len(again) != 0 {
+		t.Fatalf("second take %v err %v, want empty", again, err)
+	}
+	// Other backends untouched.
+	if err := s.ownedModelsRecord("b2", []string{"m9"}); err != nil {
+		t.Fatalf("record b2: %v", err)
+	}
+	if _, err := s.ownedModelsTake("b1"); err != nil {
+		t.Fatalf("take b1: %v", err)
+	}
+	kept, _ := s.ownedModelsLoad()
+	if len(kept["b2"]) != 1 || kept["b2"][0] != "m9" {
+		t.Fatalf("b2 kept %v, want [m9]", kept["b2"])
+	}
+}
+
+func TestOwnedModelsCorruptFile(t *testing.T) {
+	s := newGatewayTestServer(t)
+	if err := os.WriteFile(s.ownedModelsPath(), []byte("not json"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Corrupt state is treated as empty, not an error.
+	owned, err := s.ownedModelsTake("any")
+	if err != nil || owned != nil {
+		t.Fatalf("take on corrupt file = %v, %v; want nil, nil", owned, err)
+	}
 }
