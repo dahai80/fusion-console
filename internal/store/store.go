@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
+	"sort"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -169,6 +171,110 @@ func (s *Store) LogCost(convID int64, user, source string, costUSD float64, toke
 		return fmt.Errorf("store: log cost: %w", err)
 	}
 	return nil
+}
+
+// UsageDashboard aggregates token/cost usage for the dashboard, split into
+// the two consumption roles: brain (chat/planner rows, source "chat:*") and
+// workers (agent dispatch rows, source "agent:*"). rangeID is one of
+// today/week/month/all; the bucket granularity follows the window (hourly /
+// daily / daily / monthly).
+func (s *Store) UsageDashboard(user, rangeID string) (map[string]any, error) {
+	var cutoff, bucketExpr, labelFmt string
+	switch rangeID {
+	case "today":
+		cutoff = time.Now().UTC().Format("2006-01-02")
+		bucketExpr, labelFmt = "substr(created_at, 12, 2)", "hour"
+	case "week":
+		cutoff = time.Now().UTC().AddDate(0, 0, -6).Format("2006-01-02")
+		bucketExpr, labelFmt = "substr(created_at, 1, 10)", "day"
+	case "month":
+		cutoff = time.Now().UTC().AddDate(0, 0, -29).Format("2006-01-02")
+		bucketExpr, labelFmt = "substr(created_at, 1, 10)", "day"
+	case "all":
+		bucketExpr, labelFmt = "substr(created_at, 1, 7)", "month"
+	default:
+		return nil, fmt.Errorf("store: unknown range %q", rangeID)
+	}
+	q := `SELECT ` + bucketExpr + ` AS bucket,
+	        CASE WHEN source LIKE 'agent:%' THEN 'worker' ELSE 'brain' END AS role,
+	        COUNT(*) AS calls, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
+	        ROUND(SUM(cost_usd), 4) AS cost_usd
+	      FROM cost_log WHERE user = ?`
+	args := []any{user}
+	if cutoff != "" {
+		q += ` AND substr(created_at, 1, 10) >= ?`
+		args = append(args, cutoff)
+	}
+	q += ` GROUP BY bucket, role ORDER BY bucket`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: usage dashboard: %w", err)
+	}
+	defer rows.Close()
+
+	type agg struct {
+		calls int64
+		in    int64
+		out   int64
+		cost  float64
+	}
+	m := map[string]*[2]agg{} // bucket -> [brain, worker]
+	for rows.Next() {
+		var bucket, role string
+		var calls int64
+		var tin, tout sql.NullInt64
+		var cost float64
+		if err := rows.Scan(&bucket, &role, &calls, &tin, &tout, &cost); err != nil {
+			return nil, fmt.Errorf("store: usage dashboard scan: %w", err)
+		}
+		slot := 0
+		if role == "worker" {
+			slot = 1
+		}
+		if m[bucket] == nil {
+			m[bucket] = &[2]agg{}
+		}
+		a := &m[bucket][slot]
+		a.calls, a.cost = calls, cost
+		if tin.Valid {
+			a.in += tin.Int64
+		}
+		if tout.Valid {
+			a.out += tout.Int64
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: usage dashboard rows: %w", err)
+	}
+
+	type bucketRow struct {
+		Bucket   string `json:"bucket"`
+		BrainIn  int64  `json:"brain_tokens_in"`
+		BrainOut int64  `json:"brain_tokens_out"`
+		WorkIn   int64  `json:"worker_tokens_in"`
+		WorkOut  int64  `json:"worker_tokens_out"`
+		BrainUSD float64 `json:"brain_cost_usd"`
+		WorkUSD  float64 `json:"worker_cost_usd"`
+	}
+	buckets := []bucketRow{}
+	tot := bucketRow{}
+	for b, pair := range m {
+		row := bucketRow{Bucket: b, BrainIn: pair[0].in, BrainOut: pair[0].out, WorkIn: pair[1].in, WorkOut: pair[1].out, BrainUSD: pair[0].cost, WorkUSD: pair[1].cost}
+		buckets = append(buckets, row)
+		tot.BrainIn += row.BrainIn
+		tot.BrainOut += row.BrainOut
+		tot.WorkIn += row.WorkIn
+		tot.WorkOut += row.WorkOut
+		tot.BrainUSD += row.BrainUSD
+		tot.WorkUSD += row.WorkUSD
+	}
+	round4 := func(v float64) float64 { return math.Round(v*10000) / 10000 }
+	sort.Slice(buckets, func(i, j int) bool { return buckets[i].Bucket < buckets[j].Bucket })
+	return map[string]any{"range": rangeID, "bucket_unit": labelFmt, "buckets": buckets,
+		"totals": map[string]any{
+			"brain_tokens": tot.BrainIn + tot.BrainOut, "worker_tokens": tot.WorkIn + tot.WorkOut,
+			"brain_cost_usd": round4(tot.BrainUSD), "worker_cost_usd": round4(tot.WorkUSD),
+		}}, nil
 }
 
 // CostReport aggregates cost per day for a user.

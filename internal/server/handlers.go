@@ -459,6 +459,17 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"report": report})
 }
 
+// handleDashboard serves brain-vs-worker token/cost series for the home
+// dashboard. range is today|week|month|all (default week).
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	data, err := s.store.UsageDashboard(s.auth.User(r), r.URL.Query().Get("range"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
 func settingsDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {

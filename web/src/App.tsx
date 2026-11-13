@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
+  LayoutDashboard,
   LogOut,
   MessageSquare,
   Moon,
@@ -20,9 +21,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, type AgentInfo, type Conversation, type Message, type Provider } from "./api";
 import Onboarding from "./Onboarding";
+import Dashboard from "./Dashboard";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "chat" | "agents" | "gateway" | "settings" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "settings" | "onboard";
 
 export default function App() {
   return (
@@ -35,7 +37,7 @@ export default function App() {
 function Shell() {
   // undefined = session check in flight, null = logged out, string = logged in
   const [user, setUser] = useState<string | null | undefined>(undefined);
-  const [page, setPage] = useState<Page>("chat");
+  const [page, setPage] = useState<Page>("dashboard");
 
   useEffect(() => {
     // One-time auto-login token (console launched with --open puts it in the
@@ -83,8 +85,9 @@ function Shell() {
       <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
-          <Onboarding onDone={() => setPage("chat")} />
+          <Onboarding onDone={() => setPage("dashboard")} />
         )}
+        {page === "dashboard" && <Dashboard />}
         {page === "chat" && <ChatPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
@@ -122,6 +125,7 @@ function TopBar({
       <div className="flex items-center gap-4">
         <span className="font-semibold tracking-tight">fusion-console</span>
         <nav className="flex gap-1">
+          {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("chat", "Chat", MessageSquare)}
           {tab("agents", "Agents", Bot)}
           {tab("gateway", "Gateway", Network)}

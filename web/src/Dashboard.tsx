@@ -1,0 +1,295 @@
+import { useEffect, useMemo, useState } from "react";
+import { Brain, Bot, CircleDollarSign, RefreshCw, Table2, BarChart3 } from "lucide-react";
+import { api, type DashboardBucket, type DashboardData, type UsageRange } from "./api";
+import { Button, Card, useTheme } from "./components/ui";
+
+// Palette validated with the dataviz validator (light + dark surfaces).
+// Brain = indigo (chat:* sources), Workers = amber (agent:* sources).
+const COLORS = {
+  light: { brain: "#4f46e5", worker: "#d97706" },
+  dark: { brain: "#6366f1", worker: "#d97706" },
+};
+
+const RANGES: { id: UsageRange; label: string }[] = [
+  { id: "today", label: "Today" },
+  { id: "week", label: "This week" },
+  { id: "month", label: "This month" },
+  { id: "all", label: "All time" },
+];
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + "k";
+  return String(n);
+}
+
+function fmtUSD(n: number): string {
+  if (n === 0) return "$0";
+  if (n < 0.01) return "<$0.01";
+  return "$" + n.toFixed(2);
+}
+
+// Bucket strings come from SQL substr: hour "13", day "2026-11-13",
+// month "2026-11". Turn each into a short display label.
+function bucketLabel(bucket: string, unit: string): string {
+  if (unit === "hour") return `${bucket}:00`;
+  if (unit === "month") return bucket;
+  const parts = bucket.split("-");
+  return `${parts[1]}-${parts[2]}`;
+}
+
+export default function Dashboard() {
+  const { dark } = useTheme();
+  const [range, setRange] = useState<UsageRange>("week");
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [view, setView] = useState<"chart" | "table">("chart");
+  const [err, setErr] = useState("");
+  const [hover, setHover] = useState<number | null>(null);
+
+  const load = useMemo(
+    () => (r: UsageRange) => {
+      setErr("");
+      api
+        .dashboard(r)
+        .then(setData)
+        .catch((e) => setErr((e as Error).message));
+    },
+    []
+  );
+
+  useEffect(() => {
+    load(range);
+  }, [range, load]);
+
+  const colors = dark ? COLORS.dark : COLORS.light;
+  const buckets = data?.buckets ?? [];
+  const totals = data?.totals;
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4 p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">Usage dashboard</h2>
+        <div className="flex items-center gap-1 rounded-xl border border-zinc-200/80 dark:border-zinc-800 p-1">
+          {RANGES.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => setRange(r.id)}
+              className={`rounded-lg px-3 py-1 text-sm transition-colors ${
+                range === r.id
+                  ? "bg-indigo-600 text-white shadow-sm"
+                  : "text-zinc-500 hover:bg-zinc-200/60 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {err && <p className="text-sm text-red-500">{err}</p>}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatTile icon={<Brain size={16} />} label="Brain tokens" value={totals ? fmtTokens(totals.brain_tokens) : "—"} sub={totals ? fmtUSD(totals.brain_cost_usd) : ""} swatch={colors.brain} />
+        <StatTile icon={<Bot size={16} />} label="Worker tokens" value={totals ? fmtTokens(totals.worker_tokens) : "—"} sub={totals ? fmtUSD(totals.worker_cost_usd) : ""} swatch={colors.worker} />
+        <StatTile icon={<CircleDollarSign size={16} />} label="Total cost" value={totals ? fmtUSD(totals.brain_cost_usd + totals.worker_cost_usd) : "—"} sub={`${buckets.length} ${data?.bucket_unit ?? ""} buckets`} />
+      </div>
+
+      <Card className="p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-4 text-xs text-zinc-600 dark:text-zinc-400">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm" style={{ background: colors.brain }} /> Brain (chat)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm" style={{ background: colors.worker }} /> Workers (agents)
+            </span>
+          </div>
+          <Button variant="ghost" onClick={() => setView(view === "chart" ? "table" : "chart")}>
+            {view === "chart" ? <Table2 size={14} /> : <BarChart3 size={14} />}
+            {view === "chart" ? "Table" : "Chart"}
+          </Button>
+        </div>
+
+        {buckets.length === 0 ? (
+          <p className="flex h-40 items-center justify-center text-sm text-zinc-400">
+            No usage recorded in this window yet.
+          </p>
+        ) : view === "chart" ? (
+          <UsageChart buckets={buckets} unit={data?.bucket_unit ?? "day"} colors={colors} hover={hover} setHover={setHover} />
+        ) : (
+          <UsageTable buckets={buckets} unit={data?.bucket_unit ?? "day"} />
+        )}
+      </Card>
+
+      <div className="flex justify-end">
+        <Button variant="ghost" onClick={() => load(range)}>
+          <RefreshCw size={14} /> Refresh
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ icon, label, value, sub, swatch }: { icon: React.ReactNode; label: string; value: string; sub: string; swatch?: string }) {
+  return (
+    <Card className="p-4">
+      <p className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+        {swatch && <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: swatch }} />}
+        {icon} {label}
+      </p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{value}</p>
+      {sub && <p className="text-xs text-zinc-400">{sub}</p>}
+    </Card>
+  );
+}
+
+function UsageChart({
+  buckets, unit, colors, hover, setHover,
+}: {
+  buckets: DashboardBucket[];
+  unit: string;
+  colors: { brain: string; worker: string };
+  hover: number | null;
+  setHover: (i: number | null) => void;
+}) {
+  const W = 720;
+  const H = 240;
+  const PAD = { top: 16, right: 8, bottom: 24, left: 44 };
+  const plotW = W - PAD.left - PAD.right;
+  const plotH = H - PAD.top - PAD.bottom;
+  const GAP = 2; // surface gap between stacked segments
+  const barW = Math.min(36, Math.max(8, (plotW / buckets.length) * 0.6));
+
+  const maxTotal = Math.max(
+    ...buckets.map((b) => b.brain_tokens_in + b.brain_tokens_out + b.worker_tokens_in + b.worker_tokens_out),
+    1
+  );
+  const yTicks = 4;
+  const labelEvery = Math.ceil(buckets.length / 12);
+  const maxIdx = buckets.reduce((mi, b, i) =>
+    b.brain_tokens_in + b.brain_tokens_out + b.worker_tokens_in + b.worker_tokens_out >
+    buckets[mi].brain_tokens_in + buckets[mi].brain_tokens_out + buckets[mi].worker_tokens_in + buckets[mi].worker_tokens_out
+      ? i : mi, 0);
+
+  const y = (v: number) => PAD.top + plotH - (v / maxTotal) * plotH;
+  const x = (i: number) => PAD.left + (plotW / buckets.length) * (i + 0.5);
+
+  const hovered = hover != null ? buckets[hover] : null;
+
+  return (
+    <div className="relative">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Tokens per bucket, brain vs workers">
+        {/* recessive y grid */}
+        {Array.from({ length: yTicks + 1 }, (_, t) => {
+          const v = (maxTotal / yTicks) * t;
+          return (
+            <g key={t}>
+              <line x1={PAD.left} x2={W - PAD.right} y1={y(v)} y2={y(v)} className="stroke-zinc-200/70 dark:stroke-zinc-800" strokeWidth={1} />
+              <text x={PAD.left - 6} y={y(v) + 4} textAnchor="end" className="fill-zinc-400 text-[10px] tabular-nums">
+                {fmtTokens(v)}
+              </text>
+            </g>
+          );
+        })}
+
+        {buckets.map((b, i) => {
+          const brainH = ((b.brain_tokens_in + b.brain_tokens_out) / maxTotal) * plotH;
+          const workerH = ((b.worker_tokens_in + b.worker_tokens_out) / maxTotal) * plotH;
+          const bx = x(i) - barW / 2;
+          const brainY = PAD.top + plotH - brainH;
+          const workerY = brainY - GAP - workerH;
+          // 4px rounded top only on the topmost visible segment
+          const topSeg = workerH > 0 ? { yy: workerY, hh: workerH, fill: colors.worker } : { yy: brainY, hh: brainH, fill: colors.brain };
+          return (
+            <g key={b.bucket}>
+              {brainH > 0 && (
+                <rect
+                  x={bx} y={brainY} width={barW} height={brainH} fill={colors.brain}
+                  rx={topSeg.fill === colors.brain ? 4 : 0}
+                  style={topSeg.fill === colors.brain ? { clipPath: "inset(0 0 round 4px 4px 0 0)" } : undefined}
+                />
+              )}
+              {workerH > 0 && (
+                <rect
+                  x={bx} y={workerY} width={barW} height={workerH} fill={colors.worker}
+                  rx={4}
+                  style={{ clipPath: "inset(0 0 round 4px 4px 0 0)" }}
+                />
+              )}
+              {/* selective direct label: peak bucket only */}
+              {i === maxIdx && (
+                <text x={x(i)} y={Math.min(workerY, brainY) - 5} textAnchor="middle" className="fill-zinc-500 dark:fill-zinc-400 text-[10px] font-medium tabular-nums">
+                  {fmtTokens(b.brain_tokens_in + b.brain_tokens_out + b.worker_tokens_in + b.worker_tokens_out)}
+                </text>
+              )}
+              {/* x labels, thinned */}
+              {i % labelEvery === 0 && (
+                <text x={x(i)} y={H - 8} textAnchor="middle" className="fill-zinc-400 text-[10px] tabular-nums">
+                  {bucketLabel(b.bucket, unit)}
+                </text>
+              )}
+              {/* hover hit target: full column, wider than the mark */}
+              <rect
+                x={x(i) - (plotW / buckets.length) / 2} y={PAD.top}
+                width={plotW / buckets.length} height={plotH}
+                fill="transparent"
+                onMouseEnter={() => setHover(i)}
+                onMouseLeave={() => setHover(null)}
+              />
+            </g>
+          );
+        })}
+      </svg>
+
+      {hovered && hover != null && (
+        <div
+          className="pointer-events-none absolute z-10 w-48 rounded-xl border border-zinc-200/80 bg-white p-2.5 text-xs shadow-md dark:border-zinc-700 dark:bg-zinc-900"
+          style={{
+            left: `${((x(hover) - PAD.left) / W) * 100}%`,
+            top: 0,
+            transform: `translateX(${hover > buckets.length / 2 ? "-110%" : "10%"})`,
+          }}
+        >
+          <p className="mb-1 font-medium text-zinc-700 dark:text-zinc-300">{bucketLabel(hovered.bucket, unit)}</p>
+          <p className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+            <span className="h-2 w-2 rounded-sm" style={{ background: colors.brain }} />
+            brain {fmtTokens(hovered.brain_tokens_in + hovered.brain_tokens_out)}
+            <span className="ml-auto tabular-nums text-zinc-400">{fmtUSD(hovered.brain_cost_usd)}</span>
+          </p>
+          <p className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+            <span className="h-2 w-2 rounded-sm" style={{ background: colors.worker }} />
+            workers {fmtTokens(hovered.worker_tokens_in + hovered.worker_tokens_out)}
+            <span className="ml-auto tabular-nums text-zinc-400">{fmtUSD(hovered.worker_cost_usd)}</span>
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UsageTable({ buckets, unit }: { buckets: DashboardBucket[]; unit: string }) {
+  return (
+    <div className="max-h-80 overflow-y-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-zinc-200/80 dark:border-zinc-800 text-left text-xs text-zinc-500">
+            <th className="py-1.5 pr-3 font-medium">{unit}</th>
+            <th className="py-1.5 pr-3 text-right font-medium">Brain tokens</th>
+            <th className="py-1.5 pr-3 text-right font-medium">Worker tokens</th>
+            <th className="py-1.5 text-right font-medium">Cost</th>
+          </tr>
+        </thead>
+        <tbody className="tabular-nums">
+          {buckets.map((b) => (
+            <tr key={b.bucket} className="border-b border-zinc-100 dark:border-zinc-800/50">
+              <td className="py-1.5 pr-3 text-zinc-600 dark:text-zinc-400">{bucketLabel(b.bucket, unit)}</td>
+              <td className="py-1.5 pr-3 text-right">{fmtTokens(b.brain_tokens_in + b.brain_tokens_out)}</td>
+              <td className="py-1.5 pr-3 text-right">{fmtTokens(b.worker_tokens_in + b.worker_tokens_out)}</td>
+              <td className="py-1.5 text-right">{fmtUSD(b.brain_cost_usd + b.worker_cost_usd)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}

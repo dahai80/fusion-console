@@ -82,6 +82,8 @@ export const api = {
   models: (provider: string) =>
     req<{ models: string[] }>(`/api/settings/models?provider=${encodeURIComponent(provider)}`),
   costs: () => req<{ report: Record<string, unknown>[] }>("/api/costs"),
+  dashboard: (range: UsageRange) =>
+    req<DashboardData>(`/api/dashboard?range=${encodeURIComponent(range)}`),
   gatewayStatus: () =>
     req<{
       base_url: string;
@@ -108,6 +110,30 @@ export type WorkerSettings = {
   isolation: "worktree" | "standalone";
   permission_mode: string;
   max_budget_usd: number;
+};
+
+export type UsageRange = "today" | "week" | "month" | "all";
+
+export type DashboardBucket = {
+  bucket: string;
+  brain_tokens_in: number;
+  brain_tokens_out: number;
+  worker_tokens_in: number;
+  worker_tokens_out: number;
+  brain_cost_usd: number;
+  worker_cost_usd: number;
+};
+
+export type DashboardData = {
+  range: UsageRange;
+  bucket_unit: "hour" | "day" | "month";
+  buckets: DashboardBucket[];
+  totals: {
+    brain_tokens: number;
+    worker_tokens: number;
+    brain_cost_usd: number;
+    worker_cost_usd: number;
+  };
 };
 
 export type Orchestrator = {

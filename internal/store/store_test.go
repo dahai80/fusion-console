@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 )
@@ -61,5 +62,40 @@ func TestCostReport(t *testing.T) {
 	}
 	if rep[0]["calls"].(int) != 2 {
 		t.Errorf("calls = %v", rep[0]["calls"])
+	}
+}
+
+func TestUsageDashboard(t *testing.T) {
+	s := openTestStore(t)
+	id, _ := s.CreateConversation("admin", "c", "chat", "", "")
+	if err := s.LogCost(id, "admin", "chat:gw", 0.02, 1000, 500); err != nil {
+		t.Fatalf("LogCost brain: %v", err)
+	}
+	if err := s.LogCost(id, "admin", "agent:claude", 0.10, 4000, 2000); err != nil {
+		t.Fatalf("LogCost worker: %v", err)
+	}
+	for _, r := range []string{"today", "week", "month", "all"} {
+		d, err := s.UsageDashboard("admin", r)
+		if err != nil {
+			t.Fatalf("UsageDashboard(%s): %v", r, err)
+		}
+		tot := d["totals"].(map[string]any)
+		if tot["brain_tokens"].(int64) != 1500 || tot["worker_tokens"].(int64) != 6000 {
+			t.Errorf("%s totals = %v", r, tot)
+		}
+		rawB, _ := json.Marshal(d["buckets"])
+		var bk []map[string]any
+		if err := json.Unmarshal(rawB, &bk); err != nil || len(bk) == 0 {
+			t.Errorf("%s buckets empty: %s", r, rawB)
+		}
+	}
+	if _, err := s.UsageDashboard("admin", "bogus"); err == nil {
+		t.Error("bogus range should error")
+	}
+	// user isolation
+	other, _ := s.UsageDashboard("other", "all")
+	rawOther, _ := json.Marshal(other["buckets"])
+	if string(rawOther) != "[]" {
+		t.Errorf("user isolation broken: %s", rawOther)
 	}
 }
