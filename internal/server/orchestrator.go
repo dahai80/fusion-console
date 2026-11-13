@@ -136,11 +136,14 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		}
 		log.Printf("orchestrator: dispatch agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
 			args.Agent, isolationOf(wk), workdir, budget, user)
+		pEnv, forcedModel := s.providerEnv(args.Agent)
 		opts := agent.RunOpts{
 			Task: args.Task, Workdir: workdir,
+			Model:          forcedModel,
 			PermissionMode: settings.PermissionMode,
 			MaxBudgetUSD:   budget,
 			Command:        settings.Command,
+			Env:            pEnv,
 		}
 		// One agent subprocess at a time, same gate as manual agent runs.
 		s.agentRuns.Lock()
@@ -389,6 +392,64 @@ func (s *Server) workerConfig(name string) *config.WorkerConfig {
 		}
 	}
 	return nil
+}
+
+// providerEnv resolves a worker's forced provider (agent settings override,
+// else the wizard worker config) into subprocess env vars plus an optional
+// model override. Anthropic-compatible providers speak the ANTHROPIC_* env
+// family; OpenAI-compatible and gateway providers speak the OPENAI_* family.
+// Empty result = the CLI uses its own default login.
+func (s *Server) providerEnv(agentName string) (map[string]string, string) {
+	pid := ""
+	for _, a := range s.cfg.Agent {
+		if a.Name == agentName && a.ProviderID != "" {
+			pid = a.ProviderID
+		}
+	}
+	if pid == "" {
+		if wk := s.workerConfig(agentName); wk != nil {
+			pid = wk.ProviderID
+		}
+	}
+	if pid == "" {
+		return nil, ""
+	}
+	var prov *config.Provider
+	for i := range s.cfg.Provider {
+		if s.cfg.Provider[i].ID == pid {
+			prov = &s.cfg.Provider[i]
+		}
+	}
+	if prov == nil || !prov.Enabled {
+		log.Printf("orchestrator: worker %s: provider %s not found or disabled, using CLI default", agentName, pid)
+		return nil, ""
+	}
+	key, err := config.GetAPIKey(prov.APIKeyID)
+	if err != nil || key == "" {
+		log.Printf("orchestrator: worker %s: provider %s has no stored key, using CLI default", agentName, pid)
+		return nil, ""
+	}
+	env := map[string]string{"PROVIDER_ID": pid}
+	model := ""
+	switch prov.Type {
+	case "anthropic_compat":
+		env["ANTHROPIC_BASE_URL"] = prov.BaseURL
+		env["ANTHROPIC_AUTH_TOKEN"] = key
+		if prov.Model != "" {
+			env["ANTHROPIC_MODEL"] = prov.Model
+		}
+	case "openai_compat", "gateway":
+		env["OPENAI_BASE_URL"] = prov.BaseURL
+		env["OPENAI_API_KEY"] = key
+		if prov.Model != "" {
+			model = prov.Model
+		}
+	default:
+		log.Printf("orchestrator: worker %s: provider %s type %q not injectable, using CLI default", agentName, pid, prov.Type)
+		return nil, ""
+	}
+	log.Printf("orchestrator: worker %s forced to provider %s (%s)", agentName, pid, prov.Type)
+	return env, model
 }
 
 func isolationOf(wk *config.WorkerConfig) string {

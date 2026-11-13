@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -39,6 +40,12 @@ func launch(ctx context.Context, opts RunOpts, command string, args []string, fe
 	runCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	cmd := exec.CommandContext(runCtx, command, args...)
 	cmd.Dir = opts.Workdir
+	if len(opts.Env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range opts.Env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
 	setProcessGroup(cmd)
 
 	out := make(chan Event, 128)

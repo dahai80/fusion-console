@@ -42,7 +42,8 @@ type RunOpts struct {
 	Model          string
 	PermissionMode string
 	MaxBudgetUSD   float64
-	Command        string // optional executable override from settings
+	Command        string            // optional executable override from settings
+	Env            map[string]string // extra env vars for the subprocess (provider forcing)
 }
 
 // Adapter is one coding-agent CLI integration.

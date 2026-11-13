@@ -429,20 +429,22 @@ function BrainStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 
 function WorkersStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [orch, setOrch] = useState<Awaited<ReturnType<typeof api.orchestration>>["orchestrator"] | null>(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
     api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
+    api.providers().then((r) => setProviders((r.providers ?? []).filter((p) => p.enabled))).catch(() => {});
     api.orchestration().then((r) => setOrch(r.orchestrator)).catch(() => {});
   }, []);
 
   const worker = (name: string) => orch?.workers.find((w) => w.agent === name);
-  const setWorker = (name: string, patch: { enabled?: boolean; isolation?: WorkerSettings["isolation"]; max_budget_usd?: number }) => {
+  const setWorker = (name: string, patch: { enabled?: boolean; isolation?: WorkerSettings["isolation"]; max_budget_usd?: number; provider_id?: string }) => {
     const base = orch ?? { mode: "confirm", brain_agent: "claude", repos: [], workers: [], configured: false };
     const workers = [...(base.workers ?? [])];
     const i = workers.findIndex((w) => w.agent === name);
-    const cur = i >= 0 ? workers[i] : { agent: name, enabled: false, isolation: "worktree" as const, permission_mode: "acceptEdits", max_budget_usd: 5 };
+    const cur = i >= 0 ? workers[i] : { agent: name, enabled: false, isolation: "worktree" as const, permission_mode: "acceptEdits", max_budget_usd: 5, provider_id: "" };
     workers[i >= 0 ? i : workers.length] = { ...cur, ...patch };
     setOrch({ ...base, workers });
   };
@@ -490,6 +492,13 @@ function WorkersStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
                   <Input className="w-20" type="number" min={0.5} step={0.5} value={w?.max_budget_usd ?? 5}
                     onChange={(e) => setWorker(a.name, { max_budget_usd: Number(e.target.value) })} />
                 </label>
+                <Select className="w-48" value={w?.provider_id ?? ""}
+                  onChange={(e) => setWorker(a.name, { provider_id: e.target.value })}>
+                  <option value="">provider: CLI default</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>provider: {p.name || p.id}</option>
+                  ))}
+                </Select>
                 <span className="ml-auto text-xs text-zinc-400">
                   {a.detected ? `mode ${a.permission_mode}` : "not on PATH"}
                 </span>

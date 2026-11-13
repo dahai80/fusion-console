@@ -40,7 +40,8 @@ type AgentSettings struct {
 	PermissionMode string  `json:"permission_mode"`
 	Enabled        bool    `json:"enabled"`
 	MaxBudgetUSD   float64 `json:"max_budget_usd"`
-	WorkDir        string  `json:"work_dir"` // dedicated workspace; empty = default per-agent dir
+	WorkDir        string  `json:"work_dir"`   // dedicated workspace; empty = default per-agent dir
+	ProviderID     string  `json:"provider_id"` // force this provider for the CLI; empty = CLI default
 }
 
 // ResolveWorkDir returns the dedicated workspace for one agent: the explicit
@@ -76,6 +77,7 @@ type WorkerConfig struct {
 	Isolation      string  `json:"isolation"` // "worktree" | "standalone"; empty = worktree
 	PermissionMode string  `json:"permission_mode"`
 	MaxBudgetUSD   float64 `json:"max_budget_usd"`
+	ProviderID     string  `json:"provider_id"` // force this provider for the worker CLI; empty = CLI default
 }
 
 // OrchestratorConfig captures the onboarding wizard's brain-and-workers

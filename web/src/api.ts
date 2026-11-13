@@ -127,6 +127,7 @@ export type WorkerSettings = {
   isolation: "worktree" | "standalone";
   permission_mode: string;
   max_budget_usd: number;
+  provider_id: string;
 };
 
 export type UsageRange = "today" | "week" | "month" | "all";

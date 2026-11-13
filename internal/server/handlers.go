@@ -325,11 +325,14 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	user := s.auth.User(r)
 	log.Printf("server: agent=%s conv=%d workdir=%s user=%s", req.Agent, req.ConversationID, workdir, user)
 
+	pEnv, forcedModel := s.providerEnv(req.Agent)
 	opts := agent.RunOpts{
 		Task: req.Task, Workdir: workdir,
+		Model:          forcedModel,
 		PermissionMode: settings.PermissionMode,
 		MaxBudgetUSD:   settings.MaxBudgetUSD,
 		Command:        settings.Command,
+		Env:            pEnv,
 	}
 	evCh, err := adapter.Run(r.Context(), opts)
 	if err != nil {
