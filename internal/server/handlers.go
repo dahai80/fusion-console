@@ -151,7 +151,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	apiKey, err := config.GetAPIKey(providerKeyID(prov))
+	apiKey, err := s.resolveProviderKey(r.Context(), prov)
 	if err != nil {
 		log.Printf("server: chat api key unavailable (provider %s, key id %s): %v", prov.ID, prov.APIKeyID, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -422,6 +422,26 @@ func providerKeyID(prov *config.Provider) string {
 	return prov.APIKeyID
 }
 
+// resolveProviderKey returns the provider's API key, auto-provisioning a
+// gateway key when the stored one is missing (fresh machine, copied config,
+// wiped keychain). Non-gateway providers cannot self-heal — the key must be
+// re-saved by the user, so the error says exactly that.
+func (s *Server) resolveProviderKey(ctx context.Context, prov *config.Provider) (string, error) {
+	keyID := providerKeyID(prov)
+	raw, err := config.GetAPIKey(keyID)
+	if err == nil {
+		return raw, nil
+	}
+	if prov.Type != config.ProviderGateway {
+		return "", fmt.Errorf("API key %q is not in the OS keychain of this machine — re-save the provider's API key on the Gateway page (%v)", keyID, err)
+	}
+	log.Printf("server: key %s missing, attempting gateway key auto-provision", keyID)
+	if _, _, perr := s.provisionGatewayKey(ctx); perr != nil {
+		return "", fmt.Errorf("gateway API key missing and auto-provision failed: %v (open the Gateway page and click Create API key; keychain error: %v)", perr, err)
+	}
+	return config.GetAPIKey(keyID)
+}
+
 func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	// Never leak key material: APIKeyID is a keychain reference only.
 	// Self-heal: gateway providers whose api_key_id was corrupted (raw key
@@ -533,7 +553,7 @@ func (s *Server) handleTestCall(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	apiKey, err := config.GetAPIKey(providerKeyID(prov))
+	apiKey, err := s.resolveProviderKey(r.Context(), prov)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "api key unavailable: " + err.Error()})
 		return

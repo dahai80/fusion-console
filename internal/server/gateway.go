@@ -200,14 +200,14 @@ func (s *Server) handleGatewaySSO(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleGatewayKeyProvision creates a fusion-gateway API key for the console
-// via the gateway admin API (login with the stored admin credentials, then
-// POST /admin/api/keys) and stores the raw key in the OS keychain under
-// "gateway-key". This removes the manual "open admin GUI, create a key, copy
-// it back" loop from onboarding. When no admin credentials are stored, the
-// packaged gateway's factory account (admin / fusion-admin-2026) is tried —
-// one click, nothing to type for a stock install.
-func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Request) {
+// provisionGatewayKey creates a fusion-gateway API key for the console via
+// the gateway admin API (login with the stored admin credentials, then POST
+// /admin/api/keys) and stores the raw key in the OS keychain under
+// "gateway-key". When no admin credentials are stored, the packaged gateway's
+// factory account (admin / fusion-admin-2026) is tried — nothing to type for
+// a stock install. Used by the wizard's one-click button and by the chat/test
+// paths as auto-healing when the stored key is missing.
+func (s *Server) provisionGatewayKey(ctx context.Context) (rawKey, keyPrefix string, err error) {
 	base := s.gatewayBase()
 	user, _ := config.GetAPIKey("gateway-admin-user")
 	pass, _ := config.GetAPIKey("gateway-admin-pass")
@@ -216,21 +216,18 @@ func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Reques
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+"/admin/api/login", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/admin/api/login", bytes.NewReader(body))
 	if err != nil {
-		serverError(w, err, http.StatusInternalServerError)
-		return
+		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway unreachable: %v", err)})
-		return
+		return "", "", fmt.Errorf("gateway unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": fmt.Sprintf("gateway admin login failed (HTTP %d)", resp.StatusCode)})
-		return
+		return "", "", fmt.Errorf("gateway admin login failed (HTTP %d)", resp.StatusCode)
 	}
 	var token string
 	for _, c := range resp.Cookies() {
@@ -239,39 +236,33 @@ func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if token == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "gateway login returned no session cookie"})
-		return
+		return "", "", fmt.Errorf("gateway login returned no session cookie")
 	}
 
 	keyBody, _ := json.Marshal(map[string]any{"name": fmt.Sprintf("fusion-console-%d", time.Now().Unix())})
-	req2, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+"/admin/api/keys", bytes.NewReader(keyBody))
+	req2, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/admin/api/keys", bytes.NewReader(keyBody))
 	if err != nil {
-		serverError(w, err, http.StatusInternalServerError)
-		return
+		return "", "", err
 	}
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("Cookie", "admin_token="+token)
 	resp2, err := client.Do(req2)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("key creation request failed: %v", err)})
-		return
+		return "", "", fmt.Errorf("key creation request failed: %w", err)
 	}
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusCreated {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway key creation returned HTTP %d", resp2.StatusCode)})
-		return
+		return "", "", fmt.Errorf("gateway key creation returned HTTP %d", resp2.StatusCode)
 	}
 	var created struct {
 		RawKey    string `json:"raw_key"`
 		KeyPrefix string `json:"key_prefix"`
 	}
 	if err := json.NewDecoder(resp2.Body).Decode(&created); err != nil || created.RawKey == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "gateway key creation returned no raw key"})
-		return
+		return "", "", fmt.Errorf("gateway key creation returned no raw key")
 	}
 	if err := config.StoreAPIKey("gateway-key", created.RawKey); err != nil {
-		serverError(w, err, http.StatusInternalServerError)
-		return
+		return "", "", err
 	}
 	// Auto-create the console provider entry for the gateway so the brain
 	// (chat) can use it immediately — one less manual step in the wizard.
@@ -313,9 +304,19 @@ func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	log.Printf("server: gateway api key provisioned (prefix %s)", created.KeyPrefix)
-	// raw_key is returned once here so the wizard can display it for
-	// copy/save; it is never readable again afterwards.
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key_id": "gateway-key", "key_prefix": created.KeyPrefix, "raw_key": created.RawKey})
+	return created.RawKey, created.KeyPrefix, nil
+}
+
+// handleGatewayKeyProvision exposes provisionGatewayKey to the wizard/user
+// menu. raw_key is returned once so it can be displayed for copy/save; it is
+// never readable again afterwards.
+func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Request) {
+	rawKey, keyPrefix, err := s.provisionGatewayKey(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key_id": "gateway-key", "key_prefix": keyPrefix, "raw_key": rawKey})
 }
 
 // gatewayAdminLogin logs into the gateway admin API with the stored admin
