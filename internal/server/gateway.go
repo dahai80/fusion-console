@@ -203,20 +203,15 @@ func (s *Server) handleGatewaySSO(w http.ResponseWriter, r *http.Request) {
 // via the gateway admin API (login with the stored admin credentials, then
 // POST /admin/api/keys) and stores the raw key in the OS keychain under
 // "gateway-key". This removes the manual "open admin GUI, create a key, copy
-// it back" loop from onboarding.
+// it back" loop from onboarding. When no admin credentials are stored, the
+// packaged gateway's factory account (admin / fusion-admin-2026) is tried —
+// one click, nothing to type for a stock install.
 func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Request) {
 	base := s.gatewayBase()
-	user, err := config.GetAPIKey("gateway-admin-user")
-	if err != nil || user == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "gateway admin username not set — save it on the Gateway page first"})
-		return
-	}
-	pass, err := config.GetAPIKey("gateway-admin-pass")
-	if err != nil || pass == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "gateway admin password not set — save it on the Gateway page first"})
-		return
+	user, _ := config.GetAPIKey("gateway-admin-user")
+	pass, _ := config.GetAPIKey("gateway-admin-pass")
+	if user == "" || pass == "" {
+		user, pass = "admin", "fusion-admin-2026"
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})

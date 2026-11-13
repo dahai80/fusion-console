@@ -16,12 +16,12 @@ import {
 import { api, type AgentInfo, type Provider, type WorkerSettings } from "./api";
 import { Badge, Button, Card, Input, Select } from "./components/ui";
 
-type StepId = "welcome" | "llm" | "gateway" | "brain" | "workers" | "verify" | "done";
+type StepId = "welcome" | "key" | "backends" | "brain" | "workers" | "verify" | "done";
 
 const STEPS: { id: StepId; label: string; icon: typeof Brain }[] = [
   { id: "welcome", label: "Welcome", icon: Sparkles },
-  { id: "gateway", label: "Gateway key", icon: KeyRound },
-  { id: "llm", label: "Providers", icon: Cloud },
+  { id: "key", label: "API key", icon: KeyRound },
+  { id: "backends", label: "Gateway models", icon: Cloud },
   { id: "brain", label: "Brain", icon: Brain },
   { id: "workers", label: "Workers", icon: Bot },
   { id: "verify", label: "Verify", icon: PlayCircle },
@@ -60,9 +60,9 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
         </ol>
       </header>
       <div className="flex-1 overflow-y-auto">
-        {step === "welcome" && <WelcomeStep onNext={() => setStep("gateway")} />}
-        {step === "gateway" && <GatewayStep onNext={() => setStep("llm")} onSkip={() => setStep("llm")} />}
-        {step === "llm" && <LlmStep onNext={() => setStep("brain")} onSkip={() => setStep("brain")} />}
+        {step === "welcome" && <WelcomeStep onNext={() => setStep("key")} />}
+        {step === "key" && <KeyStep onNext={() => setStep("backends")} onSkip={() => setStep("backends")} />}
+        {step === "backends" && <BackendsStep onNext={() => setStep("brain")} onSkip={() => setStep("brain")} />}
         {step === "brain" && <BrainStep onNext={() => setStep("workers")} onSkip={() => setStep("workers")} />}
         {step === "workers" && <WorkersStep onNext={() => setStep("verify")} onSkip={() => setStep("verify")} />}
         {step === "verify" && <VerifyStep onNext={() => setStep("done")} onSkip={() => setStep("done")} />}
@@ -98,66 +98,15 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   );
 }
 
-const PRESETS = {
-  gateway: { id: "gateway", name: "fusion-gateway (local)", type: "gateway", base_url: "http://127.0.0.1:11432/v1", model: "glm-5" },
-  openai: { id: "cloud", name: "Cloud (OpenAI-compatible)", type: "openai_compat", base_url: "https://api.openai.com/v1", model: "" },
-  anthropic: { id: "cloud", name: "Cloud (Anthropic-compatible)", type: "anthropic_compat", base_url: "https://api.anthropic.com/v1", model: "" },
-} as const;
-
-function LlmStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
-  const [type, setType] = useState<"gateway" | "openai" | "anthropic">("gateway");
-  const [draft, setDraft] = useState<Provider>({
-    id: PRESETS.gateway.id, name: PRESETS.gateway.name, type: "gateway",
-    base_url: PRESETS.gateway.base_url, model: PRESETS.gateway.model, api_key_id: "", enabled: true,
-  });
-  const [secret, setSecret] = useState("");
-  const [models, setModels] = useState<string[]>([]);
+function BackendsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
+  const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
 
-  const pick = (t: "gateway" | "openai" | "anthropic") => {
-    setType(t);
-    setModels([]);
-    setErr("");
-    const p = PRESETS[t];
-    setDraft({ id: p.id, name: p.name, type: p.type, base_url: p.base_url, model: p.model, api_key_id: "", enabled: true });
-  };
-
-  const saveAll = async (): Promise<boolean> => {
-    setMsg(""); setErr(""); setBusy(true);
-    try {
-      const p = { ...draft, api_key_id: draft.api_key_id || draft.id + "-key" };
-      if (secret) await api.storeApiKey(p.api_key_id, secret);
-      await api.saveProvider(p);
-      setDraft(p);
-      setMsg(`provider ${p.id} saved${secret ? " + api key in OS keychain" : ""}`);
-      return true;
-    } catch (ex) {
-      setErr((ex as Error).message);
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const fetchModels = async () => {
-    setMsg(""); setErr(""); setModels([]); setBusy(true);
-    try {
-      if (!(await saveAll())) return;
-      const r = await api.models(draft.id);
-      setModels(r.models ?? []);
-      setMsg(`${(r.models ?? []).length} models fetched — pick one, then continue`);
-    } catch (ex) {
-      setErr((ex as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Smoke call: proves endpoint + key + model work before leaving the step.
-  const openGatewayAdmin = async () => {
-    setBusy(true); setErr("");
+  // Cloud backends live in the gateway (one place, one token ledger), so this
+  // step hands the user straight into the gateway admin with an SSO session.
+  const openAdmin = async () => {
+    setBusy(true); setErr(""); setMsg("");
     try {
       await api.gatewaySSO();
       const st = await api.gatewayStatus();
@@ -170,108 +119,37 @@ function LlmStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
     }
   };
 
-  const testCall = async () => {
-    setMsg(""); setErr(""); setBusy(true);
-    try {
-      if (!(await saveAll())) return;
-      const r = await api.testCall(draft.id);
-      if (r.ok) setMsg(`connection verified (${r.latency_ms} ms) — model replied: "${(r.sample ?? "").trim().slice(0, 40)}"`);
-      else setErr(`test call failed: ${r.error}`);
-    } catch (ex) {
-      setErr((ex as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <Card className="space-y-4 p-6">
-      <div className="grid gap-3 sm:grid-cols-3">
-        {(
-          [
-            ["gateway", "fusion-gateway", "local, bundled", Network],
-            ["openai", "OpenAI-compatible", "cloud, first choice", Cloud],
-            ["anthropic", "Anthropic-compatible", "cloud, first choice", Cloud],
-          ] as const
-        ).map(([t, title, sub, Icon]) => (
-          <button
-            key={t}
-            onClick={() => pick(t)}
-            className={`rounded-xl border p-3 text-left transition-colors ${
-              type === t
-                ? "border-indigo-500 bg-indigo-500/5"
-                : "border-zinc-200/80 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
-            }`}
-          >
-            <Icon size={16} className="text-indigo-500" />
-            <p className="mt-1 text-sm font-medium">{title}</p>
-            <p className="text-xs text-zinc-500">{sub}</p>
-          </button>
-        ))}
+      <div className="flex items-center gap-2">
+        <Cloud size={18} className="text-indigo-500" />
+        <h3 className="font-semibold">Gateway models</h3>
       </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <label className="text-xs text-zinc-500">base URL
-          <Input value={draft.base_url} onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} />
-        </label>
-        <label className="text-xs text-zinc-500">model
-          <Input value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })} placeholder="e.g. glm-5 / gpt-… / claude-…" />
-        </label>
-      </div>
-      {type === "gateway" ? (
-        <div className="space-y-2 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
-          <p className="text-sm font-medium">Gateway API key</p>
-          <p className="text-xs text-zinc-500">
-            Provisioned automatically in the previous step and stored in the OS keychain as{" "}
-            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">gateway-key</code>. Missing it?
-            Go back to the Gateway step (or open the Gateway admin GUI and paste a key below).
-          </p>
-          <label className="flex items-center gap-2 text-xs text-zinc-500">
-            paste key instead (optional)
-            <Input className="flex-1" type="password" placeholder="sk-…" value={secret}
-              onChange={(e) => setSecret(e.target.value)} />
-          </label>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={openGatewayAdmin} disabled={busy}>Open gateway admin (cloud backends)</Button>
-            <span className="text-xs text-zinc-400">Add one or more cloud LLM backends there; the gateway routes local requests to them.</span>
-          </div>
-        </div>
-      ) : (
-        <>
-          <label className="flex items-center gap-2 text-sm">
-            <Cpu size={14} className="text-zinc-400" />
-            <Input className="flex-1" placeholder="api key id (keychain ref)" value={draft.api_key_id}
-              onChange={(e) => setDraft({ ...draft, api_key_id: e.target.value })} />
-            <Input className="flex-1" type="password" placeholder="secret → OS keychain" value={secret}
-              onChange={(e) => setSecret(e.target.value)} />
-          </label>
-          <p className="text-xs text-zinc-400">
-            Headless host without a keychain? Skip the secret here and export{" "}
-            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">FUSION_CONSOLE_APIKEY_{draft.api_key_id ? draft.api_key_id.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "&lt;KEY_ID&gt;"}</code>{" "}
-            before starting the console.
-          </p>
-        </>
-      )}
-
-      {models.length > 0 && (
-        <Select value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })}>
-          {models.map((m) => <option key={m} value={m}>{m}</option>)}
-        </Select>
-      )}
-
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" onClick={fetchModels} disabled={busy}>Save & fetch models</Button>
-        <Button variant="outline" onClick={testCall} disabled={busy}>Test call</Button>
-        <Button onClick={async () => { if (await saveAll()) onNext(); }} disabled={busy}>Save & continue <ArrowRight size={14} /></Button>
-        <Button variant="ghost" onClick={onSkip}>Skip for now</Button>
+      <p className="text-sm text-zinc-600 dark:text-zinc-300">
+        The brain and every worker call the local <strong>fusion-gateway</strong> with the API key
+        from the previous step; the gateway routes each request to the model you configured —
+        local (fusion-mlx) or cloud. One path, one place, so all token usage lands in one ledger.
+      </p>
+      <div className="space-y-2 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
+        <p className="text-sm font-medium">Add cloud backends to the gateway</p>
+        <p className="text-xs text-zinc-500">
+          Opens the gateway admin GUI with a single sign-on session. Add one or more cloud
+          backends (DeepSeek, GLM, OpenAI-compatible, ...) — they become callable models
+          through the same gateway key. You can also do this later.
+        </p>
+        <Button onClick={openAdmin} disabled={busy}>{busy ? "Opening..." : "Open gateway admin"}</Button>
       </div>
       {msg && <p className="text-sm text-indigo-500">{msg}</p>}
       {err && <p className="text-sm text-red-500">{err}</p>}
+      <div className="flex gap-2">
+        <Button onClick={onNext}>Continue <ArrowRight size={14} /></Button>
+        <Button variant="ghost" onClick={onSkip}>Local models only — skip</Button>
+      </div>
     </Card>
   );
 }
 
-function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
+function KeyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
   const [status, setStatus] = useState<Awaited<ReturnType<typeof api.gatewayStatus>> | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -315,7 +193,7 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
     setMsg(""); setErr(""); setBusy(true);
     try {
       const r = await api.provisionGatewayKey();
-      setMsg(`gateway API key ready (${r.key_prefix}…) — the LLM step will use it automatically`);
+      setMsg(`gateway API key ready (${r.key_prefix}...) — stored in the OS keychain, the gateway provider is active`);
     } catch (ex) {
       setErr((ex as Error).message);
     } finally {
@@ -355,12 +233,18 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
 
       {status?.reachable && (
         <div className="space-y-3 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
-          <p className="text-sm font-medium">Gateway admin & API key</p>
+          <p className="text-sm font-medium">Create the console's API key</p>
           <p className="text-xs text-zinc-500">
-            Save the gateway admin account once, then provision the API key the console will use for
-            chat — no copy-paste from the admin GUI needed.
+            One click — the console logs into the gateway with its factory admin account
+            (admin / fusion-admin-2026), issues an API key, and stores it in the OS keychain
+            (<code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">gateway-key</code>).
+            Chat, brain and workers all use this key against the gateway.
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={provisionKey} disabled={busy}>{busy ? "Creating..." : "Create API key"}</Button>
+            <span className="text-xs text-zinc-400">changed the gateway admin password? save it below first</span>
+          </div>
+          <div className="flex flex-wrap gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-800">
             <Input className="w-44" placeholder="admin username" value={adminUser}
               onChange={(e) => setAdminUser(e.target.value)} />
             <Input className="w-44" type="password" placeholder="admin password" value={adminPass}
@@ -368,7 +252,6 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
             <Button variant="outline" onClick={saveAdminCreds} disabled={!adminUser || !adminPass}>
               Save credentials
             </Button>
-            <Button onClick={provisionKey} disabled={busy}>Provision API key</Button>
           </div>
         </div>
       )}
@@ -380,7 +263,8 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
         <Button variant="ghost" onClick={onSkip}>Skip</Button>
       </div>
       <p className="text-xs text-zinc-400">
-        Local gateway is optional — cloud providers work without it. It is required only for local models.
+        Recommended path: everything (brain + workers) goes through the gateway with this key,
+        so token usage is tracked in one place. Direct cloud providers can still be added in Settings as an escape hatch.
       </p>
     </Card>
   );
