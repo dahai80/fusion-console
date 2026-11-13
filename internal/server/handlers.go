@@ -153,7 +153,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	apiKey, err := config.GetAPIKey(prov.APIKeyID)
 	if err != nil {
-		serverError(w, err, http.StatusBadRequest)
+		log.Printf("server: chat api key unavailable (provider %s, key id %s): %v", prov.ID, prov.APIKeyID, err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "API key unavailable for provider " + prov.Name + " — open the Gateway page and click Create API key, then retry. (" + err.Error() + ")",
+		})
 		return
 	}
 

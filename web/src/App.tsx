@@ -282,8 +282,9 @@ function ChatPage() {
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [active, setActive] = useState<Conversation | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [providerId, setProviderId] = useState("");
+  const [gwProvider, setGwProvider] = useState<Provider | null>(null);
+  const [gwModels, setGwModels] = useState<string[]>([]);
+  const [brainModel, setBrainModel] = useState("");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [agentName, setAgentName] = useState("");
   const [workdir, setWorkdir] = useState("");
@@ -312,14 +313,23 @@ function ChatPage() {
   useEffect(() => {
     refreshConvs().catch(() => {});
     api.providers().then((r) => {
-      setProviders(r.providers ?? []);
-      const first = (r.providers ?? []).find((p) => p.enabled);
-      if (first) setProviderId(first.id);
+      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled) ?? null;
+      setGwProvider(gw);
+      if (!gw) return;
+      // Brain selector = model names from the gateway (/v1/models), matching
+      // the Gateway page brain card. Gateway unreachable: fall back to the
+      // provider's stored model so chat still works.
+      api.gatewayModels().then((m) => {
+        const ids = m.models ?? [];
+        setGwModels(ids);
+        setBrainModel((cur) => cur || (gw.model && ids.includes(gw.model) ? gw.model : ids[0] || gw.model || ""));
+      }).catch(() => {
+        setGwModels(gw.model ? [gw.model] : []);
+        setBrainModel((cur) => cur || gw.model || "");
+      });
     }).catch(() => {});
     api.agents().then((r) => {
       setAgents(r.agents ?? []);
-      const det = (r.agents ?? []).find((a) => a.detected);
-      if (det) setAgentName(det.name);
     }).catch(() => {});
   }, [refreshConvs]);
 
@@ -364,9 +374,25 @@ function ChatPage() {
     await api.messages(r.id).catch(() => {});
   };
 
+  const changeBrain = async (model: string) => {
+    setBrainModel(model);
+    if (!gwProvider || !model) return;
+    try {
+      const updated = { ...gwProvider, model };
+      await api.saveProvider(updated);
+      setGwProvider(updated);
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
+    if (!gwProvider) {
+      setErr("no gateway provider — open the Gateway page and click Create API key first");
+      return;
+    }
     setBusy(true);
     setErr("");
     setInput("");
@@ -380,7 +406,7 @@ function ChatPage() {
       }
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: providerId, content: text, orchestrate }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: text, orchestrate }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -494,16 +520,25 @@ function ChatPage() {
 
       <div className="flex flex-1 flex-col min-w-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
-          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="The brain LLM: this provider answers the chat and dispatches workers">
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="The brain model: fusion-gateway routes chat to this model (fed by /v1/models)">
             <Brain size={14} className="text-indigo-500" /> brain
           </label>
-          <Select value={providerId} onChange={(e) => setProviderId(e.target.value)} className="w-48">
-            {providers.filter((p) => p.enabled).map((p) => (
-              <option key={p.id} value={p.id}>{p.name || p.id}</option>
+          <Select value={brainModel} onChange={(e) => changeBrain(e.target.value)} className="w-48"
+            title="Model served by fusion-gateway — the list comes from the gateway's /v1/models">
+            {gwModels.length === 0 && brainModel && <option value={brainModel}>{brainModel}</option>}
+            {gwModels.map((m) => (
+              <option key={m} value={m}>{m}</option>
             ))}
           </Select>
-          <Select value={agentName} onChange={(e) => setAgentName(e.target.value)} className="w-44">
-            <option value="">agent…</option>
+          {!gwProvider && (
+            <span className="text-xs text-amber-600 dark:text-amber-400">no gateway provider — create an API key on the Gateway page</span>
+          )}
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="Optional: pick a coding-agent CLI, set a workdir, then use the bot button next to Send to hand the message to it as a task. Plain chat ignores this.">
+            agent
+          </label>
+          <Select value={agentName} onChange={(e) => setAgentName(e.target.value)} className="w-44"
+            title="Optional: coding-agent CLI used when handing off a task (bot button). Leave empty for plain chat.">
+            <option value="">none (plain chat)</option>
             {detectedAgents.map((a) => (
               <option key={a.name} value={a.name}>{a.name}</option>
             ))}
@@ -530,7 +565,7 @@ function ChatPage() {
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {entries.length === 0 && (
             <div className="flex h-full items-center justify-center text-sm text-zinc-400">
-              Pick a provider, send a message — or select an agent + workdir and hand it a task.
+              Send a message to chat — or pick an agent + workdir above and hand it a task.
             </div>
           )}
           {entries.map((m, i) => (
