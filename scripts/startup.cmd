@@ -31,10 +31,10 @@ if !errorlevel! equ 0 (
 REM 2. Console: start if :11480 is free; --open launches the default browser.
 netstat -ano | findstr /r ":11480 .*LISTENING" >nul 2>&1
 if !errorlevel! equ 0 (
-    echo console: already running on :11480 — open http://127.0.0.1:11480
+    echo console: already running on :11480 - open http://127.0.0.1:11480
 ) else if exist "%CONSOLE_BIN%" (
     start "" /b "%CONSOLE_BIN%" --open > "%USERPROFILE%\.fusion-console\log\console.log" 2>&1
-    echo console: started — browser opening at http://127.0.0.1:11480 (auto-login^)
+    echo console: started - browser opening at http://127.0.0.1:11480 (auto-login^)
 ) else (
     echo console: fusion-console.exe not found
 )

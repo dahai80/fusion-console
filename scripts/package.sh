@@ -86,6 +86,9 @@ stage_dir() { # stage_dir <name> <console-bin> <gateway-bin|"-">
     cp sidecar/harnessd.py "$d/sidecar/"
     cp scripts/startup.sh "$d/"
     chmod +x "$d/startup.sh"
+    # Bundled gateway config so the packaged gateway can start out of the box
+    # (the binary defaults to -config config.yaml next to the console).
+    cp scripts/gateway-config.yaml "$d/config.yaml"
     cp README.md LICENSE "$d/"
 }
 
@@ -109,6 +112,10 @@ for t in "${TARGETS[@]}"; do
         mkdir -p "$d/sidecar"
         cp sidecar/harnessd.py "$d/sidecar/"
         cp scripts/startup.cmd "$d/" 2>/dev/null || true
+        # cmd.exe requires CRLF batch files; renormalize regardless of how
+        # the repo was checked out.
+        perl -pi -e 's/\r?\n/\r\n/' "$d/startup.cmd" 2>/dev/null || true
+        cp scripts/gateway-config.yaml "$d/config.yaml"
         cp README.md LICENSE "$d/"
         (cd "$DIST" && zip -qr "fusion-console-$VERSION-$t.zip" "$(basename "$d")")
         rm -rf "$d"
