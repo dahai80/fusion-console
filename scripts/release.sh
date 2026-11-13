@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:?usage: release.sh vX.Y.Z [--draft|--verify-only]}"
-MODE="${2:-publish}"
+MODE="${2:-}"
 case "$MODE" in
     --draft | --verify-only | "") ;;
     *) echo "error: unknown flag $MODE (use --draft or --verify-only)" >&2; exit 2 ;;
