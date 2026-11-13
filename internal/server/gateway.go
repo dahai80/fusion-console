@@ -277,6 +277,29 @@ func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Reques
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
+	// Auto-create the console provider entry for the gateway so the brain
+	// (chat) can use it immediately — one less manual step in the wizard.
+	hasGateway := false
+	for i := range s.cfg.Provider {
+		if s.cfg.Provider[i].Type == "gateway" && s.cfg.Provider[i].Enabled {
+			hasGateway = true
+		}
+	}
+	if !hasGateway {
+		s.cfg.Provider = append(s.cfg.Provider, config.Provider{
+			ID:       fmt.Sprintf("gateway-%d", time.Now().Unix()),
+			Name:     "fusion-gateway",
+			Type:     "gateway",
+			BaseURL:  base + "/v1",
+			APIKeyID: "gateway-key",
+			Enabled:  true,
+		})
+		if err := s.cfg.Save(s.cfgDir); err != nil {
+			log.Printf("server: gateway provider auto-create save failed: %v", err)
+		} else {
+			log.Printf("server: gateway provider auto-created (base %s)", base+"/v1")
+		}
+	}
 	log.Printf("server: gateway api key provisioned (prefix %s)", created.KeyPrefix)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key_id": "gateway-key", "key_prefix": created.KeyPrefix})
 }

@@ -8,6 +8,7 @@ import {
   Cpu,
   KeyRound,
   Network,
+  PlayCircle,
   Sparkles,
   Terminal,
   Workflow,
@@ -15,14 +16,15 @@ import {
 import { api, type AgentInfo, type Provider, type WorkerSettings } from "./api";
 import { Badge, Button, Card, Input, Select } from "./components/ui";
 
-type StepId = "welcome" | "llm" | "gateway" | "brain" | "workers" | "done";
+type StepId = "welcome" | "llm" | "gateway" | "brain" | "workers" | "verify" | "done";
 
 const STEPS: { id: StepId; label: string; icon: typeof Brain }[] = [
   { id: "welcome", label: "Welcome", icon: Sparkles },
-  { id: "gateway", label: "Gateway", icon: Network },
-  { id: "llm", label: "LLM", icon: Cloud },
+  { id: "gateway", label: "Gateway key", icon: KeyRound },
+  { id: "llm", label: "Providers", icon: Cloud },
   { id: "brain", label: "Brain", icon: Brain },
   { id: "workers", label: "Workers", icon: Bot },
+  { id: "verify", label: "Verify", icon: PlayCircle },
   { id: "done", label: "Done", icon: Check },
 ];
 
@@ -62,7 +64,8 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
         {step === "gateway" && <GatewayStep onNext={() => setStep("llm")} onSkip={() => setStep("llm")} />}
         {step === "llm" && <LlmStep onNext={() => setStep("brain")} onSkip={() => setStep("brain")} />}
         {step === "brain" && <BrainStep onNext={() => setStep("workers")} onSkip={() => setStep("workers")} />}
-        {step === "workers" && <WorkersStep onNext={() => setStep("done")} onSkip={() => setStep("done")} />}
+        {step === "workers" && <WorkersStep onNext={() => setStep("verify")} onSkip={() => setStep("verify")} />}
+        {step === "verify" && <VerifyStep onNext={() => setStep("done")} onSkip={() => setStep("done")} />}
         {step === "done" && <DoneStep onDone={onDone} />}
       </div>
     </div>
@@ -153,6 +156,20 @@ function LlmStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
   };
 
   // Smoke call: proves endpoint + key + model work before leaving the step.
+  const openGatewayAdmin = async () => {
+    setBusy(true); setErr("");
+    try {
+      await api.gatewaySSO();
+      const st = await api.gatewayStatus();
+      window.open(st.admin_url, "_blank");
+      setMsg("gateway admin opened — add cloud backends under Backends");
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const testCall = async () => {
     setMsg(""); setErr(""); setBusy(true);
     try {
@@ -214,6 +231,10 @@ function LlmStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
             <Input className="flex-1" type="password" placeholder="sk-…" value={secret}
               onChange={(e) => setSecret(e.target.value)} />
           </label>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={openGatewayAdmin} disabled={busy}>Open gateway admin (cloud backends)</Button>
+            <span className="text-xs text-zinc-400">Add one or more cloud LLM backends there; the gateway routes local requests to them.</span>
+          </div>
         </div>
       ) : (
         <>
@@ -440,11 +461,11 @@ function WorkersStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
   }, []);
 
   const worker = (name: string) => orch?.workers.find((w) => w.agent === name);
-  const setWorker = (name: string, patch: { enabled?: boolean; isolation?: WorkerSettings["isolation"]; max_budget_usd?: number; provider_id?: string }) => {
+  const setWorker = (name: string, patch: { enabled?: boolean; isolation?: WorkerSettings["isolation"]; max_budget_usd?: number; provider_id?: string; work_dir?: string }) => {
     const base = orch ?? { mode: "confirm", brain_agent: "claude", repos: [], workers: [], configured: false };
     const workers = [...(base.workers ?? [])];
     const i = workers.findIndex((w) => w.agent === name);
-    const cur = i >= 0 ? workers[i] : { agent: name, enabled: false, isolation: "worktree" as const, permission_mode: "acceptEdits", max_budget_usd: 5, provider_id: "" };
+    const cur = i >= 0 ? workers[i] : { agent: name, enabled: false, isolation: "worktree" as const, permission_mode: "acceptEdits", max_budget_usd: 5, provider_id: "", work_dir: "" };
     workers[i >= 0 ? i : workers.length] = { ...cur, ...patch };
     setOrch({ ...base, workers });
   };
@@ -499,6 +520,13 @@ function WorkersStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
                     <option key={p.id} value={p.id}>provider: {p.name || p.id}</option>
                   ))}
                 </Select>
+                {(w?.isolation ?? "worktree") === "standalone" && (
+                  <label className="flex items-center gap-1 text-xs text-zinc-500" title="Standalone workspace directory; empty = default per-agent dir">
+                    dir
+                    <Input className="w-44" placeholder="~/.fusion-console/agents/{name}" value={w?.work_dir ?? ""}
+                      onChange={(e) => setWorker(a.name, { work_dir: e.target.value })} />
+                  </label>
+                )}
                 <span className="ml-auto text-xs text-zinc-400">
                   {a.detected ? `mode ${a.permission_mode}` : "not on PATH"}
                 </span>
@@ -513,6 +541,67 @@ function WorkersStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       </div>
       {msg && <p className="text-sm text-indigo-500">{msg}</p>}
       {err && <p className="text-sm text-red-500">{err}</p>}
+    </Card>
+  );
+}
+
+function VerifyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
+  const [gw, setGw] = useState<Awaited<ReturnType<typeof api.gatewayStatus>> | null>(null);
+  const [sample, setSample] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    api.gatewayStatus().then(setGw).catch(() => {});
+  }, []);
+  const test = async () => {
+    setBusy(true); setMsg(""); setErr(""); setSample("");
+    try {
+      const pr = await api.providers();
+      const p = (pr.providers ?? []).find((x) => x.enabled);
+      if (!p) {
+        setErr("no enabled provider — finish the Providers step first");
+        return;
+      }
+      const r = await api.testCall(p.id);
+      if (r.ok) {
+        setSample(r.sample ?? "");
+        setMsg(`provider ${p.name || p.id} answered in ${r.latency_ms ?? "?"} ms`);
+      } else {
+        setErr(r.error ?? "test call failed");
+      }
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card className="space-y-4 p-6">
+      <div className="flex items-center gap-2">
+        <PlayCircle size={18} className="text-indigo-500" />
+        <h3 className="font-semibold">Verify</h3>
+      </div>
+      <ul className="space-y-1 text-sm text-zinc-600 dark:text-zinc-300">
+        <li className="flex items-center gap-2">
+          {gw?.reachable ? <Check size={14} className="text-emerald-500" /> : <span className="text-red-500">!</span>}
+          Gateway {gw ? `on ${gw.base_url}` : "status unknown"}
+        </li>
+        <li className="flex items-center gap-2">
+          <span className="text-zinc-400">o</span> Brain provider configured (chat header select labeled "brain")
+        </li>
+        <li className="flex items-center gap-2">
+          <span className="text-zinc-400">o</span> Workers with budget caps and provider bindings
+        </li>
+      </ul>
+      <div className="flex gap-2">
+        <Button onClick={test} disabled={busy}>{busy ? "Calling..." : "Test LLM call"}</Button>
+        <Button variant="ghost" onClick={onNext}>Skip to done <ArrowRight size={14} /></Button>
+      </div>
+      {sample && <pre className="max-h-32 overflow-auto rounded-lg bg-zinc-50 p-2 text-xs dark:bg-zinc-900">{sample}</pre>}
+      {msg && <p className="text-sm text-emerald-600 dark:text-emerald-400">{msg}</p>}
+      {err && <p className="text-sm text-red-500">{err}</p>}
+      <p className="text-xs text-zinc-400">The test call runs against the brain provider saved in Settings.</p>
     </Card>
   );
 }

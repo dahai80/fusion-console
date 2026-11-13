@@ -128,6 +128,7 @@ export type WorkerSettings = {
   permission_mode: string;
   max_budget_usd: number;
   provider_id: string;
+  work_dir: string;
 };
 
 export type UsageRange = "today" | "week" | "month" | "all";

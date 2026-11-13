@@ -78,6 +78,7 @@ type WorkerConfig struct {
 	PermissionMode string  `json:"permission_mode"`
 	MaxBudgetUSD   float64 `json:"max_budget_usd"`
 	ProviderID     string  `json:"provider_id"` // force this provider for the worker CLI; empty = CLI default
+	WorkDir        string  `json:"work_dir"`    // standalone workspace override; empty = default per-agent dir
 }
 
 // OrchestratorConfig captures the onboarding wizard's brain-and-workers

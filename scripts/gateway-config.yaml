@@ -18,6 +18,21 @@ auth:
     # the admin key store for real deployments.
     passthrough: true
 
+# Admin dashboard + admin API (gateway keys are created via POST
+# /admin/api/keys; the admin GUI lives at /admin/). The startup scripts
+# and fusion-console replace the bootstrap marker below with a per-machine
+# random value on first run.
+admin:
+    enabled: true
+    jwt_secret: "FUSION-CONSOLE-BOOTSTRAP-SECRET-00000000000000000000000000000000"
+    users:
+        admin: "fusion-admin-2026"
+
+# Persistent local store so keys/channels survive restarts and the
+# multi-process instance lock engages.
+store:
+    data_dir: "~/.fusion-gateway/data"
+
 backends:
     # Local engine. base_url explicit because it is deployment-specific.
     # The key arrives via the mlx backend key env binding (bindSecretEnv).
@@ -38,11 +53,11 @@ models:
     # needs enabled + cloud_models allowlist). Omit entirely for the
     # historical routing chain.
     supply:
-        glm-5: [fusion-mlx, glm-cloud]
+        glm-5: [fusion-mlx]
     # Optional. Client-visible stable aliases; targets may be bare or
     # "backend/model" qualified. Aliases appear in /v1/models.
     aliases:
-        "cc-main": "glm-cloud/glm-5"
+        "cc-main": "fusion-mlx/glm-5"
 
 routing:
     mode: hybrid

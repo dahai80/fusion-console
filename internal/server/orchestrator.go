@@ -127,6 +127,16 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 			budget = wk.MaxBudgetUSD
 		}
 		workdir := s.cfg.ResolveWorkDir(args.Agent)
+		if wk != nil && wk.Isolation != "worktree" && strings.TrimSpace(wk.WorkDir) != "" {
+			abs, err := filepath.Abs(wk.WorkDir)
+			if err != nil {
+				return "", fmt.Errorf("worker %s: bad work_dir: %v", args.Agent, err)
+			}
+			if err := os.MkdirAll(abs, 0o700); err != nil {
+				return "", fmt.Errorf("worker %s: create work_dir: %v", args.Agent, err)
+			}
+			workdir = abs
+		}
 		if wk != nil && wk.Isolation == "worktree" && strings.TrimSpace(args.Repo) != "" {
 			wt, err := s.createWorktree(args.Repo, args.Agent)
 			if err != nil {

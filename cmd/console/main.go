@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/dahai80/fusion-console/internal/auth"
@@ -130,6 +131,7 @@ func maybeStartGateway() {
 		log.Printf("console: gateway binary found but no config.yaml — start it manually or via the Gateway menu")
 		return
 	}
+	patchGatewayJWTSecret(gwCfg)
 	logDir := filepath.Join(config.DefaultDir(), "log")
 	_ = os.MkdirAll(logDir, 0o755)
 	logf, err := os.OpenFile(filepath.Join(logDir, "gateway.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -145,6 +147,30 @@ func maybeStartGateway() {
 		return
 	}
 	log.Printf("console: gateway started (pid %d, config %s, log %s)", cmd.Process.Pid, gwCfg, filepath.Join(logDir, "gateway.log"))
+}
+
+// patchGatewayJWTSecret replaces the packaged bootstrap marker in the
+// gateway config with a per-machine random secret, once. The gateway refuses
+// known placeholder secrets at load, so the marker must never survive to a
+// live deployment.
+func patchGatewayJWTSecret(cfgPath string) {
+	const marker = "FUSION-CONSOLE-BOOTSTRAP-SECRET-00000000000000000000000000000000"
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil || !strings.Contains(string(raw), marker) {
+		return
+	}
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		log.Printf("console: gateway jwt secret seed: %v", err)
+		return
+	}
+	secret := hex.EncodeToString(seed)
+	patched := strings.ReplaceAll(string(raw), marker, secret)
+	if err := os.WriteFile(cfgPath, []byte(patched), 0o644); err != nil {
+		log.Printf("console: gateway jwt secret write: %v", err)
+		return
+	}
+	log.Printf("console: gateway jwt secret generated in %s", cfgPath)
 }
 
 // armAutoLogin generates a one-time token and registers it with the server.

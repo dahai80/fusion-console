@@ -21,7 +21,15 @@ port_open() { # port_open <port> -> 0 if something listens
 
 mkdir -p "$HOME/.fusion-console/bin" "$HOME/.fusion-console/log"
 
-# 1. Gateway: start only when a binary and a config exist and :11432 is free.
+# 1. One-time: replace the packaged bootstrap JWT secret with a random one.
+if [ -f "$HERE/config.yaml" ] && grep -q "FUSION-CONSOLE-BOOTSTRAP-SECRET-0000" "$HERE/config.yaml"; then
+    secret=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    sed -i.bak "s/FUSION-CONSOLE-BOOTSTRAP-SECRET-00000000000000000000000000000000/$secret/" "$HERE/config.yaml"
+    rm -f "$HERE/config.yaml.bak"
+    echo "[startup] gateway jwt secret generated in config.yaml"
+fi
+
+# 2. Gateway: start only when a binary and a config exist and :11432 is free.
 GW_CFG="${1:-${FUSION_GATEWAY_CONFIG:-}}"
 [ -z "$GW_CFG" ] && [ -f "$HERE/config.yaml" ] && GW_CFG="$HERE/config.yaml"
 [ -z "$GW_CFG" ] && [ -f "$HOME/.fusion-gateway/config.yaml" ] && GW_CFG="$HOME/.fusion-gateway/config.yaml"
@@ -36,12 +44,12 @@ else
     echo "gateway: skipped (binary or config.yaml not found — start it manually or use the Gateway menu)"
 fi
 
-# 2. Console: start if :11480 is free; --open launches the default browser
+# 3. Console: start if :11480 is free; -open launches the default browser
 #    with a one-time auto-login token.
 if port_open 11480; then
     echo "console: already running on :11480 — open http://127.0.0.1:11480"
 else
-    nohup "$CONSOLE_BIN" --open > "$HOME/.fusion-console/log/console.log" 2>&1 &
+    nohup "$CONSOLE_BIN" -open > "$HOME/.fusion-console/log/console.log" 2>&1 &
     echo "console: started (pid $!, log ~/.fusion-console/log/console.log)"
     echo "console: browser opening at http://127.0.0.1:11480 (auto-login)"
 fi
