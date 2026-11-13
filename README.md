@@ -31,6 +31,9 @@ budget caps, one agent subprocess at a time, every dispatch passes the
 fusion-harness tool-admission chain (fail-closed when the sidecar is down).
 In `confirm` mode every `run_agent` dispatch waits for your approval in the
 browser; `auto` mode dispatches immediately; `off` disables the tools.
+Each worker can also be pinned to a configured provider (wizard Workers step):
+the console injects `ANTHROPIC_*` or `OPENAI_*` env vars from the keychain
+key, overriding the CLI's own login; leave it unset to keep the CLI default.
 
 ## Quickstart (3 commands)
 

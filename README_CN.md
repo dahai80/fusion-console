@@ -15,7 +15,7 @@
 - **standalone（默认）**：每个 agent 一个固定专属工作目录，跨任务共享
 - **worktree**：每次派发对指定仓库新建 detached `git worktree`（白名单强校验），任务在临时目录里完成
 
-护栏常开：worker 可单独禁用、per-worker 预算上限、同一时刻只跑一个 agent 子进程、每次派发都过 fusion-harness 工具准入链（sidecar 不可用时 fail-closed）。`confirm` 模式下每次 `run_agent` 派发都会在浏览器等你审批；`auto` 模式直接派发；`off` 关闭编排工具。
+护栏常开：worker 可单独禁用、per-worker 预算上限、同一时刻只跑一个 agent 子进程、每次派发都过 fusion-harness 工具准入链（sidecar 不可用时 fail-closed）。`confirm` 模式下每次 `run_agent` 派发都会在浏览器等你审批；`auto` 模式直接派发；`off` 关闭编排工具。每个 worker 还可以绑定指定 provider（向导 Workers 步）：console 从钥匙串取密钥注入 `ANTHROPIC_*` 或 `OPENAI_*` 环境变量，覆盖 CLI 自带登录；不选则保持 CLI 默认。
 
 ## 功能
 
