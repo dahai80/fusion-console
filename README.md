@@ -10,6 +10,28 @@ tasks to headless coding agents (Claude Code, fusion-code, Codex, OpenCode).
 Design docs: `insight/fusion-console-design-2026-11.md` and
 `insight/fusion-console-remote-access-plan-2026-11.md` in the fusion monorepo.
 
+## Orchestration: chat commands the agents
+
+Enable orchestration (Settings → Orchestration, or the onboarding wizard) and
+your chat becomes the **brain**: it gets native tool calls — `list_agents`,
+`run_agent`, `read_artifact` — and decides on its own when to dispatch a task
+to a headless agent, collect the result, verify artifacts, and report back
+(bounded at 8 planner iterations per turn). There is no separate "brain agent"
+to configure — the brain is the model you are chatting with.
+
+Each worker agent runs in its own directory, in one of two isolation modes:
+
+- **standalone** (default) — a fixed dedicated workspace per agent, shared
+  across tasks
+- **worktree** — each dispatch creates a fresh detached `git worktree` of a
+  target repo (whitelist-enforced) and works there
+
+Guardrails are always on: workers can be disabled individually, per-worker
+budget caps, one agent subprocess at a time, every dispatch passes the
+fusion-harness tool-admission chain (fail-closed when the sidecar is down).
+In `confirm` mode every `run_agent` dispatch waits for your approval in the
+browser; `auto` mode dispatches immediately; `off` disables the tools.
+
 ## Quickstart (3 commands)
 
 ```bash
