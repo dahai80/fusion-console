@@ -26,6 +26,7 @@ type Server struct {
 	models    *chat.ModelList
 	agents    map[string]agent.Adapter
 	agentRuns sync.Mutex      // one agent subprocess per host at a time
+	approvals sync.Map        // confirm-mode dispatch gates: id -> chan bool
 	harness   *harness.Client // fusion-harness sidecar (chat guards)
 	autoToken string          // one-time auto-login token for --open; empty = disabled
 	mux       *http.ServeMux
@@ -73,6 +74,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/settings/providers", s.auth.Require(s.handleSaveProvider))
 	m.HandleFunc("POST /api/settings/apikey", s.auth.Require(s.handleStoreAPIKey))
 	m.HandleFunc("GET /api/settings/models", s.auth.Require(s.handleModels))
+	m.HandleFunc("POST /api/settings/testcall", s.auth.Require(s.handleTestCall))
+	m.HandleFunc("POST /api/approvals/{id}", s.auth.Require(s.handleApproval))
 	m.HandleFunc("GET /api/costs", s.auth.Require(s.handleCosts))
 	m.HandleFunc("GET /api/dashboard", s.auth.Require(s.handleDashboard))
 	m.HandleFunc("GET /api/settings/orchestration", s.auth.Require(s.handleGetOrchestration))

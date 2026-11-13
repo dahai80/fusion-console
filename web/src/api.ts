@@ -81,9 +81,19 @@ export const api = {
     req<{ ok: boolean }>("/api/settings/apikey", { method: "POST", body: JSON.stringify({ key_id: keyId, secret }) }),
   models: (provider: string) =>
     req<{ models: string[] }>(`/api/settings/models?provider=${encodeURIComponent(provider)}`),
+  testCall: (provider: string) =>
+    req<{ ok: boolean; sample?: string; error?: string; latency_ms?: number }>("/api/settings/testcall", {
+      method: "POST",
+      body: JSON.stringify({ provider_id: provider }),
+    }),
   costs: () => req<{ report: Record<string, unknown>[] }>("/api/costs"),
   dashboard: (range: UsageRange) =>
     req<DashboardData>(`/api/dashboard?range=${encodeURIComponent(range)}`),
+  approve: (id: string, approve: boolean) =>
+    req<{ ok: boolean }>(`/api/approvals/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ approve }),
+    }),
   gatewayStatus: () =>
     req<{
       base_url: string;

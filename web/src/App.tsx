@@ -195,8 +195,19 @@ function ChatPage() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [orchestrate, setOrchestrate] = useState(false);
+  const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
   const [err, setErr] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const resolveApproval = async (ok: boolean) => {
+    if (!approval) return;
+    try {
+      await api.approve(approval.id, ok);
+    } catch {
+      /* gate also resolves via timeout */
+    }
+    setApproval(null);
+  };
 
   const refreshConvs = useCallback(async () => {
     const r = await api.conversations();
@@ -258,8 +269,13 @@ function ChatPage() {
           const copy = e.slice();
           const last = copy[copy.length - 1];
           if (type === "delta") last.content += (ev.text as string) ?? "";
+          else if (type === "approval") {
+            setApproval({ id: (ev.id as string) ?? "", detail: (ev.detail as string) ?? "" });
+            last.content += `\n\n> ⏸ awaiting your approval: ${ev.detail ?? ""}\n\n`;
+          }
           else if (type === "tool") {
             const status = (ev.status as string) ?? "";
+            setApproval(null);
             const detail = (ev.detail as string) ?? "";
             if (status === "running") last.content += `\n\n> ⚙️ dispatch \`${ev.tool}\`${detail ? ` — ${detail}` : ""}\n\n`;
             else if (status === "done") last.content += "> ↳ done\n\n";
@@ -412,6 +428,16 @@ function ChatPage() {
           ))}
           <div ref={bottomRef} />
         </div>
+
+        {approval && (
+          <div className="flex flex-wrap items-center gap-3 border-t border-amber-500/30 bg-amber-500/5 px-4 py-2 text-sm">
+            <span className="flex-1 min-w-40 text-zinc-700 dark:text-zinc-300">
+              Dispatch awaiting approval: <strong>{approval.detail}</strong>
+            </span>
+            <Button onClick={() => resolveApproval(true)}>Approve</Button>
+            <Button variant="outline" onClick={() => resolveApproval(false)}>Deny</Button>
+          </div>
+        )}
 
         {err && <p className="px-4 pb-1 text-sm text-red-500">{err}</p>}
 

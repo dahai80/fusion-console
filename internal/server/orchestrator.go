@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/dahai80/fusion-console/internal/agent"
 	"github.com/dahai80/fusion-console/internal/chat"
+	"github.com/dahai80/fusion-console/internal/config"
 	"github.com/dahai80/fusion-console/internal/harness"
 )
 
@@ -56,10 +59,11 @@ func orchestratorTools() []chat.ToolDecl {
 		},
 		{
 			Name:        "run_agent",
-			Description: "Run one headless coding agent on a concrete task in its dedicated workspace. Returns the agent's final result text.",
+			Description: "Run one headless coding agent on a concrete task. With worktree isolation the agent edits a fresh git worktree of the target repo; otherwise it works in its dedicated workspace. Returns the agent's final result text.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
 				`"agent":{"type":"string","description":"agent name, e.g. claude or fusion-code"},` +
-				`"task":{"type":"string","description":"complete self-contained task description"}` +
+				`"task":{"type":"string","description":"complete self-contained task description"},` +
+				`"repo":{"type":"string","description":"absolute path of the target repository; required when the agent uses worktree isolation, must be in the configured whitelist"}` +
 				`},"required":["agent","task"]}`),
 		},
 		{
@@ -85,6 +89,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		Agent string `json:"agent"`
 		Task  string `json:"task"`
 		Path  string `json:"path"`
+		Repo  string `json:"repo"`
 	}
 	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
 		return "", fmt.Errorf("tool %s: bad arguments: %v", call.Name, err)
@@ -110,13 +115,31 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		if strings.TrimSpace(args.Task) == "" {
 			return "", fmt.Errorf("empty task")
 		}
+		// Fleet guardrails: only enabled workers, per-worker budget/isolation
+		// from the wizard config, repo whitelist enforced for worktrees.
+		wk := s.workerConfig(args.Agent)
+		if wk != nil && !wk.Enabled {
+			return "", fmt.Errorf("worker %s is disabled in settings", args.Agent)
+		}
 		settings := s.agentSettings(args.Agent)
+		budget := settings.MaxBudgetUSD
+		if wk != nil && wk.MaxBudgetUSD > 0 {
+			budget = wk.MaxBudgetUSD
+		}
 		workdir := s.cfg.ResolveWorkDir(args.Agent)
-		log.Printf("orchestrator: dispatch agent=%s conv-workdir=%s user=%s", args.Agent, workdir, user)
+		if wk != nil && wk.Isolation == "worktree" && strings.TrimSpace(args.Repo) != "" {
+			wt, err := s.createWorktree(args.Repo, args.Agent)
+			if err != nil {
+				return "", err
+			}
+			workdir = wt
+		}
+		log.Printf("orchestrator: dispatch agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
+			args.Agent, isolationOf(wk), workdir, budget, user)
 		opts := agent.RunOpts{
 			Task: args.Task, Workdir: workdir,
 			PermissionMode: settings.PermissionMode,
-			MaxBudgetUSD:   settings.MaxBudgetUSD,
+			MaxBudgetUSD:   budget,
 			Command:        settings.Command,
 		}
 		// One agent subprocess at a time, same gate as manual agent runs.
@@ -279,6 +302,17 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 				msgs = append(msgs, chat.Message{Role: "tool", ToolCallID: call.ID, Content: "tool call denied: " + reason})
 				continue
 			}
+			// Confirm mode: hold every agent dispatch until the user approves
+			// it in the browser. Timeout = deny (fail-closed).
+			if call.Name == "run_agent" && s.cfg.Orchestrator.Mode == "confirm" {
+				ok, waitReason := s.awaitApproval(ctx, prov, call, send)
+				if !ok {
+					log.Printf("orchestrator: dispatch not approved: %s", waitReason)
+					send(map[string]any{"type": "tool", "tool": call.Name, "status": "denied", "detail": waitReason})
+					msgs = append(msgs, chat.Message{Role: "tool", ToolCallID: call.ID, Content: "dispatch not approved: " + waitReason})
+					continue
+				}
+			}
 			send(map[string]any{"type": "tool", "tool": call.Name, "status": "running", "detail": toolDetail(call)})
 			out, execErr := s.executeToolCall(ctx, call, user, prov.convID)
 			status := "done"
@@ -295,23 +329,110 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 	return full, total
 }
 
+// approvalTimeout bounds how long a confirm-mode dispatch waits for the
+// human decision before failing closed.
+const approvalTimeout = 10 * time.Minute
+
+// awaitApproval surfaces a run_agent dispatch in the browser and blocks until
+// the user approves or denies it (or the timeout / request context ends).
+func (s *Server) awaitApproval(ctx context.Context, prov *providerOpts, call chat.ToolCall, send func(map[string]any)) (bool, string) {
+	id := fmt.Sprintf("appr-%d-%d", prov.convID, time.Now().UnixNano())
+	ch := make(chan bool, 1)
+	s.approvals.Store(id, ch)
+	defer s.approvals.Delete(id)
+	send(map[string]any{"type": "approval", "id": id, "tool": call.Name, "detail": toolDetail(call)})
+	log.Printf("orchestrator: approval requested id=%s %s", id, toolDetail(call))
+	select {
+	case ok := <-ch:
+		if ok {
+			log.Printf("orchestrator: approval granted id=%s", id)
+			return true, ""
+		}
+		return false, "denied by user"
+	case <-time.After(approvalTimeout):
+		return false, "approval timed out (fail-closed)"
+	case <-ctx.Done():
+		return false, "request cancelled"
+	}
+}
+
 func toolDetail(call chat.ToolCall) string {
 	var args struct {
 		Agent string `json:"agent"`
 		Task  string `json:"task"`
 		Path  string `json:"path"`
+		Repo  string `json:"repo"`
 	}
 	_ = json.Unmarshal([]byte(call.Arguments), &args)
 	switch call.Name {
 	case "run_agent":
-		if len(args.Task) > 120 {
-			return args.Agent + ": " + args.Task[:120] + "..."
+		detail := args.Agent
+		if args.Repo != "" {
+			detail += " @ " + filepath.Base(args.Repo)
 		}
-		return args.Agent + ": " + args.Task
+		if len(args.Task) > 120 {
+			return detail + ": " + args.Task[:120] + "..."
+		}
+		return detail + ": " + args.Task
 	case "read_artifact":
 		return args.Path
 	}
 	return call.Name
+}
+
+// workerConfig returns the wizard-configured worker entry for one agent, or
+// nil when the agent has no worker entry.
+func (s *Server) workerConfig(name string) *config.WorkerConfig {
+	for i := range s.cfg.Orchestrator.Workers {
+		if s.cfg.Orchestrator.Workers[i].Agent == name {
+			return &s.cfg.Orchestrator.Workers[i]
+		}
+	}
+	return nil
+}
+
+func isolationOf(wk *config.WorkerConfig) string {
+	if wk == nil || wk.Isolation == "" {
+		return "workspace"
+	}
+	return wk.Isolation
+}
+
+// createWorktree adds a detached git worktree of repo under the agents root.
+// The repo path must pass the configured whitelist (empty whitelist = any
+// fusion repo under the workspace root). The worktree is left in place after
+// the run so results stay inspectable via read_artifact.
+func (s *Server) createWorktree(repo, agentName string) (string, error) {
+	abs := repo
+	if !filepath.IsAbs(abs) {
+		return "", fmt.Errorf("repo path must be absolute: %s", repo)
+	}
+	if allowed := s.cfg.Orchestrator.Repos; len(allowed) > 0 {
+		ok := false
+		for _, a := range allowed {
+			if a == abs || strings.HasPrefix(abs, a+string(filepath.Separator)) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return "", fmt.Errorf("repo %s is not in the configured whitelist", repo)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(abs, ".git")); err != nil {
+		return "", fmt.Errorf("repo has no .git: %s", abs)
+	}
+	root := s.agentsRoot()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", fmt.Errorf("agents root: %v", err)
+	}
+	wt := filepath.Join(root, fmt.Sprintf("%s-wt-%d", agentName, time.Now().Unix()))
+	cmd := exec.Command("git", "-C", abs, "worktree", "add", "--detach", wt, "HEAD")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("worktree add failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	log.Printf("orchestrator: worktree created %s (from %s)", wt, abs)
+	return wt, nil
 }
 
 // toHarnessMessages converts chat messages (dropping tool-call fields the

@@ -152,6 +152,21 @@ function LlmStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
     }
   };
 
+  // Smoke call: proves endpoint + key + model work before leaving the step.
+  const testCall = async () => {
+    setMsg(""); setErr(""); setBusy(true);
+    try {
+      if (!(await saveAll())) return;
+      const r = await api.testCall(draft.id);
+      if (r.ok) setMsg(`connection verified (${r.latency_ms} ms) — model replied: "${(r.sample ?? "").trim().slice(0, 40)}"`);
+      else setErr(`test call failed: ${r.error}`);
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Card className="space-y-4 p-6">
       <div className="grid gap-3 sm:grid-cols-3">
@@ -202,6 +217,7 @@ function LlmStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={fetchModels} disabled={busy}>Save & fetch models</Button>
+        <Button variant="outline" onClick={testCall} disabled={busy}>Test call</Button>
         <Button onClick={async () => { if (await saveAll()) onNext(); }} disabled={busy}>Save & continue <ArrowRight size={14} /></Button>
         <Button variant="ghost" onClick={onSkip}>Skip for now</Button>
       </div>

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dahai80/fusion-console/internal/agent"
 	"github.com/dahai80/fusion-console/internal/chat"
@@ -169,9 +171,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	log.Printf("server: chat conv=%d provider=%s model=%s user=%s orchestrate=%v", req.ConversationID, prov.ID, prov.Model, user, req.Orchestrate)
 
 	// Orchestrated turn: chat is the main brain and may dispatch agents via
-	// native tool-calls (bounded loop, harness-guarded dispatch).
+	// native tool-calls (bounded loop, harness-guarded dispatch). Mode "off"
+	// disables the brain loop entirely — plain chat only.
 	if req.Orchestrate {
-		if tp, ok := provider.(chat.ToolProvider); ok {
+		if s.cfg.Orchestrator.Mode == "off" {
+			log.Printf("server: orchestration mode=off, ignoring orchestrate flag conv=%d", req.ConversationID)
+			send(map[string]any{"type": "tool", "tool": "orchestrate", "status": "denied", "detail": "orchestration is off in settings"})
+		} else if tp, ok := provider.(chat.ToolProvider); ok {
 			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: prov.Model, user: user}
 			full, total := s.runPlannerLoop(r.Context(), tp, &opts, apiKey, chatMsgs, send)
 			if full != "" {
@@ -435,6 +441,76 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
+// handleTestCall fires one minimal chat completion at the saved provider so
+// onboarding can verify the endpoint + key + model actually work before the
+// developer leaves the wizard.
+func (s *Server) handleTestCall(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProviderID string `json:"provider_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	prov, ok := s.providerByID(req.ProviderID)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled provider " + req.ProviderID})
+		return
+	}
+	provider, err := buildProvider(prov)
+	if err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	apiKey, err := config.GetAPIKey(prov.APIKeyID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "api key unavailable: " + err.Error()})
+		return
+	}
+	if prov.Model == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider has no model set"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	evCh, err := provider.ChatStream(ctx, prov.Model, apiKey, []chat.Message{{Role: "user", Content: "Reply with the single word: pong"}})
+	if err != nil {
+		log.Printf("server: test call provider=%s dial failed: %v", prov.ID, err)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	sample := ""
+	var callErr string
+	for ev := range evCh {
+		if ev.Type == chat.EventDelta && ev.Text != "" {
+			sample += ev.Text
+			if len(sample) > 40 {
+				break
+			}
+		}
+		if ev.Type == chat.EventError {
+			callErr = ev.Text
+		}
+		if ev.Type == chat.EventDone {
+			break
+		}
+	}
+	latency := time.Since(start).Milliseconds()
+	if callErr != "" {
+		log.Printf("server: test call provider=%s stream error after %dms: %s", prov.ID, latency, callErr)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": callErr, "latency_ms": latency})
+		return
+	}
+	if strings.TrimSpace(sample) == "" {
+		log.Printf("server: test call provider=%s empty reply after %dms", prov.ID, latency)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "model returned an empty reply", "latency_ms": latency})
+		return
+	}
+	log.Printf("server: test call provider=%s model=%s ok in %dms", prov.ID, prov.Model, latency)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sample": sample, "latency_ms": latency})
+}
+
 func modelBaseURL(p *config.Provider) string {
 	switch p.Type {
 	case config.ProviderGateway:
@@ -468,6 +544,32 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
+}
+
+// handleApproval resolves one confirm-mode dispatch gate. The planner loop
+// blocks on the channel until this arrives, the 10-minute timeout fires, or
+// the chat request is cancelled.
+func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Approve bool `json:"approve"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	id := r.PathValue("id")
+	v, ok := s.approvals.LoadAndDelete(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown or already-resolved approval " + id})
+		return
+	}
+	ch := v.(chan bool)
+	select {
+	case ch <- req.Approve:
+	default:
+	}
+	log.Printf("server: approval %s -> %v", id, req.Approve)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func settingsDir() string {
