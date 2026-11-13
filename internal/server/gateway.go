@@ -288,6 +288,15 @@ func (s *Server) handleGatewayInstall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 		return
 	}
+	// A gateway already answering on the port makes install pointless — and
+	// the download path must never hang the UI when offline.
+	if gatewayPortOpen(s.gatewayBase()) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "binary": gatewayBinaryPath(), "version": "running",
+			"note": "gateway already running on :11432 — no install needed",
+		})
+		return
+	}
 	version := strings.TrimPrefix(r.FormValue("version"), "v")
 	// Release packages ship fusion-gateway next to the console binary; use
 	// that copy instead of downloading when present.
@@ -369,9 +378,10 @@ func latestGatewayVersion(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("gateway: query latest release: %w", err)
+		return "", fmt.Errorf("gateway: query latest release (network unreachable or GitHub blocked): %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
