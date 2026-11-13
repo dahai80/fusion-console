@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
+  Brain,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -417,6 +418,9 @@ function ChatPage() {
 
       <div className="flex flex-1 flex-col min-w-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="The brain LLM: this provider answers the chat and dispatches workers">
+            <Brain size={14} className="text-indigo-500" /> brain
+          </label>
           <Select value={providerId} onChange={(e) => setProviderId(e.target.value)} className="w-48">
             {providers.filter((p) => p.enabled).map((p) => (
               <option key={p.id} value={p.id}>{p.name || p.id}</option>
