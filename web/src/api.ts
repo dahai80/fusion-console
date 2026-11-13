@@ -66,7 +66,7 @@ export const api = {
   logout: () => req<{ ok: boolean }>("/api/logout", { method: "POST" }),
   authHint: () => req<{ user: string; factory_default: boolean }>("/api/auth/hint"),
   provisionGatewayKey: () =>
-    req<{ ok: boolean; key_id: string; key_prefix: string }>("/api/gateway/key", { method: "POST" }),
+    req<{ ok: boolean; key_id: string; key_prefix: string; raw_key: string }>("/api/gateway/key", { method: "POST" }),
   me: () => req<{ user: string }>("/api/me"),
   conversations: () => req<{ conversations: Conversation[] }>("/api/conversations"),
   createConversation: (title: string, kind: "chat" | "agent", agentName = "", workdir = "") =>
@@ -115,6 +115,10 @@ export const api = {
       { method: "POST" }
     ),
   gatewaySSO: () => req<{ ok: boolean }>("/api/gateway/sso", { method: "POST" }),
+  gatewayBackends: () =>
+    req<{ backends: GatewayBackend[] }>("/api/gateway/backends"),
+  addGatewayBackend: (b: { name: string; type: string; base_url: string; api_key: string; models: string[] }) =>
+    req<{ ok: boolean }>("/api/gateway/backend", { method: "POST", body: JSON.stringify(b) }),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>
@@ -132,6 +136,15 @@ export type WorkerSettings = {
 };
 
 export type UsageRange = "today" | "week" | "month" | "all";
+
+export type GatewayBackend = {
+  name: string;
+  type: string;
+  base_url: string;
+  api_key: string;
+  enabled: boolean;
+  models: string[];
+};
 
 export type DashboardBucket = {
   bucket: string;

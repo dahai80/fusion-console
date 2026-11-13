@@ -281,22 +281,205 @@ func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if !hasGateway {
+		model := gatewayDefaultModel(base, created.RawKey)
 		s.cfg.Provider = append(s.cfg.Provider, config.Provider{
 			ID:       fmt.Sprintf("gateway-%d", time.Now().Unix()),
 			Name:     "fusion-gateway",
 			Type:     "gateway",
 			BaseURL:  base + "/v1",
+			Model:    model,
 			APIKeyID: "gateway-key",
 			Enabled:  true,
 		})
 		if err := s.cfg.Save(s.cfgDir); err != nil {
 			log.Printf("server: gateway provider auto-create save failed: %v", err)
 		} else {
-			log.Printf("server: gateway provider auto-created (base %s)", base+"/v1")
+			log.Printf("server: gateway provider auto-created (base %s, model %s)", base+"/v1", model)
+		}
+	} else {
+		// Backfill the model on an existing gateway provider created by an
+		// older console version without one.
+		for i := range s.cfg.Provider {
+			p := &s.cfg.Provider[i]
+			if p.Type == "gateway" && p.Enabled && p.Model == "" {
+				p.Model = gatewayDefaultModel(base, created.RawKey)
+				if err := s.cfg.Save(s.cfgDir); err != nil {
+					log.Printf("server: gateway provider model backfill save failed: %v", err)
+				} else {
+					log.Printf("server: gateway provider model backfilled: %s", p.Model)
+				}
+			}
 		}
 	}
 	log.Printf("server: gateway api key provisioned (prefix %s)", created.KeyPrefix)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key_id": "gateway-key", "key_prefix": created.KeyPrefix})
+	// raw_key is returned once here so the wizard can display it for
+	// copy/save; it is never readable again afterwards.
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key_id": "gateway-key", "key_prefix": created.KeyPrefix, "raw_key": created.RawKey})
+}
+
+// gatewayAdminLogin logs into the gateway admin API with the stored admin
+// credentials (keychain ids gateway-admin-user / gateway-admin-pass) or the
+// packaged factory account when nothing is stored, and returns the
+// admin_token session value for server-side admin API calls.
+func (s *Server) gatewayAdminLogin(r *http.Request, base string) (string, error) {
+	user, _ := config.GetAPIKey("gateway-admin-user")
+	pass, _ := config.GetAPIKey("gateway-admin-pass")
+	if user == "" || pass == "" {
+		user, pass = "admin", "fusion-admin-2026"
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+"/admin/api/login", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gateway unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gateway admin login failed (HTTP %d) — check the admin credentials", resp.StatusCode)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == "admin_token" && c.Value != "" {
+			return c.Value, nil
+		}
+	}
+	return "", fmt.Errorf("gateway login returned no session cookie")
+}
+
+// handleGatewayBackends lists the backends configured in the gateway
+// (GET /admin/api/config/backends proxied server-side so the browser never
+// talks to the gateway port directly). API keys come back masked.
+func (s *Server) handleGatewayBackends(w http.ResponseWriter, r *http.Request) {
+	base := s.gatewayBase()
+	token, err := s.gatewayAdminLogin(r, base)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/admin/api/config/backends", nil)
+	if err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Cookie", "admin_token="+token)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("backend list request failed: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway backend list returned HTTP %d", resp.StatusCode)})
+		return
+	}
+	var list any
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "gateway backend list returned invalid JSON"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backends": list})
+}
+
+// handleGatewayBackendAdd creates a cloud backend in the gateway config via
+// POST /admin/api/config/backends (server-side proxy, same admin session).
+func (s *Server) handleGatewayBackendAdd(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name    string   `json:"name"`
+		Type    string   `json:"type"`
+		BaseURL string   `json:"base_url"`
+		APIKey  string   `json:"api_key"`
+		Models  []string `json:"models"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Type = strings.TrimSpace(req.Type)
+	if req.Name == "" || req.Type == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and type are required"})
+		return
+	}
+	base := s.gatewayBase()
+	token, err := s.gatewayAdminLogin(r, base)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	payload := map[string]any{"name": req.Name, "type": req.Type, "enabled": true}
+	if req.BaseURL != "" {
+		payload["base_url"] = strings.TrimSpace(req.BaseURL)
+	}
+	if strings.TrimSpace(req.APIKey) != "" {
+		payload["api_key"] = strings.TrimSpace(req.APIKey)
+	}
+	if len(req.Models) > 0 {
+		payload["models"] = req.Models
+	}
+	body, _ := json.Marshal(payload)
+	req2, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+"/admin/api/config/backends", bytes.NewReader(body))
+	if err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Cookie", "admin_token="+token)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req2)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("backend create request failed: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		var e struct {
+			Error string `json:"error"`
+		}
+		msg := fmt.Sprintf("gateway returned HTTP %d", resp.StatusCode)
+		if json.NewDecoder(resp.Body).Decode(&e) == nil && e.Error != "" {
+			msg = e.Error
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": msg})
+		return
+	}
+	log.Printf("server: gateway backend %s (%s) created", req.Name, req.Type)
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+}
+
+// gatewayDefaultModel queries /v1/models with the fresh key and returns the
+// first model id, so the auto-created provider has a usable model for test
+// calls. Falls back to the shipped config's alias when the query fails.
+func gatewayDefaultModel(base, rawKey string) string {
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, base+"/v1/models", nil)
+	if err != nil {
+		return "glm-5"
+	}
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "glm-5"
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&out) != nil || len(out.Data) == 0 {
+		return "glm-5"
+	}
+	// Prefer a chat-capable model: skip embedding/reranker entries first.
+	for _, m := range out.Data {
+		low := strings.ToLower(m.ID)
+		if !strings.Contains(low, "embed") && !strings.Contains(low, "bge") && !strings.Contains(low, "rerank") {
+			return m.ID
+		}
+	}
+	return out.Data[0].ID
 }
 
 // handleGatewayInstall downloads the latest fusion-gateway release for the

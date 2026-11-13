@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -62,6 +63,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/gateway/status", s.auth.Require(s.handleGatewayStatus))
 	m.HandleFunc("POST /api/gateway/install", s.auth.Require(s.handleGatewayInstall))
 	m.HandleFunc("POST /api/gateway/sso", s.auth.Require(s.handleGatewaySSO))
+	m.HandleFunc("GET /api/gateway/backends", s.auth.Require(s.handleGatewayBackends))
+	m.HandleFunc("POST /api/gateway/backend", s.auth.Require(s.handleGatewayBackendAdd))
 
 	m.HandleFunc("GET /api/conversations", s.auth.Require(s.handleListConversations))
 	m.HandleFunc("POST /api/conversations", s.auth.Require(s.handleCreateConversation))
@@ -88,8 +91,20 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /", s.handleStatic)
 }
 
-// Handler returns the root handler.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler returns the root handler. A panic-recovery wrapper turns handler
+// panics into HTTP 500 responses — without it a panicking handler kills the
+// connection and the browser only shows an opaque "Failed to fetch".
+func (s *Server) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("server: panic in %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error (see console log)"})
+			}
+		}()
+		s.mux.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
