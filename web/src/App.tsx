@@ -14,13 +14,15 @@ import {
   Network,
   Download,
   ExternalLink,
+  Workflow,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, type AgentInfo, type Conversation, type Message, type Provider } from "./api";
+import Onboarding from "./Onboarding";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "chat" | "agents" | "gateway" | "settings";
+type Page = "chat" | "agents" | "gateway" | "settings" | "onboard";
 
 export default function App() {
   return (
@@ -52,7 +54,22 @@ function Shell() {
           .catch(() => null)
           .finally(stripToken)
       : api.me().then((r) => r.user).catch(() => null);
-    boot.then((u) => setUser(u));
+    boot.then((u) => {
+      setUser(u);
+      // Guided setup: explicit ?onboard=1 (first run opens it server-side) or
+      // a logged-in session with no enabled provider at all.
+      if (u && (new URLSearchParams(window.location.search).get("onboard") === "1")) {
+        setPage("onboard");
+        return;
+      }
+      if (u) {
+        api.providers().then((r) => {
+          if (!(r.providers ?? []).some((p) => p.enabled)) {
+            setPage("onboard");
+          }
+        }).catch(() => {});
+      }
+    });
     const onLogout = () => setUser(null);
     window.addEventListener("fc:logout", onLogout);
     return () => window.removeEventListener("fc:logout", onLogout);
@@ -65,6 +82,9 @@ function Shell() {
     <div className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} />
       <main className="flex-1 min-h-0">
+        {page === "onboard" && (
+          <Onboarding onDone={() => setPage("chat")} />
+        )}
         {page === "chat" && <ChatPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
@@ -170,6 +190,7 @@ function ChatPage() {
   const [workdir, setWorkdir] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [orchestrate, setOrchestrate] = useState(false);
   const [err, setErr] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -227,12 +248,20 @@ function ChatPage() {
       }
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: providerId, content: text }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, provider_id: providerId, content: text, orchestrate }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
           const last = copy[copy.length - 1];
           if (type === "delta") last.content += (ev.text as string) ?? "";
+          else if (type === "tool") {
+            const status = (ev.status as string) ?? "";
+            const detail = (ev.detail as string) ?? "";
+            if (status === "running") last.content += `\n\n> ⚙️ dispatch \`${ev.tool}\`${detail ? ` — ${detail}` : ""}\n\n`;
+            else if (status === "done") last.content += "> ↳ done\n\n";
+            else if (status === "denied") last.content += `> ↳ denied: ${detail}\n\n`;
+            else if (status === "error") last.content += "> ↳ error\n\n";
+          }
           else if (type === "error") last.content += `\n\n**error:** ${ev.text}`;
           else if (type === "usage") last.meta = JSON.stringify(ev);
           return copy;
@@ -327,6 +356,17 @@ function ChatPage() {
             placeholder="agent workdir (e.g. /Users/me/proj)"
             className="flex-1 min-w-40"
           />
+          <button
+            onClick={() => setOrchestrate((v) => !v)}
+            title="Orchestration: chat as main brain — it may dispatch agents with native tool calls (consent per turn)"
+            className={`flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs transition-colors ${
+              orchestrate
+                ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
+                : "border-zinc-200/80 dark:border-zinc-800 text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
+            }`}
+          >
+            <Workflow size={14} /> orchestrate {orchestrate ? "on" : "off"}
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">

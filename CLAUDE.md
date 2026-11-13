@@ -62,6 +62,25 @@ cross-compilation keeps working).
 `internal/server/webdist` is build output committed to the embed; the server
 binary must be rebuilt after `make web` or it serves stale assets.
 
+## Orchestration (M1+M2)
+
+Chat-as-main-brain: the `orchestrate` toggle (per-turn consent) gives the chat
+model native tool-calls (`list_agents` / `run_agent` / `read_artifact`) and a
+bounded planner loop (`maxOrchestratorTurns = 8`) in
+`internal/server/orchestrator.go`. Each agent runs in its own dedicated
+workspace (`config.ResolveWorkDir`: per-agent `work_dir` override or
+`~/.fusion-console/agents/<name>`); `read_artifact` is sandboxed to the agents
+root. Guards run the real fusion-harness via the Python sidecar
+`sidecar/harnessd.py` (stdio JSON-RPC; `internal/harness/client.go` spawns it,
+respawn-on-next-use on failure): `pre_llm` = budget gate + compaction before
+every LLM call, `post_llm` = accounting, `tool_admit` = deny-first admission on
+every dispatch — fail-closed when the sidecar is down. Wire format gotchas:
+OpenAI tools must be nested `{"type":"function","function":{...}}` (flat
+entries are silently ignored and the model hallucinates results); gateways may
+emit usage chunks twice per stream (partial on finish chunk + full trailing
+chunk) — take the max, never the sum. Cost rows: planner `chat:<provider>` vs
+dispatched `agent:<name>` kept separate.
+
 ## Conventions
 
 - Go: gofmt (tabs) wins over the monorepo 4-space rule; CI enforces gofmt -l.

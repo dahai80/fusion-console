@@ -96,6 +96,26 @@ export const api = {
       { method: "POST" }
     ),
   gatewaySSO: () => req<{ ok: boolean }>("/api/gateway/sso", { method: "POST" }),
+  orchestration: () =>
+    req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
+  saveOrchestration: (o: Orchestrator) =>
+    req<{ ok: boolean }>("/api/settings/orchestration", { method: "POST", body: JSON.stringify(o) }),
+};
+
+export type WorkerSettings = {
+  agent: string;
+  enabled: boolean;
+  isolation: "worktree" | "standalone";
+  permission_mode: string;
+  max_budget_usd: number;
+};
+
+export type Orchestrator = {
+  mode: "off" | "confirm" | "auto";
+  brain_agent: string;
+  repos: string[];
+  workers: WorkerSettings[];
+  configured: boolean;
 };
 
 // streamPOST performs a POST that yields SSE "data:" JSON events.

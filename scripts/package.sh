@@ -80,6 +80,10 @@ stage_dir() { # stage_dir <name> <console-bin> <gateway-bin|"-">
         cp "$3" "$d/fusion-gateway"
     fi
     chmod 0755 "$d"/fusion-* 2>/dev/null || true
+    # Harness sidecar ships next to the binary (harness resolvePaths looks
+    # for <exe-dir>/sidecar/harnessd.py).
+    mkdir -p "$d/sidecar"
+    cp sidecar/harnessd.py "$d/sidecar/"
     cp README.md LICENSE "$d/"
 }
 
@@ -100,6 +104,8 @@ for t in "${TARGETS[@]}"; do
         mkdir -p "$d"
         cp "bin/fusion-console-$t" "$d/fusion-console.exe"
         [ "$GW" != "-" ] && cp "$GW" "$d/fusion-gateway.exe"
+        mkdir -p "$d/sidecar"
+        cp sidecar/harnessd.py "$d/sidecar/"
         cp README.md LICENSE "$d/"
         (cd "$DIST" && zip -qr "fusion-console-$VERSION-$t.zip" "$(basename "$d")")
         rm -rf "$d"

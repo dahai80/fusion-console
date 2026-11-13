@@ -12,6 +12,7 @@ import (
 	"github.com/dahai80/fusion-console/internal/agent"
 	"github.com/dahai80/fusion-console/internal/chat"
 	"github.com/dahai80/fusion-console/internal/config"
+	"github.com/dahai80/fusion-console/internal/harness"
 )
 
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +96,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		ConversationID int64  `json:"conversation_id"`
 		ProviderID     string `json:"provider_id"`
 		Content        string `json:"content"`
+		Orchestrate    bool   `json:"orchestrate"` // chat as main brain: allow agent dispatch tools this turn
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
@@ -130,6 +132,28 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		chatMsgs = append(chatMsgs, chat.Message{Role: m.Role, Content: m.Content})
 	}
 
+	// fusion-harness guard: budget gate + compaction before every LLM call.
+	// Sidecar missing = unguarded chat (logged at startup), never a failure.
+	if s.cfg.Harness.Enabled {
+		hMsgs := make([]harness.Message, len(chatMsgs))
+		for i, m := range chatMsgs {
+			hMsgs[i] = harness.Message{Role: m.Role, Content: m.Content}
+		}
+		proceed, reason, compacted, err := s.harness.PreLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, prov.Model, hMsgs)
+		if err != nil {
+			log.Printf("server: harness pre_llm unavailable, proceeding unguarded: %v", err)
+		} else if !proceed {
+			log.Printf("server: harness denied llm call conv=%d: %s", req.ConversationID, reason)
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "conversation token budget exceeded: " + reason})
+			return
+		} else if len(compacted) > 0 {
+			chatMsgs = make([]chat.Message, len(compacted))
+			for i, m := range compacted {
+				chatMsgs[i] = chat.Message{Role: m.Role, Content: m.Content}
+			}
+		}
+	}
+
 	flusher := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -142,7 +166,30 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := s.auth.User(r)
-	log.Printf("server: chat conv=%d provider=%s model=%s user=%s", req.ConversationID, prov.ID, prov.Model, user)
+	log.Printf("server: chat conv=%d provider=%s model=%s user=%s orchestrate=%v", req.ConversationID, prov.ID, prov.Model, user, req.Orchestrate)
+
+	// Orchestrated turn: chat is the main brain and may dispatch agents via
+	// native tool-calls (bounded loop, harness-guarded dispatch).
+	if req.Orchestrate {
+		if tp, ok := provider.(chat.ToolProvider); ok {
+			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: prov.Model, user: user}
+			full, total := s.runPlannerLoop(r.Context(), tp, &opts, apiKey, chatMsgs, send)
+			if full != "" {
+				meta, _ := json.Marshal(map[string]any{
+					"provider": prov.ID, "model": prov.Model, "orchestrated": true,
+					"tokens_in": total.TokensIn, "tokens_out": total.TokensOut,
+				})
+				_, _ = s.store.AppendMessage(req.ConversationID, "assistant", full, string(meta))
+				if total.TokensIn > 0 || total.TokensOut > 0 {
+					_ = s.store.LogCost(req.ConversationID, user, "chat:"+prov.ID, total.CostUSD, total.TokensIn, total.TokensOut)
+				}
+			}
+			send(map[string]any{"type": "done"})
+			return
+		}
+		log.Printf("server: provider %s does not support tool calls, falling back to plain chat", prov.ID)
+		send(map[string]any{"type": "tool", "tool": "orchestrate", "status": "error", "detail": "provider does not support tool calls"})
+	}
 
 	evCh, err := provider.ChatStream(r.Context(), prov.Model, apiKey, chatMsgs)
 	if err != nil {
@@ -177,6 +224,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			_ = s.store.LogCost(req.ConversationID, user, "chat:"+prov.ID, usage.CostUSD, usage.TokensIn, usage.TokensOut)
 		}
 	}
+	if s.cfg.Harness.Enabled {
+		if err := s.harness.PostLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, usage.TokensIn+usage.TokensOut); err != nil {
+			log.Printf("server: harness post_llm unavailable: %v", err)
+		}
+	}
 	send(map[string]any{"type": "done"})
 }
 
@@ -200,7 +252,8 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	settings := s.agentSettings(req.Agent)
 	workdir := req.Workdir
 	if workdir == "" {
-		workdir = settingsDir()
+		// Dedicated per-agent workspace (default ~/.fusion-console/agents/<name>).
+		workdir = s.cfg.ResolveWorkDir(req.Agent)
 	}
 	if fi, err := os.Stat(workdir); err != nil || !fi.IsDir() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workdir not accessible: " + workdir})
@@ -412,4 +465,56 @@ func settingsDir() string {
 		return "."
 	}
 	return home
+}
+
+// handleGetOrchestration returns the guided brain-and-workers setup.
+func (s *Server) handleGetOrchestration(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"orchestrator": s.cfg.Orchestrator})
+}
+
+// handleSaveOrchestration persists the onboarding wizard's brain-and-workers
+// decisions. Values are validated here so a prompt-injected client cannot
+// store arbitrary modes or isolation paths.
+func (s *Server) handleSaveOrchestration(w http.ResponseWriter, r *http.Request) {
+	var orch config.OrchestratorConfig
+	if err := json.NewDecoder(r.Body).Decode(&orch); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	switch orch.Mode {
+	case "off", "confirm", "auto":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be off, confirm or auto"})
+		return
+	}
+	if orch.BrainAgent != "" {
+		if _, ok := s.agents[orch.BrainAgent]; !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown brain agent " + orch.BrainAgent})
+			return
+		}
+	}
+	for i := range orch.Workers {
+		wk := &orch.Workers[i]
+		if _, ok := s.agents[wk.Agent]; !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown worker agent " + wk.Agent})
+			return
+		}
+		switch wk.Isolation {
+		case "", "worktree", "standalone":
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "isolation must be worktree or standalone"})
+			return
+		}
+		if wk.Isolation == "" {
+			wk.Isolation = "worktree"
+		}
+	}
+	orch.Configured = true
+	s.cfg.Orchestrator = orch
+	if err := s.cfg.Save(s.cfgDir); err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	log.Printf("server: orchestration saved mode=%s brain=%s workers=%d", orch.Mode, orch.BrainAgent, len(orch.Workers))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

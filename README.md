@@ -19,6 +19,17 @@ Design docs: `insight/fusion-console-design-2026-11.md` and
   (`claude -p --output-format stream-json`, `codex exec --json`,
   `opencode run`, `fusion`). One task in, one normalized event stream out
   (text / tool calls / result / cost).
+- **Orchestration (M1+M2)** — flip the `orchestrate` toggle in the chat
+  toolbar and the chat model becomes the main brain: it dispatches work to
+  headless agents with native tool-calls (`list_agents`, `run_agent`,
+  `read_artifact`), each agent running in its own dedicated workspace
+  (`~/.fusion-console/agents/<name>/`, per-agent `work_dir` override in
+  config). The loop is bounded (8 iterations); every dispatch passes the
+  [fusion-harness](https://github.com/dahai80/fusion-console) tool-admission
+  chain (deny-first, fail-closed) via a Python sidecar, and chat turns are
+  guarded by the same harness (context compaction + per-conversation token
+  budget). Cost rows stay separate: `chat:<provider>` for the planner vs
+  `agent:<name>` for dispatched runs.
 - **Config UI** — providers + baseURL + model (fetched from `/v1/models`);
   API keys stored in the OS keychain (Keychain / DPAPI / libsecret), never in
   the config file.
@@ -28,10 +39,21 @@ Design docs: `insight/fusion-console-design-2026-11.md` and
 
 ## What it deliberately does NOT do
 
-- No orchestration / task decomposition / issue queues — use `fusion-cowork`
-  or `fusion-agent-studio`.
+- No DAG orchestration / issue queues — use `fusion-cowork`
+  or `fusion-agent-studio` (the chat-as-brain loop here is single-level
+  dispatch only).
 - No PTY interactive terminal (planned for v2).
 - No public internet exposure, no SSO, no cloud sync.
+
+### Harness sidecar
+
+The guards run the real fusion-harness Python implementation (no Go
+re-implementation) through `sidecar/harnessd.py`, spawned with a Python that
+can `import fusion_harness`. Resolution order: `FUSION_CONSOLE_HARNESS_PYTHON`
+env → `<exe-dir>/../.venv/bin/python` → `<cwd>/../.venv` → `python3`. When no
+usable Python is found the console logs it and chat proceeds unguarded —
+degradation is visible, never silent. Disable with `"harness": {"enabled":
+false}` in config.json.
 
 ## Build
 

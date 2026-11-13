@@ -10,15 +10,20 @@
 
 - **聊天**：SSE 流式对话，支持 OpenAI 兼容 / Anthropic 兼容 provider；fusion-gateway（:11432）只是其中一个可选项，不是硬依赖。
 - **Agent 会话**：同一聊天 UI 承载 headless agent CLI（`claude -p --output-format stream-json`、`codex exec --json`、`opencode run`、`fusion`）。一个任务进，统一事件流出（文本 / 工具调用 / 结果 / 成本）。
+- **编排（M1+M2）**：打开聊天工具栏的 `orchestrate` 开关（按轮授权），聊天模型即主大脑：通过原生 tool-calls（`list_agents` / `run_agent` / `read_artifact`）向 headless agent 派活，每个 agent 在自己的专属工作目录运行（默认 `~/.fusion-console/agents/<name>/`，可在配置里按 agent 覆盖 `work_dir`）。循环有界（8 轮）；每次派活都过 [fusion-harness](https://github.com/dahai80/fusion-console) 工具准入链（deny 优先、sidecar 不可用即 fail-closed），聊天轮次同样受 harness 保护（上下文压缩 + 按会话 token 预算）。成本分行：规划器 `chat:<provider>` 与被派发的 `agent:<name>` 分开记账。
 - **配置界面**：provider + baseURL + 模型（从 /v1/models 拉取）；apiKey 存 OS keychain（Keychain / DPAPI / libsecret），绝不写进配置文件。
 - **成本账**：每轮入 SQLite，按天按来源出报表。
 - **轻量多用户**：每人 bcrypt 口令，HttpOnly session cookie，tailnet 内也必须登录。
 
 ## 明确不做
 
-- ❌ 编排 / 任务分解 / issue 队列 — 用 fusion-cowork 或 fusion-agent-studio
+- ❌ DAG 编排 / issue 队列 — 用 fusion-cowork 或 fusion-agent-studio（这里的 chat 主脑循环只做单层派发）
 - ❌ PTY 交互终端（v2 评估）
 - ❌ 公网暴露、SSO、云同步
+
+### Harness sidecar
+
+防护跑的是真正的 fusion-harness Python 实现（不做 Go 重写），经 `sidecar/harnessd.py`，用能 `import fusion_harness` 的 Python 启动。解析顺序：`FUSION_CONSOLE_HARNESS_PYTHON` 环境变量 → `<exe目录>/../.venv/bin/python` → `<cwd>/../.venv` → `python3`。找不到可用 Python 时打日志、聊天不设防继续——降级可见，绝不静默。在 config.json 加 `"harness": {"enabled": false}` 可关闭。
 
 ## 构建
 

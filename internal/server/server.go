@@ -13,6 +13,7 @@ import (
 	"github.com/dahai80/fusion-console/internal/auth"
 	"github.com/dahai80/fusion-console/internal/chat"
 	"github.com/dahai80/fusion-console/internal/config"
+	"github.com/dahai80/fusion-console/internal/harness"
 	"github.com/dahai80/fusion-console/internal/store"
 )
 
@@ -24,8 +25,9 @@ type Server struct {
 	store     *store.Store
 	models    *chat.ModelList
 	agents    map[string]agent.Adapter
-	agentRuns sync.Mutex // one agent subprocess per host at a time
-	autoToken string     // one-time auto-login token for --open; empty = disabled
+	agentRuns sync.Mutex      // one agent subprocess per host at a time
+	harness   *harness.Client // fusion-harness sidecar (chat guards)
+	autoToken string          // one-time auto-login token for --open; empty = disabled
 	mux       *http.ServeMux
 }
 
@@ -33,10 +35,11 @@ type Server struct {
 func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	s := &Server{
 		cfg: cfg, cfgDir: cfgDir,
-		auth:   auth.NewManager(),
-		store:  st,
-		models: chat.NewModelList(),
-		agents: map[string]agent.Adapter{},
+		auth:    auth.NewManager(),
+		store:   st,
+		models:  chat.NewModelList(),
+		agents:  map[string]agent.Adapter{},
+		harness: harness.New(),
 	}
 	for _, ad := range []agent.Adapter{
 		agent.ClaudeAdapter{}, agent.FusionCodeAdapter{}, agent.CodexAdapter{}, agent.OpencodeAdapter{},
@@ -71,6 +74,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/settings/apikey", s.auth.Require(s.handleStoreAPIKey))
 	m.HandleFunc("GET /api/settings/models", s.auth.Require(s.handleModels))
 	m.HandleFunc("GET /api/costs", s.auth.Require(s.handleCosts))
+	m.HandleFunc("GET /api/settings/orchestration", s.auth.Require(s.handleGetOrchestration))
+	m.HandleFunc("POST /api/settings/orchestration", s.auth.Require(s.handleSaveOrchestration))
 
 	m.HandleFunc("GET /", s.handleStatic)
 }

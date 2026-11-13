@@ -61,6 +61,11 @@ func main() {
 			log.Printf("console: auto-login setup failed: %v", err)
 		} else {
 			url = fmt.Sprintf("http://%s/?fc_token=%s", addr, url)
+			if !hasEnabledProvider(cfg) {
+				// First run: land directly in the guided setup wizard.
+				url += "&onboard=1"
+				log.Printf("console: no LLM provider configured — opening onboarding wizard")
+			}
 			go openDefaultBrowser(url)
 		}
 	}
@@ -68,6 +73,17 @@ func main() {
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatalf("console: server stopped: %v", err)
 	}
+}
+
+// hasEnabledProvider reports whether at least one LLM provider is configured
+// and enabled — false means first-run guided setup should open.
+func hasEnabledProvider(cfg *config.Config) bool {
+	for i := range cfg.Provider {
+		if cfg.Provider[i].Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // armAutoLogin generates a one-time token and registers it with the server.
