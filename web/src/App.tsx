@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
+  Cpu,
   Brain,
   ChevronDown,
   LayoutDashboard,
   LogOut,
   MessageSquare,
   Moon,
-  Settings as SettingsIcon,
+
   Send,
   Sun,
   Terminal,
@@ -23,7 +24,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type Conversation, type Message, type Provider } from "./api";
+import { api, streamPOST, type AgentInfo, type Conversation, type Message, type GatewayKey, type Provider } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -43,7 +44,7 @@ export default function App() {
 function Shell() {
   // undefined = session check in flight, null = logged out, string = logged in
   const [user, setUser] = useState<string | null | undefined>(undefined);
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useState<Page>("chat");
 
   useEffect(() => {
     // One-time auto-login token (console launched with --open puts it in the
@@ -131,9 +132,9 @@ function TopBar({
       <div className="flex items-center gap-4">
         <span className="font-semibold tracking-tight">fusion-console</span>
         <nav className="flex gap-1">
-          {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("chat", "Chat", MessageSquare)}
           {tab("agents", "Agents", Bot)}
+          {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("gateway", "Gateway", Network)}
         </nav>
       </div>
@@ -670,12 +671,30 @@ function GatewayPage() {
   const [err, setErr] = useState("");
   const [adminUser, setAdminUser] = useState("");
   const [adminPass, setAdminPass] = useState("");
-  const [gtab, setGtab] = useState<"cloud" | "llm">("cloud");
+  const [keys, setKeys] = useState<GatewayKey[]>([]);
+  const [brainModel, setBrainModel] = useState("");
+  const [gwModels, setGwModels] = useState<string[]>([]);
 
   const load = useCallback(() => {
     api.gatewayStatus().then(setStatus).catch((e) => setErr((e as Error).message));
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const loadKeys = useCallback(() => {
+    api.gatewayKeys().then((r) => setKeys(r.keys ?? [])).catch(() => setKeys([]));
+  }, []);
+  const loadBrainModel = useCallback(() => {
+    api.providers().then((r) => {
+      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled);
+      if (gw) setBrainModel(gw.model || "");
+    }).catch(() => {});
+    api.gatewayModels().then((r) => setGwModels(r.models ?? [])).catch(() => setGwModels([]));
+  }, []);
+  useEffect(() => {
+    if (!status?.reachable) return;
+    loadKeys();
+    loadBrainModel();
+  }, [status?.reachable, loadKeys, loadBrainModel]);
 
   const install = async () => {
     setBusy(true);
@@ -726,6 +745,8 @@ function GatewayPage() {
       const r = await api.provisionGatewayKey();
       setRawKey(r.raw_key || "");
       setMsg(`gateway API key ready (${r.key_prefix}...) — stored in the OS keychain`);
+      loadKeys();
+      loadBrainModel();
     } catch (ex) {
       setErr((ex as Error).message);
     } finally {
@@ -740,31 +761,35 @@ function GatewayPage() {
       setKeyCopied(false);
     }
   };
+  const deleteKey = async (name: string) => {
+    setMsg(""); setErr("");
+    try {
+      await api.deleteGatewayKey(name);
+      setMsg(`API key "${name}" deleted`);
+      loadKeys();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+  const saveBrainModel = async () => {
+    setMsg(""); setErr("");
+    try {
+      const r = await api.providers();
+      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled);
+      if (!gw) {
+        setErr("no gateway provider configured — create an API key first");
+        return;
+      }
+      await api.saveProvider({ ...gw, model: brainModel });
+      setMsg(`brain model set to ${brainModel}`);
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
       <h2 className="text-lg font-semibold">Gateway</h2>
-      <div className="flex gap-2">
-        {(
-          [
-            ["cloud", "Cloud providers"],
-            ["llm", "LLM providers"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setGtab(id)}
-            className={`rounded-xl border px-3 py-1.5 text-sm transition-colors ${
-              gtab === id ? "border-indigo-500 bg-indigo-500/5 text-indigo-600 dark:text-indigo-400" : "border-zinc-200/80 text-zinc-500 dark:border-zinc-800"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {gtab === "llm" && <LLMProvidersPanel />}
-      {gtab === "cloud" && (
-      <>
       <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between">
           <div>
@@ -791,6 +816,23 @@ function GatewayPage() {
         </Card>
       )}
 
+      {status?.reachable && gwModels.length > 0 && (
+        <Card className="space-y-3 p-4">
+          <h3 className="font-medium flex items-center gap-2"><Cpu size={16} /> Brain model</h3>
+          <p className="text-sm text-zinc-500">
+            Model the brain (chat planner) uses. Requests still go through the gateway —
+            pick any model exposed by the cloud providers above.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Select className="w-72" value={brainModel} onChange={(e) => setBrainModel(e.target.value)}>
+              {!brainModel && <option value="">choose model...</option>}
+              {gwModels.map((m) => <option key={m} value={m}>{m}</option>)}
+            </Select>
+            <Button onClick={saveBrainModel} disabled={!brainModel}>Save</Button>
+          </div>
+        </Card>
+      )}
+
       {!status?.reachable && (
         <Card className="space-y-3 p-4">
           <h3 className="font-medium flex items-center gap-2"><Download size={16} /> Install gateway</h3>
@@ -810,8 +852,7 @@ function GatewayPage() {
           <h3 className="font-medium flex items-center gap-2"><KeyRound size={16} /> Gateway admin login</h3>
           <p className="text-sm text-zinc-500">
             Save the gateway admin account here once — "Open Admin GUI" then signs in automatically,
-            no second login. Credentials live in the OS keychain. Also configure gateway as a chat
-            provider on the LLM providers tab (type <code>fusion-gateway</code>, base URL <code>{status.base_url}/v1</code>).
+            no second login. Credentials live in the OS keychain.
           </p>
           <div className="flex flex-wrap gap-2">
             <input
@@ -858,126 +899,33 @@ function GatewayPage() {
               </div>
             </div>
           )}
+          {keys.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-zinc-500">API keys in the gateway</p>
+              {keys.map((k) => (
+                <div key={k.name} className="flex items-center gap-2 text-xs">
+                  <span className="font-medium">{k.name}</span>
+                  {k.key_prefix && <span className="text-zinc-400">{k.key_prefix}…</span>}
+                  {k.in_use ? (
+                    <span className="ml-auto rounded-lg px-2 py-0.5 text-zinc-300 dark:text-zinc-600" title="This key is used by the console itself (chat, brain, workers). Deleting it would break the console.">
+                      in use
+                    </span>
+                  ) : (
+                    <button onClick={() => deleteKey(k.name)} title={`Delete API key ${k.name}`}
+                      className="ml-auto rounded-lg px-2 py-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
+                      delete
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
 
       {msg && <p className="text-sm text-indigo-500">{msg}</p>}
       {err && <p className="text-sm text-red-500">{err}</p>}
-      </>
-      )}
     </div>
   );
 }
 
-// LLMProvidersPanel manages the console's own chat/agent providers (the
-// entries the brain select and worker provider bindings point at). Formerly
-// the Settings page.
-function LLMProvidersPanel() {
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [draft, setDraft] = useState<Provider>({ id: "", name: "", type: "gateway", base_url: "http://127.0.0.1:11432/v1", model: "glm-5", api_key_id: "", enabled: true });
-  const [secret, setSecret] = useState("");
-  const [msg, setMsg] = useState("");
-  const [models, setModels] = useState<string[]>([]);
-
-  const load = () => api.providers().then((r) => setProviders(r.providers ?? [])).catch(() => {});
-  useEffect(() => { load(); }, []);
-
-  const save = async () => {
-    setMsg("");
-    try {
-      await api.saveProvider(draft);
-      await load();
-      setMsg(`provider ${draft.id} saved`);
-    } catch (ex) {
-      setMsg((ex as Error).message);
-    }
-  };
-
-  const storeKey = async () => {
-    setMsg("");
-    try {
-      await api.storeApiKey(draft.api_key_id, secret);
-      setSecret("");
-      setMsg(`api key ${draft.api_key_id} stored in OS keychain`);
-    } catch (ex) {
-      setMsg((ex as Error).message);
-    }
-  };
-
-  const fetchModels = async () => {
-    setMsg("");
-    setModels([]);
-    try {
-      const r = await api.models(draft.id);
-      setModels(r.models ?? []);
-    } catch (ex) {
-      setMsg((ex as Error).message);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="mb-2 text-lg font-semibold">LLM providers (brain & workers)</h2>
-        <div className="space-y-2">
-          {providers.map((p) => (
-            <Card key={p.id} className="flex items-center justify-between p-3 text-sm">
-              <div>
-                <p className="font-medium">{p.name || p.id} <Badge>{p.type}</Badge> {p.enabled ? "" : <Badge tone="warn">disabled</Badge>}</p>
-                <p className="text-xs text-zinc-500">{p.base_url} · model {p.model} · key ref {p.api_key_id || "—"}</p>
-              </div>
-              <Button variant="ghost" onClick={() => setDraft(p)}><SettingsIcon size={14} /></Button>
-            </Card>
-          ))}
-        </div>
-      </div>
-
-      <Card className="space-y-3 p-4">
-        <h3 className="font-medium">Edit / add provider</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <Input placeholder="id" value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
-          <Input placeholder="name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-          <Select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value as Provider["type"] })}>
-            <option value="gateway">fusion-gateway</option>
-            <option value="openai_compat">OpenAI-compatible (cloud)</option>
-            <option value="anthropic_compat">Anthropic-compatible (cloud)</option>
-          </Select>
-          <Input placeholder="base URL" value={draft.base_url} onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} />
-          <Input placeholder="model" value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })} />
-          <Input placeholder="api key id (keychain ref)" value={draft.api_key_id} onChange={(e) => setDraft({ ...draft, api_key_id: e.target.value })} />
-        </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
-          enabled
-        </label>
-        <div className="flex gap-2">
-          <Button onClick={save} disabled={!draft.id}>Save provider</Button>
-          <Button variant="outline" onClick={fetchModels} disabled={!draft.id}>Fetch models</Button>
-        </div>
-        {models.length > 0 && (
-          <Select
-            value={draft.model}
-            onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-          >
-            {models.map((m) => <option key={m} value={m}>{m}</option>)}
-          </Select>
-        )}
-      </Card>
-
-      <Card className="space-y-3 p-4">
-        <h3 className="font-medium flex items-center gap-2"><KeyRound size={16} /> API key (stored in OS keychain)</h3>
-        <div className="flex gap-2">
-          <Input
-            type="password"
-            placeholder="secret — stored via Keychain/DPAPI/libsecret, never in config"
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-          />
-          <Button onClick={storeKey} disabled={!draft.api_key_id || !secret}>Store</Button>
-        </div>
-      </Card>
-
-      {msg && <p className="text-sm text-indigo-500">{msg}</p>}
-    </div>
-  );
-}

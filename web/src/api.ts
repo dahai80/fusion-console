@@ -119,6 +119,14 @@ export const api = {
     req<{ backends: GatewayBackend[] }>("/api/gateway/backends"),
   addGatewayBackend: (b: { name: string; type: string; base_url: string; api_key: string; models: string[] }) =>
     req<{ ok: boolean }>("/api/gateway/backend", { method: "POST", body: JSON.stringify(b) }),
+  deleteGatewayBackend: (name: string) =>
+    req<{ ok: boolean }>(`/api/gateway/backend/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  gatewayKeys: () =>
+    req<{ keys: GatewayKey[] }>("/api/gateway/keys"),
+  deleteGatewayKey: (name: string) =>
+    req<{ ok: boolean }>(`/api/gateway/keys/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  gatewayModels: () =>
+    req<{ models: string[] }>("/api/gateway/models"),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>
@@ -144,6 +152,13 @@ export type GatewayBackend = {
   api_key: string;
   enabled: boolean;
   models: string[];
+};
+
+export type GatewayKey = {
+  name: string;
+  key_prefix?: string;
+  created_at?: string;
+  in_use?: boolean;
 };
 
 export type DashboardBucket = {

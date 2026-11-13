@@ -34,6 +34,17 @@ export function GatewayBackendsPanel({ compact = false }: { compact?: boolean })
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  const deleteBackend = async (name: string) => {
+    setErr(""); setMsg("");
+    try {
+      await api.deleteGatewayBackend(name);
+      setMsg(`backend "${name}" removed from the gateway`);
+      load();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+
   const addBackend = async () => {
     setBusy(true); setErr(""); setMsg("");
     try {
@@ -91,6 +102,10 @@ export function GatewayBackendsPanel({ compact = false }: { compact?: boolean })
               <Badge tone={b.enabled ? "ok" : "warn"}>{b.type}</Badge>
               <span className="text-zinc-400">{b.base_url}</span>
               {b.models?.length > 0 && <span className="text-zinc-400">models: {b.models.join(", ")}</span>}
+              <button onClick={() => deleteBackend(b.name)} title={`Remove backend ${b.name}`}
+                className="ml-auto rounded-lg px-2 py-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
+                remove
+              </button>
             </div>
           ))}
         </div>

@@ -65,6 +65,10 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/gateway/sso", s.auth.Require(s.handleGatewaySSO))
 	m.HandleFunc("GET /api/gateway/backends", s.auth.Require(s.handleGatewayBackends))
 	m.HandleFunc("POST /api/gateway/backend", s.auth.Require(s.handleGatewayBackendAdd))
+	m.HandleFunc("DELETE /api/gateway/backend/{name}", s.auth.Require(s.handleGatewayBackendDelete))
+	m.HandleFunc("GET /api/gateway/keys", s.auth.Require(s.handleGatewayKeys))
+	m.HandleFunc("DELETE /api/gateway/keys/{name}", s.auth.Require(s.handleGatewayKeyDelete))
+	m.HandleFunc("GET /api/gateway/models", s.auth.Require(s.handleGatewayModels))
 
 	m.HandleFunc("GET /api/conversations", s.auth.Require(s.handleListConversations))
 	m.HandleFunc("POST /api/conversations", s.auth.Require(s.handleCreateConversation))

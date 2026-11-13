@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -348,6 +349,183 @@ func (s *Server) gatewayAdminLogin(r *http.Request, base string) (string, error)
 		}
 	}
 	return "", fmt.Errorf("gateway login returned no session cookie")
+}
+
+// gatewayAdminDo performs an authenticated gateway admin API request with
+// the stored admin credentials and returns the upstream status code and
+// body. Shared by the backend/key management proxies.
+func (s *Server) gatewayAdminDo(r *http.Request, base, method, path string, payload any) (int, []byte, error) {
+	token, err := s.gatewayAdminLogin(r, base)
+	if err != nil {
+		return 0, nil, err
+	}
+	var body io.Reader
+	if payload != nil {
+		b, _ := json.Marshal(payload)
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(r.Context(), method, base+path, body)
+	if err != nil {
+		return 0, nil, err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Cookie", "admin_token="+token)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("gateway request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("gateway response read failed: %w", err)
+	}
+	return resp.StatusCode, data, nil
+}
+
+// handleGatewayKeys lists the API keys registered in the gateway
+// (GET /admin/api/keys proxied server-side).
+func (s *Server) handleGatewayKeys(w http.ResponseWriter, r *http.Request) {
+	base := s.gatewayBase()
+	code, data, err := s.gatewayAdminDo(r, base, http.MethodGet, "/admin/api/keys", nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if code != http.StatusOK {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway key list returned HTTP %d", code)})
+		return
+	}
+	var list []map[string]any
+	if err := json.Unmarshal(data, &list); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "gateway key list returned invalid JSON"})
+		return
+	}
+	// Normalize field names across gateway versions (older builds use
+	// id/key, newer use name/key_prefix) and mark the key the console
+	// itself uses (keychain "gateway-key") so the UI can block deleting it.
+	raw, rawErr := config.GetAPIKey("gateway-key")
+	for _, k := range list {
+		if v, ok := k["id"].(string); ok && k["name"] == nil {
+			k["name"] = v
+		}
+		if v, ok := k["key"].(string); ok && k["key_prefix"] == nil {
+			k["key_prefix"] = v
+		}
+		if rawErr == nil && raw != "" {
+			if prefix, _ := k["key_prefix"].(string); prefix != "" && strings.HasPrefix(raw, prefix) {
+				k["in_use"] = true
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keys": list})
+}
+
+// handleGatewayKeyDelete removes an API key from the gateway
+// (DELETE /admin/api/keys/{name} proxied server-side).
+func (s *Server) handleGatewayKeyDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "key name required"})
+		return
+	}
+	base := s.gatewayBase()
+	// Block deleting the key the console itself uses — chat, brain and
+	// workers would all lose their gateway credentials.
+	if raw, err := config.GetAPIKey("gateway-key"); err == nil && raw != "" {
+		code, data, derr := s.gatewayAdminDo(r, base, http.MethodGet, "/admin/api/keys", nil)
+		if derr == nil && code == http.StatusOK {
+			var list []map[string]any
+			if json.Unmarshal(data, &list) == nil {
+				for _, k := range list {
+					if kname, _ := k["name"].(string); kname == name {
+						prefix, _ := k["key_prefix"].(string)
+						if prefix == "" {
+							prefix, _ = k["key"].(string)
+						}
+						if prefix != "" && strings.HasPrefix(raw, prefix) {
+							writeJSON(w, http.StatusBadRequest, map[string]string{
+								"error": "this key is used by the console itself (chat, brain, workers) — it cannot be deleted here"})
+							return
+						}
+					}
+				}
+			}
+		}
+	}
+	code, _, err := s.gatewayAdminDo(r, base, http.MethodDelete, "/admin/api/keys/"+url.PathEscape(name), nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if code != http.StatusOK && code != http.StatusNoContent {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway key delete returned HTTP %d", code)})
+		return
+	}
+	log.Printf("server: gateway api key %s deleted", name)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleGatewayBackendDelete removes a cloud backend from the gateway config
+// (DELETE /admin/api/config/backends/{name} proxied server-side).
+func (s *Server) handleGatewayBackendDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "backend name required"})
+		return
+	}
+	base := s.gatewayBase()
+	code, _, err := s.gatewayAdminDo(r, base, http.MethodDelete, "/admin/api/config/backends/"+url.PathEscape(name), nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if code != http.StatusOK && code != http.StatusNoContent {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway backend delete returned HTTP %d", code)})
+		return
+	}
+	log.Printf("server: gateway backend %s deleted", name)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleGatewayModels lists the models the gateway exposes
+// (GET /v1/models with the stored gateway-key) so the UI can offer a brain
+// model picker without leaving the console.
+func (s *Server) handleGatewayModels(w http.ResponseWriter, r *http.Request) {
+	base := s.gatewayBase()
+	key, err := config.GetAPIKey("gateway-key")
+	if err != nil || key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "no gateway API key stored — create one first"})
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/v1/models", nil)
+	if err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway unreachable: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&out) != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway models returned HTTP %d", resp.StatusCode)})
+		return
+	}
+	ids := make([]string, 0, len(out.Data))
+	for _, m := range out.Data {
+		ids = append(ids, m.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": ids})
 }
 
 // handleGatewayBackends lists the backends configured in the gateway

@@ -21,7 +21,7 @@ REM 1. One-time: replace the packaged bootstrap JWT secret with a random one.
 if exist "%HERE%\config.yaml" (
     findstr /c:"FUSION-CONSOLE-BOOTSTRAP-SECRET-0000" "%HERE%\config.yaml" >nul 2>&1
     if not errorlevel 1 (
-        powershell -NoProfile -Command "$s=-join((1..64)|%%{'{0:x}' -f (Get-Random -Max 16)}); (Get-Content -LiteralPath '%HERE%\config.yaml') -replace 'FUSION-CONSOLE-BOOTSTRAP-SECRET-00000000000000000000000000000000', $s | Set-Content -LiteralPath '%HERE%\config.yaml'"
+        powershell -NoProfile -Command "$s=-join((1..64)|%%{'{0:x}' -f (Get-Random -Max 16)}); (Get-Content -LiteralPath '%HERE%\config.yaml') -replace 'FUSION-CONSOLE-BOOTSTRAP-SECRET-00000000000000000000000000000000', $s | Set-Content -Encoding ascii -LiteralPath '%HERE%\config.yaml'"
         echo [startup] gateway jwt secret generated in config.yaml
     )
 )
@@ -32,7 +32,11 @@ if "%GW_CFG%"=="" set "GW_CFG=%FUSION_GATEWAY_CONFIG%"
 if "%GW_CFG%"=="" if exist "%HERE%\config.yaml" set "GW_CFG=%HERE%\config.yaml"
 if "%GW_CFG%"=="" if exist "%USERPROFILE%\.fusion-gateway\config.yaml" set "GW_CFG=%USERPROFILE%\.fusion-gateway\config.yaml"
 
-netstat -ano | findstr /r ":11432 .*LISTENING" >nul 2>&1
+REM findstr /r treats spaces as pattern separators (OR), which made
+REM ".*LISTENING" alone match every netstat line — the script then believed
+REM both services were "already running" and started nothing. Two-stage
+REM substring filters avoid that trap.
+netstat -ano | findstr ":11432" | findstr "LISTENING" >nul 2>&1
 if !errorlevel! equ 0 (
     echo [startup] gateway already running on :11432
     goto console
@@ -48,7 +52,7 @@ if "%GW_CFG%"=="" (
 echo [startup] starting fusion-gateway on :11432 - config %GW_CFG%
 start "" /b "%GATEWAY_BIN%" -config "%GW_CFG%" > "%LOGDIR%\gateway.log" 2>&1
 timeout /t 2 /nobreak >nul
-netstat -ano | findstr /r ":11432 .*LISTENING" >nul 2>&1
+netstat -ano | findstr ":11432" | findstr "LISTENING" >nul 2>&1
 if errorlevel 1 (
     echo [startup] WARNING: gateway did not open :11432 - check %LOGDIR%\gateway.log
 ) else (
@@ -57,7 +61,7 @@ if errorlevel 1 (
 
 :console
 REM 3. Console in the foreground; -open launches the default browser.
-netstat -ano | findstr /r ":11480 .*LISTENING" >nul 2>&1
+netstat -ano | findstr ":11480" | findstr "LISTENING" >nul 2>&1
 if !errorlevel! equ 0 (
     echo [startup] console already running - open http://127.0.0.1:11480
     pause
@@ -69,9 +73,10 @@ if not exist "%CONSOLE_BIN%" (
     goto end
 )
 echo [startup] starting fusion-console on http://127.0.0.1:11480 - browser opens automatically
-echo [startup] (console logs stream below; keep this window open - closing it stops the console^)
-"%CONSOLE_BIN%" -open
-echo [startup] console exited unexpectedly
+echo [startup] (console output goes to %LOGDIR%\console.log; keep this window open - closing it stops the console^)
+"%CONSOLE_BIN%" -open > "%LOGDIR%\console.log" 2>&1
+echo [startup] console exited - last 40 log lines:
+powershell -NoProfile -Command "Get-Content -LiteralPath '%LOGDIR%\console.log' -Tail 40"
 pause
 
 :end
