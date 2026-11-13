@@ -316,7 +316,13 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
             {status?.reachable ? <Badge tone="ok">running</Badge> : <Badge tone="warn">not reachable</Badge>}
           </p>
           <p className="mt-1 text-xs text-zinc-500">
-            {status?.installed ? `bundled binary installed: ${status.binary}` : "binary not installed yet"}
+            {status?.reachable
+              ? status.installed
+                ? `binary: ${status.binary}`
+                : "gateway detected on :11432 — no install needed"
+              : status?.installed
+                ? "binary present but not responding — start it or check its config"
+                : "binary not installed yet"}
           </p>
         </div>
         {!status?.reachable && (

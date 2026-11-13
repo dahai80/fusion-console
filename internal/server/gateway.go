@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -64,27 +65,52 @@ func bundledGatewayPath() string {
 	return p
 }
 
+// gatewayPortOpen probes the gateway TCP port directly (IPv4 and IPv6
+// loopback). Gateways vary across versions in which HTTP routes they expose,
+// so the port is the authoritative "is something running" signal.
+func gatewayPortOpen(hostBase string) bool {
+	host, port := "127.0.0.1", "11432"
+	if h, p, err := net.SplitHostPort(strings.TrimPrefix(strings.TrimPrefix(hostBase, "http://"), "https://")); err == nil && h != "" {
+		host, port = h, p
+	}
+	hosts := []string{host}
+	if host == "localhost" {
+		hosts = []string{"127.0.0.1", "::1"}
+	}
+	for _, h := range hosts {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(h, port), 400*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+	}
+	return false
+}
+
 // handleGatewayStatus probes the gateway health endpoint and reports admin
 // GUI reachability.
 func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	base := s.gatewayBase()
 	adminURL := base + "/admin/"
-	reachable := false
+	portOpen := gatewayPortOpen(base)
+	reachable := portOpen
+	httpOK := false
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(base + "/api/health")
 	if err == nil {
 		resp.Body.Close()
-		reachable = resp.StatusCode == http.StatusOK
+		httpOK = resp.StatusCode == http.StatusOK
 	}
 	// Health route may 404 or differ across versions; any HTTP response on
 	// the root means something is listening.
-	if !reachable {
+	if !httpOK {
 		resp2, err2 := client.Get(base + "/")
 		if err2 == nil {
 			resp2.Body.Close()
-			reachable = true
+			httpOK = resp2.StatusCode < 500
 		}
 	}
+	reachable = reachable || httpOK
 	installed := false
 	bundled := bundledGatewayPath() != ""
 	if bundled {
@@ -96,6 +122,8 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 		"base_url":  base,
 		"admin_url": adminURL,
 		"reachable": reachable,
+		"port_open": portOpen,
+		"http_ok":   httpOK,
 		"installed": installed,
 		"bundled":   bundled,
 		"binary":    gatewayBinaryPath(),
