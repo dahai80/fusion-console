@@ -77,9 +77,8 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   return (
     <Card className="space-y-4 p-6">
       <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-300">
-        This wizard walks through four decisions. Nothing here is hidden in config files — every value
-        lands in <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">config.json</code> or the OS
-        keychain, and can be changed later under Settings.
+        This wizard walks through four decisions. Nothing here is hidden in config files —          lands in <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">config.json</code> or the OS
+        keychain, and can be changed later on the Gateway and Agents pages.
       </p>
       <ul className="space-y-2 text-sm">
         {[
@@ -285,7 +284,7 @@ function KeyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
       </div>
       <p className="text-xs text-zinc-400">
         Recommended path: everything (brain + workers) goes through the gateway with this key,
-        so token usage is tracked in one place. Direct cloud providers can still be added in Settings as an escape hatch.
+        so token usage is tracked in one place. Direct cloud providers can still be added on the Gateway page as an escape hatch.
       </p>
     </Card>
   );
@@ -425,7 +424,7 @@ function VerifyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
       {sample && <pre className="max-h-32 overflow-auto rounded-lg bg-zinc-50 p-2 text-xs dark:bg-zinc-900">{sample}</pre>}
       {msg && <p className="text-sm text-emerald-600 dark:text-emerald-400">{msg}</p>}
       {err && <p className="text-sm text-red-500">{err}</p>}
-      <p className="text-xs text-zinc-400">The test call runs against the brain provider saved in Settings.</p>
+      <p className="text-xs text-zinc-400">The test call runs against the brain provider saved on the Gateway page.</p>
     </Card>
   );
 }
@@ -440,7 +439,7 @@ function DoneStep({ onDone }: { onDone: () => void }) {
       <ul className="space-y-1 text-sm text-zinc-600 dark:text-zinc-300">
         <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> LLM provider saved (key in OS keychain)</li>
         <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> Gateway status checked — startup.sh keeps both processes up</li>
-        <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> Brain & workers stored — every value editable under Settings later</li>
+        <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> Brain & workers stored — every value editable on the Gateway and Agents pages later</li>
       </ul>
       <p className="text-xs text-zinc-400">
         Tip: flip the `orchestrate` toggle in chat to let the brain dispatch the workers you just

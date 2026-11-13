@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
   Brain,
+  ChevronDown,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -29,7 +30,7 @@ import { WorkersPanel } from "./WorkersPanel";
 import Dashboard from "./Dashboard";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "settings" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "onboard";
 
 export default function App() {
   return (
@@ -97,7 +98,6 @@ function Shell() {
         {page === "chat" && <ChatPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
-        {page === "settings" && <SettingsPage />}
       </main>
     </div>
   );
@@ -135,19 +135,91 @@ function TopBar({
           {tab("chat", "Chat", MessageSquare)}
           {tab("agents", "Agents", Bot)}
           {tab("gateway", "Gateway", Network)}
-          {tab("settings", "Settings", SettingsIcon)}
         </nav>
       </div>
       <div className="flex items-center gap-2 text-sm text-zinc-500">
         <button onClick={toggle} className="rounded-xl p-2 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
           {dark ? <Sun size={16} /> : <Moon size={16} />}
         </button>
-        <span className="hidden sm:inline">{user}</span>
-        <button onClick={onLogout} className="rounded-xl p-2 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
-          <LogOut size={16} />
-        </button>
+        <UserMenu user={user} onLogout={onLogout} />
       </div>
     </header>
+  );
+}
+
+// UserMenu is the top-right account dropdown. Besides logout it offers the
+// wizard's one-click gateway API key creation so users who skipped the
+// wizard can mint (and copy) a key from any page.
+function UserMenu({ user, onLogout }: { user: string; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [rawKey, setRawKey] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState("");
+
+  const provision = async () => {
+    setBusy(true); setErr(""); setRawKey(""); setCopied(false);
+    try {
+      const r = await api.provisionGatewayKey();
+      setRawKey(r.raw_key || "");
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(rawKey);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => { setOpen(!open); if (!open) { setRawKey(""); setErr(""); } }}
+        className="flex items-center gap-1 rounded-xl px-2 py-1.5 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
+      >
+        <span className="hidden sm:inline">{user}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div className="absolute right-0 z-50 mt-1 w-80 rounded-xl border border-zinc-200/80 bg-white p-3 shadow-md shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-900">
+          {rawKey ? (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                Copy and save this key now — it is shown only once (the console keeps its copy in the OS keychain).
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-lg bg-zinc-100 px-2 py-1.5 font-mono text-xs dark:bg-zinc-800">{rawKey}</code>
+                <Button variant="outline" onClick={copy} disabled={copied}>
+                  {copied ? "copied" : "Copy"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Button onClick={provision} disabled={busy} className="w-full">
+                {busy ? "Creating..." : "Create API key"}
+              </Button>
+              <p className="text-xs text-zinc-400">
+                Issues a gateway API key via one click (stored in the OS keychain). Also available on the Gateway page.
+              </p>
+            </div>
+          )}
+          {err && <p className="mt-2 text-xs text-red-500">{err}</p>}
+          <button
+            onClick={onLogout}
+            className="mt-2 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            <LogOut size={14} /> Sign out
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -166,7 +238,7 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
       setUser(h.user || "admin");
       if (h.factory_default) {
         setPassword("fusion-admin-2026");
-        setHint("factory password prefilled — change it under Settings after first login");
+        setHint("factory password prefilled");
       }
     }).catch(() => setUser("admin"));
   }, []);
@@ -535,34 +607,58 @@ function ChatPage() {
 
 function AgentsPage() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [tab, setTab] = useState<"tools" | "workers">("tools");
   const load = () => api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
   useEffect(() => { load(); }, []);
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Coding agents</h2>
-        <Button variant="ghost" onClick={load}><RefreshCw size={14} /> Refresh</Button>
+        {tab === "tools" && <Button variant="ghost" onClick={load}><RefreshCw size={14} /> Refresh</Button>}
       </div>
-      <p className="text-sm text-zinc-500">
-        Headless adapters only — each run is one task in the chosen workdir. Agents missing from PATH are grayed out.
-      </p>
-      {agents.map((a) => (
-        <Card key={a.name} className={`flex items-center justify-between p-4 ${!a.detected ? "opacity-50" : ""}`}>
-          <div>
-            <p className="font-medium flex items-center gap-2">
-              <Terminal size={16} /> {a.name}
-              {a.detected ? <Badge tone="ok">detected</Badge> : <Badge>not on PATH</Badge>}
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">
-              command: {a.command} · permission mode: {a.permission_mode} · budget cap ${a.max_budget_usd.toFixed(2)}
-            </p>
-          </div>
+      <div className="flex gap-2">
+        {(
+          [
+            ["tools", "Agents (tools)"],
+            ["workers", "Workers"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`rounded-xl border px-3 py-1.5 text-sm transition-colors ${
+              tab === id ? "border-indigo-500 bg-indigo-500/5 text-indigo-600 dark:text-indigo-400" : "border-zinc-200/80 text-zinc-500 dark:border-zinc-800"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "tools" && (
+        <>
+          <p className="text-sm text-zinc-500">
+            Headless adapters only — each run is one task in the chosen workdir. Agents missing from PATH are grayed out.
+          </p>
+          {agents.map((a) => (
+            <Card key={a.name} className={`flex items-center justify-between p-4 ${!a.detected ? "opacity-50" : ""}`}>
+              <div>
+                <p className="font-medium flex items-center gap-2">
+                  <Terminal size={16} /> {a.name}
+                  {a.detected ? <Badge tone="ok">detected</Badge> : <Badge>not on PATH</Badge>}
+                </p>
+                <p className="text-xs text-zinc-500 mt-1">
+                  command: {a.command} · permission mode: {a.permission_mode} · budget cap ${a.max_budget_usd.toFixed(2)}
+                </p>
+              </div>
+            </Card>
+          ))}
+        </>
+      )}
+      {tab === "workers" && (
+        <Card className="space-y-3 p-4">
+          <WorkersPanel />
         </Card>
-      ))}
-      <Card className="space-y-3 p-4">
-        <h3 className="font-medium">Workers</h3>
-        <WorkersPanel />
-      </Card>
+      )}
     </div>
   );
 }
@@ -574,6 +670,7 @@ function GatewayPage() {
   const [err, setErr] = useState("");
   const [adminUser, setAdminUser] = useState("");
   const [adminPass, setAdminPass] = useState("");
+  const [gtab, setGtab] = useState<"cloud" | "llm">("cloud");
 
   const load = useCallback(() => {
     api.gatewayStatus().then(setStatus).catch((e) => setErr((e as Error).message));
@@ -646,7 +743,28 @@ function GatewayPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
-      <h2 className="text-lg font-semibold">fusion-gateway</h2>
+      <h2 className="text-lg font-semibold">Gateway</h2>
+      <div className="flex gap-2">
+        {(
+          [
+            ["cloud", "Cloud providers"],
+            ["llm", "LLM providers"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setGtab(id)}
+            className={`rounded-xl border px-3 py-1.5 text-sm transition-colors ${
+              gtab === id ? "border-indigo-500 bg-indigo-500/5 text-indigo-600 dark:text-indigo-400" : "border-zinc-200/80 text-zinc-500 dark:border-zinc-800"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {gtab === "llm" && <LLMProvidersPanel />}
+      {gtab === "cloud" && (
+      <>
       <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between">
           <div>
@@ -693,7 +811,7 @@ function GatewayPage() {
           <p className="text-sm text-zinc-500">
             Save the gateway admin account here once — "Open Admin GUI" then signs in automatically,
             no second login. Credentials live in the OS keychain. Also configure gateway as a chat
-            provider under Settings (type <code>fusion-gateway</code>, base URL <code>{status.base_url}/v1</code>).
+            provider on the LLM providers tab (type <code>fusion-gateway</code>, base URL <code>{status.base_url}/v1</code>).
           </p>
           <div className="flex flex-wrap gap-2">
             <input
@@ -745,11 +863,16 @@ function GatewayPage() {
 
       {msg && <p className="text-sm text-indigo-500">{msg}</p>}
       {err && <p className="text-sm text-red-500">{err}</p>}
+      </>
+      )}
     </div>
   );
 }
 
-function SettingsPage() {
+// LLMProvidersPanel manages the console's own chat/agent providers (the
+// entries the brain select and worker provider bindings point at). Formerly
+// the Settings page.
+function LLMProvidersPanel() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [draft, setDraft] = useState<Provider>({ id: "", name: "", type: "gateway", base_url: "http://127.0.0.1:11432/v1", model: "glm-5", api_key_id: "", enabled: true });
   const [secret, setSecret] = useState("");
@@ -793,9 +916,9 @@ function SettingsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
+    <div className="space-y-4">
       <div>
-        <h2 className="mb-2 text-lg font-semibold">Providers</h2>
+        <h2 className="mb-2 text-lg font-semibold">LLM providers (brain & workers)</h2>
         <div className="space-y-2">
           {providers.map((p) => (
             <Card key={p.id} className="flex items-center justify-between p-3 text-sm">

@@ -1,8 +1,8 @@
 # Fusion-Gateway minimal configuration, shipped with fusion-console packages
-# (based on fusion-gateway config.simple.yaml, plan §13.3).
+# (based on fusion-gateway config.simple.yaml, plan section 13.3).
 #
 # Everything not listed here has a sane built-in default. A new cloud
-# backend needs only `type` + `api_key_env` — the vendor table fills the
+# backend needs only `type` + `api_key_env` - the vendor table fills the
 # base_url and timeout. Full knob reference: config.yaml + README.
 
 server:
@@ -64,7 +64,7 @@ routing:
     token_threshold: 8000
     # routing.default_model, routing.cloud_models and
     # routing.fallback.model_mapping keep their existing semantics; see
-    # README § Model Identity.
+    # README section "Model Identity".
 
 # Request persistence to PostgreSQL: off in the shipped config so the
 # gateway starts with zero external dependencies. To enable, set enabled
