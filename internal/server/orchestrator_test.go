@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dahai80/fusion-console/internal/auth"
 	"github.com/dahai80/fusion-console/internal/config"
 )
 
@@ -98,5 +100,37 @@ func TestApprovalEndpoint(t *testing.T) {
 	s.mux.ServeHTTP(rec, req)
 	if rec.Code != 404 {
 		t.Errorf("replayed approval status = %d, want 404", rec.Code)
+	}
+}
+
+func TestAuthHintLoopbackOnly(t *testing.T) {
+	s := New(&config.Config{Server: config.ServerConfig{DataDir: t.TempDir()}}, t.TempDir(), nil)
+	hash, err := auth.HashPassword("fusion-admin-2026")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	s.cfg.Users = []config.UserEntry{{Name: "admin", PasswordHash: hash}}
+
+	// loopback: factory default active -> prefill allowed
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/auth/hint", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	s.handleAuthHint(rec, req)
+	var hint struct {
+		FactoryDefault bool `json:"factory_default"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&hint)
+	if !hint.FactoryDefault {
+		t.Error("loopback + factory password: expected factory_default=true")
+	}
+
+	// remote: never prefill, even with factory password unchanged
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/auth/hint", nil)
+	req.RemoteAddr = "10.1.2.3:5000"
+	s.handleAuthHint(rec, req)
+	_ = json.NewDecoder(rec.Body).Decode(&hint)
+	if hint.FactoryDefault {
+		t.Error("remote request must not reveal factory password state")
 	}
 }

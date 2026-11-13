@@ -19,8 +19,8 @@ type StepId = "welcome" | "llm" | "gateway" | "brain" | "workers" | "done";
 
 const STEPS: { id: StepId; label: string; icon: typeof Brain }[] = [
   { id: "welcome", label: "Welcome", icon: Sparkles },
-  { id: "llm", label: "LLM", icon: Cloud },
   { id: "gateway", label: "Gateway", icon: Network },
+  { id: "llm", label: "LLM", icon: Cloud },
   { id: "brain", label: "Brain", icon: Brain },
   { id: "workers", label: "Workers", icon: Bot },
   { id: "done", label: "Done", icon: Check },
@@ -58,9 +58,9 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
         </ol>
       </header>
       <div className="flex-1 overflow-y-auto">
-        {step === "welcome" && <WelcomeStep onNext={() => setStep("llm")} />}
-        {step === "llm" && <LlmStep onNext={() => setStep("gateway")} onSkip={() => setStep("gateway")} />}
-        {step === "gateway" && <GatewayStep onNext={() => setStep("brain")} onSkip={() => setStep("brain")} />}
+        {step === "welcome" && <WelcomeStep onNext={() => setStep("gateway")} />}
+        {step === "gateway" && <GatewayStep onNext={() => setStep("llm")} onSkip={() => setStep("llm")} />}
+        {step === "llm" && <LlmStep onNext={() => setStep("brain")} onSkip={() => setStep("brain")} />}
         {step === "brain" && <BrainStep onNext={() => setStep("workers")} onSkip={() => setStep("workers")} />}
         {step === "workers" && <WorkersStep onNext={() => setStep("done")} onSkip={() => setStep("done")} />}
         {step === "done" && <DoneStep onDone={onDone} />}
@@ -201,18 +201,36 @@ function LlmStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
           <Input value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })} placeholder="e.g. glm-5 / gpt-… / claude-…" />
         </label>
       </div>
-      <label className="flex items-center gap-2 text-sm">
-        <Cpu size={14} className="text-zinc-400" />
-        <Input className="flex-1" placeholder="api key id (keychain ref)" value={draft.api_key_id}
-          onChange={(e) => setDraft({ ...draft, api_key_id: e.target.value })} />
-        <Input className="flex-1" type="password" placeholder="secret → OS keychain" value={secret}
-          onChange={(e) => setSecret(e.target.value)} />
-      </label>
-      <p className="text-xs text-zinc-400">
-        Headless host without a keychain? Skip the secret here and export{" "}
-        <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">FUSION_CONSOLE_APIKEY_{draft.api_key_id ? draft.api_key_id.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "&lt;KEY_ID&gt;"}</code>{" "}
-        before starting the console.
-      </p>
+      {type === "gateway" ? (
+        <div className="space-y-2 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
+          <p className="text-sm font-medium">Gateway API key</p>
+          <p className="text-xs text-zinc-500">
+            Provisioned automatically in the previous step and stored in the OS keychain as{" "}
+            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">gateway-key</code>. Missing it?
+            Go back to the Gateway step (or open the Gateway admin GUI and paste a key below).
+          </p>
+          <label className="flex items-center gap-2 text-xs text-zinc-500">
+            paste key instead (optional)
+            <Input className="flex-1" type="password" placeholder="sk-…" value={secret}
+              onChange={(e) => setSecret(e.target.value)} />
+          </label>
+        </div>
+      ) : (
+        <>
+          <label className="flex items-center gap-2 text-sm">
+            <Cpu size={14} className="text-zinc-400" />
+            <Input className="flex-1" placeholder="api key id (keychain ref)" value={draft.api_key_id}
+              onChange={(e) => setDraft({ ...draft, api_key_id: e.target.value })} />
+            <Input className="flex-1" type="password" placeholder="secret → OS keychain" value={secret}
+              onChange={(e) => setSecret(e.target.value)} />
+          </label>
+          <p className="text-xs text-zinc-400">
+            Headless host without a keychain? Skip the secret here and export{" "}
+            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">FUSION_CONSOLE_APIKEY_{draft.api_key_id ? draft.api_key_id.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "&lt;KEY_ID&gt;"}</code>{" "}
+            before starting the console.
+          </p>
+        </>
+      )}
 
       {models.length > 0 && (
         <Select value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })}>
@@ -236,6 +254,9 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
   const [status, setStatus] = useState<Awaited<ReturnType<typeof api.gatewayStatus>> | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [adminUser, setAdminUser] = useState("");
+  const [adminPass, setAdminPass] = useState("");
 
   const load = useCallback(() => {
     api.gatewayStatus().then(setStatus).catch(() => setStatus(null));
@@ -243,13 +264,39 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
   useEffect(() => { load(); }, [load]);
 
   const install = async () => {
-    setBusy(true); setMsg("");
+    setBusy(true); setMsg(""); setErr("");
     try {
       const r = await api.gatewayInstall();
       setMsg(`${r.note} (v${r.version})`);
       load();
     } catch (ex) {
-      setMsg((ex as Error).message);
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveAdminCreds = async () => {
+    setMsg(""); setErr("");
+    try {
+      await api.storeApiKey("gateway-admin-user", adminUser);
+      await api.storeApiKey("gateway-admin-pass", adminPass);
+      setMsg("gateway admin credentials saved (OS keychain)");
+      setAdminPass("");
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+
+  // One click: gateway admin login + key creation, raw key lands in the
+  // keychain under "gateway-key" — the LLM step then needs nothing typed.
+  const provisionKey = async () => {
+    setMsg(""); setErr(""); setBusy(true);
+    try {
+      const r = await api.provisionGatewayKey();
+      setMsg(`gateway API key ready (${r.key_prefix}…) — the LLM step will use it automatically`);
+    } catch (ex) {
+      setErr((ex as Error).message);
     } finally {
       setBusy(false);
     }
@@ -258,9 +305,9 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
   return (
     <Card className="space-y-4 p-6">
       <p className="text-sm text-zinc-600 dark:text-zinc-300">
-        The matching <strong>fusion-gateway</strong> binary ships inside the console package.
-        <code className="mx-1 rounded bg-zinc-100 px-1 dark:bg-zinc-800">scripts/start.sh</code> starts
-        gateway + console together and opens this wizard in the browser.
+        The matching <strong>fusion-gateway</strong> binary ships inside the console package and is
+        started together with the console (by <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">start.sh</code>{" "}
+        or automatically on launch).
       </p>
       <div className="flex items-center justify-between rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
         <div className="text-sm">
@@ -278,7 +325,29 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
           </Button>
         )}
       </div>
+
+      {status?.reachable && (
+        <div className="space-y-3 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
+          <p className="text-sm font-medium">Gateway admin & API key</p>
+          <p className="text-xs text-zinc-500">
+            Save the gateway admin account once, then provision the API key the console will use for
+            chat — no copy-paste from the admin GUI needed.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Input className="w-44" placeholder="admin username" value={adminUser}
+              onChange={(e) => setAdminUser(e.target.value)} />
+            <Input className="w-44" type="password" placeholder="admin password" value={adminPass}
+              onChange={(e) => setAdminPass(e.target.value)} />
+            <Button variant="outline" onClick={saveAdminCreds} disabled={!adminUser || !adminPass}>
+              Save credentials
+            </Button>
+            <Button onClick={provisionKey} disabled={busy}>Provision API key</Button>
+          </div>
+        </div>
+      )}
+
       {msg && <p className="text-sm text-indigo-500">{msg}</p>}
+      {err && <p className="text-sm text-red-500">{err}</p>}
       <div className="flex gap-2">
         <Button onClick={onNext}>Continue <ArrowRight size={14} /></Button>
         <Button variant="ghost" onClick={onSkip}>Skip</Button>
@@ -446,8 +515,8 @@ function DoneStep({ onDone }: { onDone: () => void }) {
         <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> Brain & workers stored — every value editable under Settings later</li>
       </ul>
       <p className="text-xs text-zinc-400">
-        Prototype note: the brain/workers section persists decisions only — the architect session and the
-        issue-driven dispatch loop land after review (see the Fleet plan).
+        Tip: flip the `orchestrate` toggle in chat to let the brain dispatch the workers you just
+        configured (confirm mode asks you per dispatch).
       </p>
       <Button onClick={onDone}>Open chat <ArrowRight size={14} /></Button>
     </Card>

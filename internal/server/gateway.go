@@ -171,6 +171,88 @@ func (s *Server) handleGatewaySSO(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleGatewayKeyProvision creates a fusion-gateway API key for the console
+// via the gateway admin API (login with the stored admin credentials, then
+// POST /admin/api/keys) and stores the raw key in the OS keychain under
+// "gateway-key". This removes the manual "open admin GUI, create a key, copy
+// it back" loop from onboarding.
+func (s *Server) handleGatewayKeyProvision(w http.ResponseWriter, r *http.Request) {
+	base := s.gatewayBase()
+	user, err := config.GetAPIKey("gateway-admin-user")
+	if err != nil || user == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "gateway admin username not set — save it on the Gateway page first"})
+		return
+	}
+	pass, err := config.GetAPIKey("gateway-admin-pass")
+	if err != nil || pass == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "gateway admin password not set — save it on the Gateway page first"})
+		return
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+"/admin/api/login", bytes.NewReader(body))
+	if err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway unreachable: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": fmt.Sprintf("gateway admin login failed (HTTP %d)", resp.StatusCode)})
+		return
+	}
+	var token string
+	for _, c := range resp.Cookies() {
+		if c.Name == "admin_token" && c.Value != "" {
+			token = c.Value
+		}
+	}
+	if token == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "gateway login returned no session cookie"})
+		return
+	}
+
+	keyBody, _ := json.Marshal(map[string]any{"name": fmt.Sprintf("fusion-console-%d", time.Now().Unix())})
+	req2, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+"/admin/api/keys", bytes.NewReader(keyBody))
+	if err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Cookie", "admin_token="+token)
+	resp2, err := client.Do(req2)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("key creation request failed: %v", err)})
+		return
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusCreated {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway key creation returned HTTP %d", resp2.StatusCode)})
+		return
+	}
+	var created struct {
+		RawKey    string `json:"raw_key"`
+		KeyPrefix string `json:"key_prefix"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&created); err != nil || created.RawKey == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "gateway key creation returned no raw key"})
+		return
+	}
+	if err := config.StoreAPIKey("gateway-key", created.RawKey); err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	log.Printf("server: gateway api key provisioned (prefix %s)", created.KeyPrefix)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key_id": "gateway-key", "key_prefix": created.KeyPrefix})
+}
+
 // handleGatewayInstall downloads the latest fusion-gateway release for the
 // current platform into ~/.fusion-console/bin and extracts the binary.
 func (s *Server) handleGatewayInstall(w http.ResponseWriter, r *http.Request) {

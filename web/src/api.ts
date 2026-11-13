@@ -64,6 +64,9 @@ export const api = {
   autoLogin: (token: string) =>
     req<{ user: string }>("/api/autologin", { method: "POST", body: JSON.stringify({ token }) }),
   logout: () => req<{ ok: boolean }>("/api/logout", { method: "POST" }),
+  authHint: () => req<{ user: string; factory_default: boolean }>("/api/auth/hint"),
+  provisionGatewayKey: () =>
+    req<{ ok: boolean; key_id: string; key_prefix: string }>("/api/gateway/key", { method: "POST" }),
   me: () => req<{ user: string }>("/api/me"),
   conversations: () => req<{ conversations: Conversation[] }>("/api/conversations"),
   createConversation: (title: string, kind: "chat" | "agent", agentName = "", workdir = "") =>

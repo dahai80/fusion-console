@@ -58,26 +58,27 @@ function Shell() {
           .catch(() => null)
           .finally(stripToken)
       : api.me().then((r) => r.user).catch(() => null);
-    boot.then((u) => {
-      setUser(u);
-      // Guided setup: explicit ?onboard=1 (first run opens it server-side) or
-      // a logged-in session with no enabled provider at all.
-      if (u && (new URLSearchParams(window.location.search).get("onboard") === "1")) {
-        setPage("onboard");
-        return;
-      }
-      if (u) {
-        api.providers().then((r) => {
-          if (!(r.providers ?? []).some((p) => p.enabled)) {
-            setPage("onboard");
-          }
-        }).catch(() => {});
-      }
-    });
+    boot.then((u) => setUser(u));
     const onLogout = () => setUser(null);
     window.addEventListener("fc:logout", onLogout);
     return () => window.removeEventListener("fc:logout", onLogout);
   }, []);
+
+  // Guided setup: explicit ?onboard=1 (first run opens it server-side) or a
+  // logged-in session with no enabled provider at all. Keyed on user so a
+  // manual login (no auto-login token) also triggers the wizard.
+  useEffect(() => {
+    if (!user) return;
+    if (new URLSearchParams(window.location.search).get("onboard") === "1") {
+      setPage("onboard");
+      return;
+    }
+    api.providers().then((r) => {
+      if (!(r.providers ?? []).some((p) => p.enabled)) {
+        setPage("onboard");
+      }
+    }).catch(() => {});
+  }, [user]);
 
   if (user === undefined) return <Splash />;
   if (!user) return <Login onDone={setUser} />;
@@ -148,10 +149,24 @@ function TopBar({
 }
 
 function Login({ onDone }: { onDone: (u: string) => void }) {
-  const [user, setUser] = useState("admin");
+  const [user, setUser] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hint, setHint] = useState("");
+
+  // Local convenience: when the admin still runs the factory password and the
+  // request is local, prefill both fields (server refuses to answer for
+  // non-loopback sessions).
+  useEffect(() => {
+    api.authHint().then((h) => {
+      setUser(h.user || "admin");
+      if (h.factory_default) {
+        setPassword("fusion-admin-2026");
+        setHint("factory password prefilled — change it under Settings after first login");
+      }
+    }).catch(() => setUser("admin"));
+  }, []);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -176,6 +191,7 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
           <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="user" autoFocus />
           <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="password" />
           {err && <p className="text-sm text-red-500">{err}</p>}
+          {hint && <p className="text-xs text-zinc-400">{hint}</p>}
           <Button type="submit" disabled={busy || !password} className="w-full">Sign in</Button>
         </form>
       </Card>

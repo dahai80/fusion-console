@@ -8,11 +8,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/dahai80/fusion-console/internal/auth"
 	"github.com/dahai80/fusion-console/internal/config"
@@ -24,7 +26,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.SetOutput(os.Stdout)
 
-	openBrowser := flag.Bool("open", false, "open the default browser with one-time auto-login after start")
+	openBrowser := flag.Bool("open", true, "open the default browser with one-time auto-login after start (use -open=false on headless hosts)")
 	flag.Parse()
 
 	dir := config.DefaultDir()
@@ -35,6 +37,11 @@ func main() {
 	if err := os.MkdirAll(cfg.Server.DataDir, 0o700); err != nil {
 		log.Fatalf("console: create data dir: %v", err)
 	}
+
+	// Desktop convenience: double-clicking the binary should bring up the
+	// full stack. Start the bundled sibling gateway when a config exists and
+	// :11432 is still free (start.sh does the same for script launches).
+	maybeStartGateway()
 
 	st, err := store.Open(filepath.Join(cfg.Server.DataDir, "console.db"))
 	if err != nil {
@@ -84,6 +91,60 @@ func hasEnabledProvider(cfg *config.Config) bool {
 		}
 	}
 	return false
+}
+
+// maybeStartGateway launches a fusion-gateway binary sitting next to the
+// console executable (the package layout) when a config.yaml is found and
+// nothing listens on :11432. Best-effort: any failure just logs.
+func maybeStartGateway() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	gwName := "fusion-gateway"
+	if runtime.GOOS == "windows" {
+		gwName += ".exe"
+	}
+	gw := filepath.Join(filepath.Dir(exe), gwName)
+	if fi, err := os.Stat(gw); err != nil || fi.IsDir() {
+		return // not bundled / not installed next to us
+	}
+	if conn, err := net.DialTimeout("tcp", "127.0.0.1:11432", 300*time.Millisecond); err == nil {
+		conn.Close()
+		log.Printf("console: gateway already running on :11432")
+		return
+	}
+	home, _ := os.UserHomeDir()
+	cfgCandidates := []string{
+		filepath.Join(filepath.Dir(exe), "config.yaml"),
+		filepath.Join(home, ".fusion-gateway", "config.yaml"),
+	}
+	gwCfg := ""
+	for _, c := range cfgCandidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			gwCfg = c
+			break
+		}
+	}
+	if gwCfg == "" {
+		log.Printf("console: gateway binary found but no config.yaml — start it manually or via the Gateway menu")
+		return
+	}
+	logDir := filepath.Join(config.DefaultDir(), "log")
+	_ = os.MkdirAll(logDir, 0o755)
+	logf, err := os.OpenFile(filepath.Join(logDir, "gateway.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Printf("console: gateway log file: %v", err)
+		return
+	}
+	cmd := exec.Command(gw, "-config", gwCfg)
+	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.SysProcAttr = sysProcDetach()
+	if err := cmd.Start(); err != nil {
+		log.Printf("console: gateway start failed: %v", err)
+		return
+	}
+	log.Printf("console: gateway started (pid %d, config %s, log %s)", cmd.Process.Pid, gwCfg, filepath.Join(logDir, "gateway.log"))
 }
 
 // armAutoLogin generates a one-time token and registers it with the server.

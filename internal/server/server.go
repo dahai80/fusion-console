@@ -78,6 +78,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/settings/models", s.auth.Require(s.handleModels))
 	m.HandleFunc("POST /api/settings/testcall", s.auth.Require(s.handleTestCall))
 	m.HandleFunc("POST /api/approvals/{id}", s.auth.Require(s.handleApproval))
+	m.HandleFunc("GET /api/auth/hint", s.handleAuthHint)
+	m.HandleFunc("POST /api/gateway/key", s.auth.Require(s.handleGatewayKeyProvision))
 	m.HandleFunc("GET /api/costs", s.auth.Require(s.handleCosts))
 	m.HandleFunc("GET /api/dashboard", s.auth.Require(s.handleDashboard))
 	m.HandleFunc("GET /api/settings/orchestration", s.auth.Require(s.handleGetOrchestration))

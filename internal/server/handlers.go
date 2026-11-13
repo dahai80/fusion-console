@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/dahai80/fusion-console/internal/agent"
 	"github.com/dahai80/fusion-console/internal/chat"
@@ -578,6 +581,33 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
+}
+
+// handleAuthHint tells the login page whether to prefill the factory default
+// credentials. Loopback-only: on any remote deployment the answer is a flat
+// "no", so the endpoint leaks nothing about password state to the network.
+func (s *Server) handleAuthHint(w http.ResponseWriter, r *http.Request) {
+	hint := map[string]any{"user": "admin", "factory_default": false}
+	if isLoopback(r.RemoteAddr) && len(s.cfg.Users) > 0 {
+		for _, u := range s.cfg.Users {
+			if u.Name != "admin" {
+				continue
+			}
+			if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte("fusion-admin-2026")) == nil {
+				hint["factory_default"] = true
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, hint)
+}
+
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // handleApproval resolves one confirm-mode dispatch gate. The planner loop
