@@ -303,3 +303,30 @@ func (s *Store) CostReport(user string) ([]map[string]any, error) {
 	}
 	return out, rows.Err()
 }
+
+// DeleteConversation removes a conversation and its messages.
+func (s *Store) DeleteConversation(user string, id int64) error {
+	if _, err := s.db.Exec(`DELETE FROM messages WHERE conv_id = ?`, id); err != nil {
+		return fmt.Errorf("store: delete messages: %w", err)
+	}
+	res, err := s.db.Exec(`DELETE FROM conversations WHERE id = ? AND user = ?`, id, user)
+	if err != nil {
+		return fmt.Errorf("store: delete conversation: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: conversation %d not found for user", id)
+	}
+	return nil
+}
+
+// RenameConversation sets a new title on a conversation owned by user.
+func (s *Store) RenameConversation(user string, id int64, title string) error {
+	res, err := s.db.Exec(`UPDATE conversations SET title = ? WHERE id = ? AND user = ?`, title, id, user)
+	if err != nil {
+		return fmt.Errorf("store: rename conversation: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: conversation %d not found for user", id)
+	}
+	return nil
+}

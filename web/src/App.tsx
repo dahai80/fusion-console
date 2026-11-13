@@ -13,6 +13,8 @@ import {
   RefreshCw,
   KeyRound,
   Network,
+  Pencil,
+  Trash2,
   Download,
   ExternalLink,
   Workflow,
@@ -232,6 +234,28 @@ function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
 
+  const deleteConv = async (c: Conversation) => {
+    if (!window.confirm(`Delete "${c.Title || "#" + c.ID}" and its messages?`)) return;
+    try {
+      await api.deleteConversation(c.ID);
+      if (active?.ID === c.ID) { setActive(null); setEntries([]); }
+      await refreshConvs();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+
+  const renameConv = async (c: Conversation) => {
+    const title = window.prompt("New title", c.Title);
+    if (!title || !title.trim()) return;
+    try {
+      await api.renameConversation(c.ID, title.trim());
+      await refreshConvs();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+
   const openConv = async (c: Conversation) => {
     setActive(c);
     setErr("");
@@ -341,18 +365,36 @@ function ChatPage() {
         </div>
         <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-1">
           {convs.map((c) => (
-            <button
+            <div
               key={c.ID}
-              onClick={() => openConv(c)}
-              className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm truncate ${
+              className={`group flex w-full items-center gap-1 rounded-xl pr-1 text-sm ${
                 active?.ID === c.ID
                   ? "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
                   : "hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
               }`}
             >
-              {c.Kind === "agent" ? <Bot size={14} className="shrink-0" /> : <MessageSquare size={14} className="shrink-0" />}
-              <span className="truncate">{c.Title || `#${c.ID}`}</span>
-            </button>
+              <button
+                onClick={() => openConv(c)}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-3 py-2 text-left"
+              >
+                {c.Kind === "agent" ? <Bot size={14} className="shrink-0" /> : <MessageSquare size={14} className="shrink-0" />}
+                <span className="truncate">{c.Title || `#${c.ID}`}</span>
+              </button>
+              <button
+                onClick={() => renameConv(c)}
+                title="Rename"
+                className="hidden shrink-0 rounded-lg p-1 text-zinc-400 hover:text-indigo-500 group-hover:block"
+              >
+                <Pencil size={13} />
+              </button>
+              <button
+                onClick={() => deleteConv(c)}
+                title="Delete"
+                className="hidden shrink-0 rounded-lg p-1 text-zinc-400 hover:text-red-500 group-hover:block"
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
           ))}
         </div>
       </aside>

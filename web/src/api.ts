@@ -73,6 +73,10 @@ export const api = {
     }),
   messages: (id: number) =>
     req<{ messages: Message[] }>(`/api/conversations/${id}/messages`),
+  deleteConversation: (id: number) =>
+    req<{ ok: boolean }>(`/api/conversations/${id}`, { method: "DELETE" }),
+  renameConversation: (id: number, title: string) =>
+    req<{ ok: boolean }>(`/api/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   agents: () => req<{ agents: AgentInfo[] }>("/api/agents"),
   providers: () => req<{ providers: Provider[] }>("/api/settings/providers"),
   saveProvider: (p: Provider) =>

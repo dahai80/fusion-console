@@ -208,6 +208,11 @@ function LlmStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
         <Input className="flex-1" type="password" placeholder="secret → OS keychain" value={secret}
           onChange={(e) => setSecret(e.target.value)} />
       </label>
+      <p className="text-xs text-zinc-400">
+        Headless host without a keychain? Skip the secret here and export{" "}
+        <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">FUSION_CONSOLE_APIKEY_{draft.api_key_id ? draft.api_key_id.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "&lt;KEY_ID&gt;"}</code>{" "}
+        before starting the console.
+      </p>
 
       {models.length > 0 && (
         <Select value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })}>

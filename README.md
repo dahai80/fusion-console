@@ -10,6 +10,17 @@ tasks to headless coding agents (Claude Code, fusion-code, Codex, OpenCode).
 Design docs: `insight/fusion-console-design-2026-11.md` and
 `insight/fusion-console-remote-access-plan-2026-11.md` in the fusion monorepo.
 
+## Quickstart (3 commands)
+
+```bash
+git clone https://github.com/dahai80/fusion-console && cd fusion-console
+./scripts/package.sh            # or: make web && make build
+./start.sh                      # gateway + console + browser (auto-login)
+```
+
+The first-run wizard walks you through provider → brain → workers; finish it
+and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_GUIDE.md).
+
 ## What it does
 
 - **Chat** — streaming (SSE) conversations against any OpenAI-compatible or
@@ -88,11 +99,12 @@ console, then your default browser with one-time auto-login):
 
 Open `http://127.0.0.1:11480`, sign in, then:
 
-1. Settings → add a provider (see the fusion-gateway guide below, or a cloud
-   provider), store its API key (keychain ref id must match the provider's
-   `api_key_id`).
-2. Chat → pick the provider, send a message; or pick an agent + workdir and
-   press the agent button to hand the task to the CLI.
+1. First run opens the setup wizard: pick a provider, hit **Test call** to
+   verify endpoint + key + model, choose the brain agent and workers
+   (isolation + budget per worker).
+2. You land on the **Dashboard** (brain vs worker tokens, day/week/month/all).
+   Chat → pick the provider, send a message; flip `orchestrate` to let the
+   brain dispatch workers (confirm mode asks you per dispatch).
 
 Headless hosts without a keychain: export
 `FUSION_CONSOLE_APIKEY_<KEY_ID_UPPERCASE>` instead.

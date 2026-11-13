@@ -72,6 +72,40 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
 }
 
+func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad conversation id"})
+		return
+	}
+	if err := s.store.DeleteConversation(s.auth.User(r), id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	log.Printf("server: conversation %d deleted by %s", id, s.auth.User(r))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad conversation id"})
+		return
+	}
+	var req struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Title) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title required"})
+		return
+	}
+	if err := s.store.RenameConversation(s.auth.User(r), id, strings.TrimSpace(req.Title)); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) providerByID(id string) (*config.Provider, bool) {
 	for i := range s.cfg.Provider {
 		if s.cfg.Provider[i].ID == id && s.cfg.Provider[i].Enabled {

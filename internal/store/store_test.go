@@ -99,3 +99,30 @@ func TestUsageDashboard(t *testing.T) {
 		t.Errorf("user isolation broken: %s", rawOther)
 	}
 }
+
+func TestDeleteAndRenameConversation(t *testing.T) {
+	s := openTestStore(t)
+	id, _ := s.CreateConversation("admin", "old", "chat", "", "")
+	if _, err := s.AppendMessage(id, "user", "hi", "{}"); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if err := s.RenameConversation("admin", id, "new"); err != nil {
+		t.Fatalf("RenameConversation: %v", err)
+	}
+	convs, _ := s.ListConversations("admin")
+	if convs[0].Title != "new" {
+		t.Errorf("title = %s", convs[0].Title)
+	}
+	if err := s.RenameConversation("other", id, "x"); err == nil {
+		t.Error("cross-user rename allowed")
+	}
+	if err := s.DeleteConversation("admin", id); err != nil {
+		t.Fatalf("DeleteConversation: %v", err)
+	}
+	if msgs, _ := s.ListMessages(id); len(msgs) != 0 {
+		t.Error("messages not cascade-deleted")
+	}
+	if err := s.DeleteConversation("other", id); err == nil {
+		t.Error("cross-user delete allowed")
+	}
+}
