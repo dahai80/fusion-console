@@ -384,6 +384,29 @@ func (s *Server) gatewayAdminDo(r *http.Request, base, method, path string, payl
 	return resp.StatusCode, data, nil
 }
 
+// gatewayErrMsg extracts the gateway admin API's error message from a
+// response body. The gateway writes {"error":{"message":..., "type":...}};
+// some paths return a flat {"error": "..."} — accept both so the UI shows
+// the real reason (e.g. "cannot delete the last enabled backend") instead
+// of a bare HTTP code.
+func gatewayErrMsg(body []byte, code int, what string) string {
+	var nested struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &nested) == nil && nested.Error.Message != "" {
+		return fmt.Sprintf("gateway %s: %s (HTTP %d)", what, nested.Error.Message, code)
+	}
+	var flat struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &flat) == nil && flat.Error != "" {
+		return fmt.Sprintf("gateway %s: %s (HTTP %d)", what, flat.Error, code)
+	}
+	return fmt.Sprintf("gateway %s returned HTTP %d", what, code)
+}
+
 // handleGatewayKeys lists the API keys registered in the gateway
 // (GET /admin/api/keys proxied server-side).
 func (s *Server) handleGatewayKeys(w http.ResponseWriter, r *http.Request) {
@@ -454,13 +477,13 @@ func (s *Server) handleGatewayKeyDelete(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	code, _, err := s.gatewayAdminDo(r, base, http.MethodDelete, "/admin/api/keys/"+url.PathEscape(name), nil)
+	code, data, err := s.gatewayAdminDo(r, base, http.MethodDelete, "/admin/api/keys/"+url.PathEscape(name), nil)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 	if code != http.StatusOK && code != http.StatusNoContent {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway key delete returned HTTP %d", code)})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": gatewayErrMsg(data, code, "key delete")})
 		return
 	}
 	log.Printf("server: gateway api key %s deleted", name)
@@ -476,13 +499,13 @@ func (s *Server) handleGatewayBackendDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	base := s.gatewayBase()
-	code, _, err := s.gatewayAdminDo(r, base, http.MethodDelete, "/admin/api/config/backends/"+url.PathEscape(name), nil)
+	code, data, err := s.gatewayAdminDo(r, base, http.MethodDelete, "/admin/api/config/backends/"+url.PathEscape(name), nil)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 	if code != http.StatusOK && code != http.StatusNoContent {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway backend delete returned HTTP %d", code)})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": gatewayErrMsg(data, code, "backend delete")})
 		return
 	}
 	log.Printf("server: gateway backend %s deleted", name)
@@ -492,24 +515,23 @@ func (s *Server) handleGatewayBackendDelete(w http.ResponseWriter, r *http.Reque
 // handleGatewayModels lists the models the gateway exposes
 // (GET /v1/models with the stored gateway-key) so the UI can offer a brain
 // model picker without leaving the console.
-func (s *Server) handleGatewayModels(w http.ResponseWriter, r *http.Request) {
+// gatewayModelIDs fetches /v1/models with the stored gateway-key and returns
+// the bare model ids. Used by the brain pickers and the post-backend-add
+// verification; error means the gateway or its key is unavailable.
+func (s *Server) gatewayModelIDs() ([]string, error) {
 	base := s.gatewayBase()
 	key, err := config.GetAPIKey("gateway-key")
 	if err != nil || key == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "no gateway API key stored — create one first"})
-		return
+		return nil, fmt.Errorf("no gateway API key stored — create one first")
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/v1/models", nil)
+	req, err := http.NewRequest(http.MethodGet, base+"/v1/models", nil)
 	if err != nil {
-		serverError(w, err, http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway unreachable: %v", err)})
-		return
+		return nil, fmt.Errorf("gateway unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -518,12 +540,24 @@ func (s *Server) handleGatewayModels(w http.ResponseWriter, r *http.Request) {
 		} `json:"data"`
 	}
 	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&out) != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("gateway models returned HTTP %d", resp.StatusCode)})
-		return
+		return nil, fmt.Errorf("gateway models returned HTTP %d", resp.StatusCode)
 	}
 	ids := make([]string, 0, len(out.Data))
 	for _, m := range out.Data {
 		ids = append(ids, m.ID)
+	}
+	return ids, nil
+}
+
+func (s *Server) handleGatewayModels(w http.ResponseWriter, r *http.Request) {
+	ids, err := s.gatewayModelIDs()
+	if err != nil {
+		if strings.Contains(err.Error(), "no gateway API key") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": ids})
 }
@@ -624,7 +658,32 @@ func (s *Server) handleGatewayBackendAdd(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	log.Printf("server: gateway backend %s (%s) created", req.Name, req.Type)
-	writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	// The gateway reloads its config on write, but /v1/models aggregates each
+	// backend's LIVE ListModels call (3s timeout) — an unreachable upstream or
+	// wrong API key silently drops the backend's models from every picker.
+	// Verify right after the add and tell the user instead of staying silent.
+	note := ""
+	if len(req.Models) > 0 {
+		if ids, merr := s.gatewayModelIDs(); merr == nil {
+			found := false
+			for _, m := range req.Models {
+				for _, id := range ids {
+					if id == m {
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found {
+				note = "backend saved, but none of its models appear in /v1/models yet — check the base URL, API key and network reachability of " + req.BaseURL
+				log.Printf("server: backend %s models %v not visible in /v1/models", req.Name, req.Models)
+			}
+		}
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "note": note})
 }
 
 // gatewayDefaultModel queries /v1/models with the fresh key and returns the

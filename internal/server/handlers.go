@@ -151,7 +151,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	apiKey, err := config.GetAPIKey(prov.APIKeyID)
+	apiKey, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil {
 		log.Printf("server: chat api key unavailable (provider %s, key id %s): %v", prov.ID, prov.APIKeyID, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -411,8 +411,36 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"agents": out})
 }
 
+// providerKeyID resolves the keychain id for a provider. Gateway-type
+// providers always authenticate with the console's own "gateway-key" entry —
+// older builds and hand-edited configs left a raw key in api_key_id, which
+// made every chat fail with "secret not found in keyring".
+func providerKeyID(prov *config.Provider) string {
+	if prov.Type == config.ProviderGateway {
+		return "gateway-key"
+	}
+	return prov.APIKeyID
+}
+
 func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	// Never leak key material: APIKeyID is a keychain reference only.
+	// Self-heal: gateway providers whose api_key_id was corrupted (raw key
+	// pasted by an older UI or hand edit) are repaired to "gateway-key" and
+	// the fix is persisted.
+	healed := false
+	for i := range s.cfg.Provider {
+		p := &s.cfg.Provider[i]
+		if p.Type == config.ProviderGateway && p.APIKeyID != "gateway-key" {
+			log.Printf("server: repairing gateway provider %s api_key_id %q -> gateway-key", p.ID, p.APIKeyID)
+			p.APIKeyID = "gateway-key"
+			healed = true
+		}
+	}
+	if healed {
+		if err := s.cfg.Save(s.cfgDir); err != nil {
+			log.Printf("server: gateway provider key heal save failed: %v", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": s.cfg.Provider})
 }
 
@@ -471,7 +499,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown provider " + providerID})
 		return
 	}
-	apiKey, err := config.GetAPIKey(prov.APIKeyID)
+	apiKey, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil {
 		serverError(w, err, http.StatusBadRequest)
 		return
@@ -505,7 +533,7 @@ func (s *Server) handleTestCall(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	apiKey, err := config.GetAPIKey(prov.APIKeyID)
+	apiKey, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "api key unavailable: " + err.Error()})
 		return

@@ -118,7 +118,7 @@ export const api = {
   gatewayBackends: () =>
     req<{ backends: GatewayBackend[] }>("/api/gateway/backends"),
   addGatewayBackend: (b: { name: string; type: string; base_url: string; api_key: string; models: string[] }) =>
-    req<{ ok: boolean }>("/api/gateway/backend", { method: "POST", body: JSON.stringify(b) }),
+    req<{ ok: boolean; note?: string }>("/api/gateway/backend", { method: "POST", body: JSON.stringify(b) }),
   deleteGatewayBackend: (name: string) =>
     req<{ ok: boolean }>(`/api/gateway/backend/${encodeURIComponent(name)}`, { method: "DELETE" }),
   gatewayKeys: () =>

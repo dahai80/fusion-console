@@ -434,7 +434,7 @@ func (s *Server) providerEnv(agentName string) (map[string]string, string) {
 		log.Printf("orchestrator: worker %s: provider %s not found or disabled, using CLI default", agentName, pid)
 		return nil, ""
 	}
-	key, err := config.GetAPIKey(prov.APIKeyID)
+	key, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil || key == "" {
 		log.Printf("orchestrator: worker %s: provider %s has no stored key, using CLI default", agentName, pid)
 		return nil, ""

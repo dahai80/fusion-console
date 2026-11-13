@@ -262,7 +262,7 @@ func (s *Server) handleSkillsDraft(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	apiKey, err := config.GetAPIKey(prov.APIKeyID)
+	apiKey, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "api key unavailable: " + err.Error()})
 		return

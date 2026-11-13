@@ -48,14 +48,14 @@ export function GatewayBackendsPanel({ compact = false }: { compact?: boolean })
   const addBackend = async () => {
     setBusy(true); setErr(""); setMsg("");
     try {
-      await api.addGatewayBackend({
+      const r = await api.addGatewayBackend({
         name: bName.trim() || bType.replace(/[^a-z0-9-]/gi, ""),
         type: bType,
         base_url: bURL.trim(),
         api_key: bKey.trim(),
         models: bModels.split(",").map((s) => s.trim()).filter(Boolean),
       });
-      setMsg(`backend "${bName.trim() || bType}" added to the gateway`);
+      setMsg(r.note || `backend "${bName.trim() || bType}" added to the gateway`);
       setBName(""); setBURL(""); setBKey(""); setBModels("");
       load();
     } catch (ex) {
