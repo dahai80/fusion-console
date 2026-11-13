@@ -73,6 +73,12 @@ fetch_gateway() {
 }
 
 stage_dir() { # stage_dir <name> <console-bin> <gateway-bin|"-">
+    # Fail the build if the bundled gateway config ever contains secret
+    # material — it must stay an example-style file (env var names only).
+    if grep -nqiE 'sk-[a-zA-Z0-9]|enc:[a-zA-Z0-9]|master_key: .+|dsn: .+|password: .+' scripts/gateway-config.yaml; then
+        echo "ERROR: scripts/gateway-config.yaml looks like it contains real credentials" >&2
+        exit 1
+    fi
     local d="$DIST/$1"
     mkdir -p "$d"
     cp "$2" "$d/fusion-console"
