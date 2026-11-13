@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start fusion-console (and the bundled fusion-gateway when present), then
 # open the default browser with one-time auto-login. macOS + Linux.
-# Usage: ./start.sh [path-to-gateway-config.yaml]
+# Usage: ./startup.sh [path-to-gateway-config.yaml]
 set -euo pipefail
 cd "$(dirname "$0")"
 

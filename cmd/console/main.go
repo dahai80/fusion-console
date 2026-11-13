@@ -40,7 +40,7 @@ func main() {
 
 	// Desktop convenience: double-clicking the binary should bring up the
 	// full stack. Start the bundled sibling gateway when a config exists and
-	// :11432 is still free (start.sh does the same for script launches).
+	// :11432 is still free (startup.sh does the same for script launches).
 	maybeStartGateway()
 
 	st, err := store.Open(filepath.Join(cfg.Server.DataDir, "console.db"))

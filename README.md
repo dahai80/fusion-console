@@ -15,7 +15,7 @@ Design docs: `insight/fusion-console-design-2026-11.md` and
 ```bash
 git clone https://github.com/dahai80/fusion-console && cd fusion-console
 ./scripts/package.sh            # or: make web && make build
-./start.sh                      # gateway + console + browser (auto-login)
+./startup.sh                # gateway + console + browser (auto-login)
 ```
 
 The first-run wizard walks you through provider → brain → workers; finish it
@@ -94,7 +94,7 @@ Developer quick start — one command starts everything (gateway if bundled,
 console, then your default browser with one-time auto-login):
 
 ```bash
-./start.sh        # macOS / Linux    (Windows: start.cmd)
+./startup.sh        # macOS / Linux    (Windows: startup.cmd)
 ```
 
 Open `http://127.0.0.1:11480`, sign in, then:

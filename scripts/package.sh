@@ -84,8 +84,8 @@ stage_dir() { # stage_dir <name> <console-bin> <gateway-bin|"-">
     # for <exe-dir>/sidecar/harnessd.py).
     mkdir -p "$d/sidecar"
     cp sidecar/harnessd.py "$d/sidecar/"
-    cp scripts/start.sh "$d/"
-    chmod +x "$d/start.sh"
+    cp scripts/startup.sh "$d/"
+    chmod +x "$d/startup.sh"
     cp README.md LICENSE "$d/"
 }
 
@@ -108,7 +108,7 @@ for t in "${TARGETS[@]}"; do
         [ "$GW" != "-" ] && cp "$GW" "$d/fusion-gateway.exe"
         mkdir -p "$d/sidecar"
         cp sidecar/harnessd.py "$d/sidecar/"
-        cp scripts/start.cmd "$d/" 2>/dev/null || true
+        cp scripts/startup.cmd "$d/" 2>/dev/null || true
         cp README.md LICENSE "$d/"
         (cd "$DIST" && zip -qr "fusion-console-$VERSION-$t.zip" "$(basename "$d")")
         rm -rf "$d"

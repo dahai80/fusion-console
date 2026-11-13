@@ -80,7 +80,7 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
       <ul className="space-y-2 text-sm">
         {[
           { icon: Cloud, t: "LLM provider", d: "cloud OpenAI/Anthropic-compatible endpoint, or the local fusion-gateway" },
-          { icon: Network, t: "fusion-gateway", d: "bundled at packaging time; started together with the console by start.sh" },
+          { icon: Network, t: "fusion-gateway", d: "bundled at packaging time; started together with the console by startup.sh" },
           { icon: Brain, t: "Brain", d: "one coding-agent CLI acting as the architect session" },
           { icon: Bot, t: "Workers", d: "per-agent isolation (worktree or standalone repo), permission mode, budget cap" },
         ].map((r) => (
@@ -306,7 +306,7 @@ function GatewayStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
     <Card className="space-y-4 p-6">
       <p className="text-sm text-zinc-600 dark:text-zinc-300">
         The matching <strong>fusion-gateway</strong> binary ships inside the console package and is
-        started together with the console (by <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">start.sh</code>{" "}
+        started together with the console (by <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">startup.sh</code>{" "}
         or automatically on launch).
       </p>
       <div className="flex items-center justify-between rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
@@ -517,7 +517,7 @@ function DoneStep({ onDone }: { onDone: () => void }) {
       </div>
       <ul className="space-y-1 text-sm text-zinc-600 dark:text-zinc-300">
         <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> LLM provider saved (key in OS keychain)</li>
-        <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> Gateway status checked — start.sh keeps both processes up</li>
+        <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> Gateway status checked — startup.sh keeps both processes up</li>
         <li className="flex items-center gap-2"><Check size={14} className="text-emerald-500" /> Brain & workers stored — every value editable under Settings later</li>
       </ul>
       <p className="text-xs text-zinc-400">
