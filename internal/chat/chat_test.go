@@ -306,3 +306,45 @@ func TestAnthropicToolMessageConversion(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeGatewayBaseURL(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", "http://127.0.0.1:11432/v1"},
+		{"http://127.0.0.1:11432", "http://127.0.0.1:11432/v1"},
+		{"http://127.0.0.1:11432/", "http://127.0.0.1:11432/v1"},
+		{"http://127.0.0.1:11432/v1", "http://127.0.0.1:11432/v1"},
+		{"http://127.0.0.1:11432/v1/", "http://127.0.0.1:11432/v1"},
+		{" http://10.0.0.5:11432 ", "http://10.0.0.5:11432/v1"},
+		{"http://proxy.example.com/gw/v1", "http://proxy.example.com/gw/v1"},
+	}
+	for _, c := range cases {
+		if got := normalizeGatewayBaseURL(c.in); got != c.want {
+			t.Errorf("normalizeGatewayBaseURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// Regression: base_url without /v1 hit /chat/completions and got a 404 from
+// the gateway (Windows fresh-install report, 2026-11-13).
+func TestGatewayProviderChatUsesV1Path(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"id":"1","choices":[{"delta":{"content":"hi"}}]}`+"\n\n")
+		fmt.Fprint(w, `data: [DONE]`+"\n\n")
+	}))
+	defer srv.Close()
+	p := NewGatewayProvider(srv.URL) // no /v1 in base URL
+	ch, err := p.ChatStream(context.Background(), "m", "k", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for range ch {
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("request path = %q, want /v1/chat/completions", gotPath)
+	}
+}
