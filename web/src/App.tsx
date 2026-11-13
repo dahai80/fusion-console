@@ -24,6 +24,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, type AgentInfo, type Conversation, type Message, type Provider } from "./api";
 import Onboarding from "./Onboarding";
+import { GatewayBackendsPanel } from "./GatewayBackends";
+import { WorkersPanel } from "./WorkersPanel";
 import Dashboard from "./Dashboard";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
@@ -536,7 +538,7 @@ function AgentsPage() {
   const load = () => api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
   useEffect(() => { load(); }, []);
   return (
-    <div className="mx-auto max-w-3xl p-6 space-y-3">
+    <div className="mx-auto max-w-3xl space-y-4 p-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Coding agents</h2>
         <Button variant="ghost" onClick={load}><RefreshCw size={14} /> Refresh</Button>
@@ -557,6 +559,10 @@ function AgentsPage() {
           </div>
         </Card>
       ))}
+      <Card className="space-y-3 p-4">
+        <h3 className="font-medium">Workers</h3>
+        <WorkersPanel />
+      </Card>
     </div>
   );
 }
@@ -614,6 +620,30 @@ function GatewayPage() {
     }
   };
 
+  // One click: gateway admin login + key creation; raw key shown once.
+  const [rawKey, setRawKey] = useState("");
+  const [keyCopied, setKeyCopied] = useState(false);
+  const provisionKey = async () => {
+    setBusy(true); setMsg(""); setErr(""); setRawKey(""); setKeyCopied(false);
+    try {
+      const r = await api.provisionGatewayKey();
+      setRawKey(r.raw_key || "");
+      setMsg(`gateway API key ready (${r.key_prefix}...) — stored in the OS keychain`);
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copyKey = async () => {
+    try {
+      await navigator.clipboard.writeText(rawKey);
+      setKeyCopied(true);
+    } catch {
+      setKeyCopied(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
       <h2 className="text-lg font-semibold">fusion-gateway</h2>
@@ -635,6 +665,13 @@ function GatewayPage() {
           )}
         </div>
       </Card>
+
+      {status?.reachable && (
+        <Card className="space-y-3 p-4">
+          <h3 className="font-medium">Gateway models</h3>
+          <GatewayBackendsPanel compact />
+        </Card>
+      )}
 
       {!status?.reachable && (
         <Card className="space-y-3 p-4">
@@ -676,6 +713,33 @@ function GatewayPage() {
               Save credentials
             </Button>
           </div>
+        </Card>
+      )}
+
+      {status?.reachable && (
+        <Card className="space-y-3 p-4">
+          <h3 className="font-medium flex items-center gap-2"><KeyRound size={16} /> API key</h3>
+          <p className="text-sm text-zinc-500">
+            One click — the console logs into the gateway admin and issues an API key, stored in the
+            OS keychain (<code>gateway-key</code>). Chat, brain and workers all use this key against
+            the gateway.
+          </p>
+          <Button onClick={provisionKey} disabled={busy}>
+            {busy ? "Creating..." : "Create API key"}
+          </Button>
+          {rawKey && (
+            <div className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-500/30 dark:bg-amber-500/5">
+              <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                Copy and save this key now — it is shown only once (the console keeps its copy in the OS keychain).
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-lg bg-white px-2 py-1.5 font-mono text-xs dark:bg-zinc-900">{rawKey}</code>
+                <Button variant="outline" onClick={copyKey} disabled={keyCopied}>
+                  {keyCopied ? "copied" : "Copy"}
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
       )}
 

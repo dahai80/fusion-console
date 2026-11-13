@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/dashboard.tsx","./src/onboarding.tsx","./src/api.ts","./src/main.tsx","./src/components/ui.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/dashboard.tsx","./src/gatewaybackends.tsx","./src/onboarding.tsx","./src/workerspanel.tsx","./src/api.ts","./src/main.tsx","./src/components/ui.tsx"],"version":"5.9.3"}

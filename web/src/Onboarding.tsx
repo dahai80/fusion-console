@@ -5,7 +5,6 @@ import {
   Brain,
   Check,
   Cloud,
-  Cpu,
   KeyRound,
   Network,
   PlayCircle,
@@ -13,7 +12,9 @@ import {
   Terminal,
   Workflow,
 } from "lucide-react";
-import { api, type AgentInfo, type Provider, type WorkerSettings } from "./api";
+import { api, type AgentInfo } from "./api";
+import { GatewayBackendsPanel } from "./GatewayBackends";
+import { WorkersPanel } from "./WorkersPanel";
 import { Badge, Button, Card, Input, Select } from "./components/ui";
 
 type StepId = "welcome" | "key" | "backends" | "brain" | "workers" | "verify" | "done";
@@ -98,55 +99,10 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   );
 }
 
-const BACKEND_TYPES = [
-  ["openai-compatible", "OpenAI-compatible (any /v1 endpoint)"],
-  ["anthropic", "Anthropic (Claude)"],
-  ["deepseek", "DeepSeek"],
-  ["zhipu", "Zhipu (GLM)"],
-  ["moonshot", "Moonshot (Kimi)"],
-  ["dashscope", "DashScope (Qwen)"],
-  ["minimax", "MiniMax"],
-  ["openrouter", "OpenRouter"],
-] as const;
-
 function BackendsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const [backends, setBackends] = useState<Awaited<ReturnType<typeof api.gatewayBackends>>["backends"]>([]);
-  const [bType, setBType] = useState<string>("openai-compatible");
-  const [bName, setBName] = useState("");
-  const [bURL, setBURL] = useState("");
-  const [bKey, setBKey] = useState("");
-  const [bModels, setBModels] = useState("");
-
-  const load = useCallback(() => {
-    api.gatewayBackends().then((r) => setBackends(r.backends ?? [])).catch(() => setBackends([]));
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  // Cloud backends live in the gateway (one place, one token ledger). Add
-  // them right here — the console relays them into the gateway config via
-  // its admin API. The gateway admin GUI stays available via SSO.
-  const addBackend = async () => {
-    setBusy(true); setErr(""); setMsg("");
-    try {
-      await api.addGatewayBackend({
-        name: bName.trim() || bType.replace(/[^a-z0-9-]/gi, ""),
-        type: bType,
-        base_url: bURL.trim(),
-        api_key: bKey.trim(),
-        models: bModels.split(",").map((s) => s.trim()).filter(Boolean),
-      });
-      setMsg(`backend "${bName.trim() || bType}" added to the gateway`);
-      setBName(""); setBURL(""); setBKey(""); setBModels("");
-      load();
-    } catch (ex) {
-      setErr((ex as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const openAdmin = async () => {
     setBusy(true); setErr(""); setMsg("");
@@ -173,43 +129,12 @@ function BackendsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => vo
         from the previous step; the gateway routes each request to the model you configured —
         local (fusion-mlx) or cloud. One path, one place, so all token usage lands in one ledger.
       </p>
-      <div className="space-y-3 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
-        <p className="text-sm font-medium">Add a cloud provider (repeat for several)</p>
-        <div className="flex flex-wrap gap-2">
-          <Select className="w-64" value={bType} onChange={(e) => setBType(e.target.value)}>
-            {BACKEND_TYPES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-          </Select>
-          <Input className="w-40" placeholder="name (optional)" value={bName}
-            onChange={(e) => setBName(e.target.value)} />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Input className="w-72" placeholder="base URL, e.g. https://api.deepseek.com/v1" value={bURL}
-            onChange={(e) => setBURL(e.target.value)} />
-          <Input className="w-56" type="password" placeholder="API key" value={bKey}
-            onChange={(e) => setBKey(e.target.value)} />
-        </div>
-        <Input placeholder="models, comma separated (e.g. deepseek-chat, deepseek-reasoner)" value={bModels}
-          onChange={(e) => setBModels(e.target.value)} />
-        <div className="flex items-center gap-3">
-          <Button onClick={addBackend} disabled={busy || (!bURL && !bKey)}>Add provider</Button>
-          <button onClick={openAdmin} disabled={busy} className="text-xs text-indigo-500 underline-offset-2 hover:underline">
-            advanced: open gateway admin GUI
-          </button>
-        </div>
+      <div className="rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
+        <GatewayBackendsPanel />
+        <button onClick={openAdmin} disabled={busy} className="mt-3 text-xs text-indigo-500 underline-offset-2 hover:underline">
+          advanced: open gateway admin GUI
+        </button>
       </div>
-      {backends.length > 0 && (
-        <div className="space-y-1 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
-          <p className="text-xs font-medium text-zinc-500">Backends currently in the gateway</p>
-          {backends.map((b) => (
-            <div key={b.name} className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="font-medium">{b.name}</span>
-              <Badge tone={b.enabled ? "ok" : "warn"}>{b.type}</Badge>
-              <span className="text-zinc-400">{b.base_url}</span>
-              {b.models?.length > 0 && <span className="text-zinc-400">models: {b.models.join(", ")}</span>}
-            </div>
-          ))}
-        </div>
-      )}
       {msg && <p className="text-sm text-indigo-500">{msg}</p>}
       {err && <p className="text-sm text-red-500">{err}</p>}
       <div className="flex gap-2">
@@ -429,110 +354,17 @@ function BrainStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 }
 
 function WorkersStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [orch, setOrch] = useState<Awaited<ReturnType<typeof api.orchestration>>["orchestrator"] | null>(null);
-  const [newAgent, setNewAgent] = useState("");
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
-  useEffect(() => {
-    api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
-    api.providers().then((r) => setProviders((r.providers ?? []).filter((p) => p.enabled))).catch(() => {});
-    api.orchestration().then((r) => setOrch(r.orchestrator)).catch(() => {});
-  }, []);
-
-  const detected = (name: string) => agents.find((a) => a.name === name)?.detected ?? false;
-  const setWorker = (name: string, patch: { enabled?: boolean; isolation?: WorkerSettings["isolation"]; max_budget_usd?: number; provider_id?: string; work_dir?: string }) => {
-    const base = orch ?? { mode: "confirm", brain_agent: "claude", repos: [], workers: [], configured: false };
-    const workers = [...(base.workers ?? [])];
-    const i = workers.findIndex((w) => w.agent === name);
-    const cur = i >= 0 ? workers[i] : { agent: name, enabled: true, isolation: "worktree" as const, permission_mode: "acceptEdits", max_budget_usd: 5, provider_id: "", work_dir: "" };
-    workers[i >= 0 ? i : workers.length] = { ...cur, ...patch };
-    setOrch({ ...base, workers });
-  };
-  const addWorker = () => {
-    if (!newAgent) return;
-    setWorker(newAgent, { enabled: true });
-    setNewAgent("");
-  };
-  const removeWorker = (name: string) => {
-    if (!orch) return;
-    setOrch({ ...orch, workers: orch.workers.filter((w) => w.agent !== name) });
-  };
-
-  const save = async (after: () => void) => {
-    setMsg(""); setErr("");
-    try {
-      if (orch) await api.saveOrchestration(orch);
-      setMsg("brain & workers saved");
-      after();
-    } catch (ex) {
-      setErr((ex as Error).message);
-    }
-  };
-
   return (
     <Card className="space-y-4 p-6">
-      <p className="text-sm text-zinc-600 dark:text-zinc-300">
-        Workers are ephemeral coding-agent runs: each task gets an isolated workspace
-        (<strong>worktree</strong> in the target repo, or a <strong>standalone</strong> repo clone),
-        a budget cap, and dies on completion. Add them one at a time.
-      </p>
-      <div className="space-y-2">
-        {(orch?.workers ?? []).map((w) => (
-          <div key={w.agent} className="rounded-xl border border-zinc-200/80 p-3 text-sm dark:border-zinc-800">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="flex items-center gap-2 font-medium">
-                <Terminal size={14} /> {w.agent}
-                {!detected(w.agent) && <span className="text-xs text-amber-500">not on PATH</span>}
-              </span>
-              <Select className="w-44" value={w.isolation ?? "worktree"}
-                onChange={(e) => setWorker(w.agent, { isolation: e.target.value as WorkerSettings["isolation"] })}>
-                <option value="worktree">isolation: worktree</option>
-                <option value="standalone">isolation: standalone repo</option>
-              </Select>
-              <label className="flex items-center gap-1 text-xs text-zinc-500">
-                budget $
-                <Input className="w-20" type="number" min={0.5} step={0.5} value={w.max_budget_usd ?? 5}
-                  onChange={(e) => setWorker(w.agent, { max_budget_usd: Number(e.target.value) })} />
-              </label>
-              <Select className="w-48" value={w.provider_id ?? ""}
-                onChange={(e) => setWorker(w.agent, { provider_id: e.target.value })}>
-                <option value="">provider: CLI default</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>provider: {p.name || p.id}</option>
-                ))}
-              </Select>
-              {(w.isolation ?? "worktree") === "standalone" && (
-                <label className="flex items-center gap-1 text-xs text-zinc-500" title="Standalone workspace directory; empty = default per-agent dir">
-                  dir
-                  <Input className="w-44" placeholder="~/.fusion-console/agents/{name}" value={w.work_dir ?? ""}
-                    onChange={(e) => setWorker(w.agent, { work_dir: e.target.value })} />
-                </label>
-              )}
-              <button onClick={() => removeWorker(w.agent)} title="Remove worker"
-                className="ml-auto rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
-                remove
-              </button>
-            </div>
-          </div>
-        ))}
+      <div className="flex items-center gap-2">
+        <Bot size={18} className="text-indigo-500" />
+        <h3 className="font-semibold">Workers</h3>
       </div>
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-zinc-300 p-3 dark:border-zinc-700">
-        <Select className="w-56" value={newAgent} onChange={(e) => setNewAgent(e.target.value)}>
-          <option value="">choose agent type...</option>
-          {agents.map((a) => (
-            <option key={a.name} value={a.name}>{a.name} ({a.command}){a.detected ? "" : " — not on PATH"}</option>
-          ))}
-        </Select>
-        <Button variant="outline" onClick={addWorker} disabled={!newAgent}>Add worker</Button>
-      </div>
+      <WorkersPanel onSaved={onNext} />
       <div className="flex gap-2">
-        <Button onClick={() => save(onNext)}>Save & finish <ArrowRight size={14} /></Button>
+        <Button onClick={onNext}>Continue <ArrowRight size={14} /></Button>
         <Button variant="ghost" onClick={onSkip}>Skip</Button>
       </div>
-      {msg && <p className="text-sm text-indigo-500">{msg}</p>}
-      {err && <p className="text-sm text-red-500">{err}</p>}
     </Card>
   );
 }
