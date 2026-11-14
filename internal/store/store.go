@@ -304,6 +304,35 @@ func (s *Store) CostReport(user string) ([]map[string]any, error) {
 	return out, rows.Err()
 }
 
+// WorkerSpend aggregates per-worker cost rows (source "agent:<name>") over
+// all time, keyed by source, for the dashboard Workers tab.
+func (s *Store) WorkerSpend(user string) (map[string]map[string]any, error) {
+	rows, err := s.db.Query(
+		`SELECT source, COUNT(*) AS calls, ROUND(SUM(cost_usd), 4) AS cost_usd,
+		        SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
+		        MAX(created_at) AS last_run
+		 FROM cost_log WHERE user = ? AND source LIKE 'agent:%' GROUP BY source`, user)
+	if err != nil {
+		return nil, fmt.Errorf("store: worker spend: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]any{}
+	for rows.Next() {
+		var source, last string
+		var calls int
+		var cost float64
+		var tin, tout sql.NullInt64
+		if err := rows.Scan(&source, &calls, &cost, &tin, &tout, &last); err != nil {
+			return nil, fmt.Errorf("store: scan worker spend: %w", err)
+		}
+		out[source] = map[string]any{
+			"calls": calls, "cost_usd": cost,
+			"tokens_in": tin.Int64, "tokens_out": tout.Int64, "last_run": last,
+		}
+	}
+	return out, rows.Err()
+}
+
 // DeleteConversation removes a conversation and its messages.
 func (s *Store) DeleteConversation(user string, id int64) error {
 	if _, err := s.db.Exec(`DELETE FROM messages WHERE conv_id = ?`, id); err != nil {

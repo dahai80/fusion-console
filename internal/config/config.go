@@ -50,7 +50,7 @@ type AgentSettings struct {
 func (c *Config) ResolveWorkDir(agentName string) string {
 	for _, a := range c.Agent {
 		if a.Name == agentName && strings.TrimSpace(a.WorkDir) != "" {
-			dir := a.WorkDir
+			dir := expandHome(a.WorkDir)
 			if !filepath.IsAbs(dir) {
 				abs, err := filepath.Abs(dir)
 				if err == nil {
@@ -170,6 +170,18 @@ func DefaultDir() string {
 // Path returns the config file path inside dir.
 func Path(dir string) string { return filepath.Join(dir, "config.json") }
 
+// expandHome expands a leading ~ to the user's home directory; filepath.Abs
+// does not, so "~/" paths in config would otherwise resolve under cwd.
+func expandHome(dir string) string {
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, strings.TrimPrefix(dir, "~"))
+		}
+	}
+	return dir
+}
+
 // Load reads config.json, returning a zero-value config with defaults when absent.
 func Load(dir string) (*Config, error) {
 	cfg := &Config{Server: ServerConfig{Host: "127.0.0.1", Port: 11480, DataDir: dir}, Orchestrator: DefaultOrchestrator()}
@@ -260,7 +272,7 @@ func (c *Config) User(name string) (*UserEntry, bool) {
 // directory is created on demand.
 func (c *Config) ResolveWorkerDir(w WorkerConfig) string {
 	if strings.TrimSpace(w.WorkDir) != "" {
-		dir := w.WorkDir
+		dir := expandHome(w.WorkDir)
 		if !filepath.IsAbs(dir) {
 			abs, err := filepath.Abs(dir)
 			if err == nil {

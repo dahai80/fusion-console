@@ -108,6 +108,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/rag/start", s.auth.Require(s.handleRagStart))
 	m.HandleFunc("POST /api/rag/stop", s.auth.Require(s.handleRagStop))
 	m.HandleFunc("POST /api/rag/enabled", s.auth.Require(s.handleRagEnabled))
+	m.HandleFunc("GET /api/workers/status", s.auth.Require(s.handleWorkersStatus))
 	// Method-qualified registrations: a bare "/shell/fusion-rag/" subtree
 	// pattern conflicts with the "GET /" SPA fallback in Go's mux.
 	ragProxyHandler := s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

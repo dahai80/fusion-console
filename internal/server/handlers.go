@@ -761,6 +761,42 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+// handleWorkersStatus backs the dashboard Workers tab: every configured
+// worker with its runtime-detected agent availability plus lifetime spend
+// (source "agent:<name>" in the cost log).
+func (s *Server) handleWorkersStatus(w http.ResponseWriter, r *http.Request) {
+	user := s.auth.User(r)
+	spend, err := s.store.WorkerSpend(user)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := []map[string]any{}
+	for _, w := range s.cfg.Orchestrator.Workers {
+		id := w.Name
+		if id == "" {
+			id = w.Agent // legacy entries are cost-tracked under the agent type
+		}
+		detected := false
+		if ad, ok := s.agents[w.Agent]; ok {
+			detected = ad.Detect()
+		}
+		row := map[string]any{
+			"name": id, "agent": w.Agent, "enabled": w.Enabled, "detected": detected,
+			"isolation": w.Isolation, "work_dir": s.cfg.ResolveWorkerDir(w),
+			"repo": w.Repo, "provider_id": w.ProviderID, "max_budget_usd": w.MaxBudgetUSD,
+			"calls": 0, "cost_usd": 0.0, "tokens_in": 0, "tokens_out": 0, "last_run": "",
+		}
+		if sp, ok := spend["agent:"+id]; ok {
+			for k, v := range sp {
+				row[k] = v
+			}
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workers": out})
+}
+
 // handleAuthHint tells the login page whether to prefill the factory default
 // credentials. Loopback-only: on any remote deployment the answer is a flat
 // "no", so the endpoint leaks nothing about password state to the network.

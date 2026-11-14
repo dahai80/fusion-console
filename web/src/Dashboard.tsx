@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Brain, Bot, CircleDollarSign, RefreshCw, Table2, BarChart3 } from "lucide-react";
-import { api, type DashboardBucket, type DashboardData, type UsageRange } from "./api";
+import { api, type DashboardBucket, type DashboardData, type UsageRange, type WorkerStatus } from "./api";
 import { Button, Card, useTheme } from "./components/ui";
 
 // Palette validated with the dataviz validator (light + dark surfaces).
@@ -39,6 +39,89 @@ function bucketLabel(bucket: string, unit: string): string {
 }
 
 export default function Dashboard() {
+  const [tab, setTab] = useState<"usage" | "workers">("usage");
+  return (
+    <div>
+      <div className="flex items-center gap-1 border-b border-zinc-200/80 px-6 pt-4 dark:border-zinc-800">
+        {([["usage", "Usage", BarChart3], ["workers", "Workers", Bot]] as const).map(([id, label, Icon]) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`inline-flex items-center gap-2 rounded-t-xl px-4 py-2 text-sm font-medium transition-colors ${
+              tab === id
+                ? "border border-b-0 border-zinc-200/80 bg-white text-indigo-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-indigo-400"
+                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            }`}
+          >
+            <Icon size={15} /> {label}
+          </button>
+        ))}
+      </div>
+      {tab === "usage" ? <UsageTab /> : <WorkersTab />}
+    </div>
+  );
+}
+
+// WorkersTab lists every configured worker with its runtime agent
+// availability and lifetime spend (from the cost log, source agent:<name>).
+function WorkersTab() {
+  const [workers, setWorkers] = useState<WorkerStatus[] | null>(null);
+  const [err, setErr] = useState("");
+  const load = () => {
+    setErr("");
+    api.workersStatus().then((r) => setWorkers(r.workers ?? [])).catch((e) => setErr((e as Error).message));
+  };
+  useEffect(load, []);
+  return (
+    <div className="mx-auto max-w-5xl space-y-4 p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">Worker status</h2>
+        <Button variant="ghost" onClick={load}>
+          <RefreshCw size={14} /> Refresh
+        </Button>
+      </div>
+      {err && <p className="text-sm text-red-500">{err}</p>}
+      {workers === null ? (
+        <p className="text-sm text-zinc-400">loading…</p>
+      ) : workers.length === 0 ? (
+        <Card className="p-6 text-center text-sm text-zinc-400">
+          No workers configured yet — set them up on the Agents page.
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {workers.map((w) => (
+            <Card key={w.name} className="p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Bot size={15} className="text-indigo-500" />
+                <span className="font-medium">{w.name}</span>
+                <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800">type: {w.agent}</span>
+                {w.enabled ? (
+                  <span className="rounded-lg bg-emerald-500/10 px-1.5 py-0.5 text-xs text-emerald-600 dark:text-emerald-400">enabled</span>
+                ) : (
+                  <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800">disabled</span>
+                )}
+                {!w.detected && <span className="text-xs text-amber-500">CLI not on PATH</span>}
+              </div>
+              <dl className="mt-3 space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+                <div className="flex gap-2"><dt className="w-20 shrink-0">isolation</dt><dd className="truncate">{w.isolation || "worktree"}{w.repo ? ` · ${w.repo}` : ""}</dd></div>
+                <div className="flex gap-2"><dt className="w-20 shrink-0">work dir</dt><dd className="truncate" title={w.work_dir}>{w.work_dir}</dd></div>
+                <div className="flex gap-2"><dt className="w-20 shrink-0">budget</dt><dd>${w.max_budget_usd ?? 5} / run{w.provider_id ? ` · provider ${w.provider_id}` : " · CLI default provider"}</dd></div>
+              </dl>
+              <div className="mt-3 grid grid-cols-3 gap-2 border-t border-zinc-200/80 pt-3 text-center dark:border-zinc-800">
+                <div><p className="text-sm font-semibold">{w.calls}</p><p className="text-xs text-zinc-500">runs</p></div>
+                <div><p className="text-sm font-semibold">{fmtTokens((w.tokens_in ?? 0) + (w.tokens_out ?? 0))}</p><p className="text-xs text-zinc-500">tokens</p></div>
+                <div><p className="text-sm font-semibold">{fmtUSD(w.cost_usd ?? 0)}</p><p className="text-xs text-zinc-500">spend</p></div>
+              </div>
+              <p className="mt-2 text-xs text-zinc-400">{w.last_run ? `last run ${w.last_run} UTC` : "no runs yet"}</p>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UsageTab() {
   const { dark } = useTheme();
   const [range, setRange] = useState<UsageRange>("week");
   const [data, setData] = useState<DashboardData | null>(null);

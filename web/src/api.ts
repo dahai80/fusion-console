@@ -153,6 +153,24 @@ export const api = {
   ragStop: () => req<{ running: boolean }>("/api/rag/stop", { method: "POST" }),
   ragSetEnabled: (enabled: boolean) =>
     req<{ enabled: boolean }>("/api/rag/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
+  workersStatus: () => req<{ workers: WorkerStatus[] }>("/api/workers/status"),
+};
+
+export type WorkerStatus = {
+  name: string;
+  agent: string;
+  enabled: boolean;
+  detected: boolean;
+  isolation: string;
+  work_dir: string;
+  repo: string;
+  provider_id: string;
+  max_budget_usd: number;
+  calls: number;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  last_run: string;
 };
 
 export type RagStatus = {
