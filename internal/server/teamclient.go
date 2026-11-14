@@ -64,7 +64,8 @@ func teamRPC(socketPath, jwt, method string, params map[string]any) (map[string]
 		params = map[string]any{}
 	}
 	if jwt != "" {
-		params["_auth"] = jwt
+		// daemon expects _auth as {"jwt": <token>} (rpc_auth.authenticate_rpc)
+		params["_auth"] = map[string]any{"jwt": jwt}
 	}
 	reqID := time.Now().UnixNano()
 	req, err := jsonMarshal(map[string]any{

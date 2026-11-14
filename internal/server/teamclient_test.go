@@ -46,7 +46,9 @@ func fakeStudio(t *testing.T, requireAuth bool) string {
 						})
 						continue
 					}
-					if requireAuth && req.Params["_auth"] != "jwt-test" {
+					authObj, _ := req.Params["_auth"].(map[string]any)
+					jwtStr, _ := authObj["jwt"].(string)
+					if requireAuth && jwtStr != "jwt-test" {
 						_ = json.NewEncoder(c).Encode(map[string]any{
 							"id": req.ID, "error": map[string]any{"code": 401, "message": "no _auth"},
 						})
