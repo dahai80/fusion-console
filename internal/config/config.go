@@ -40,7 +40,7 @@ type AgentSettings struct {
 	PermissionMode string  `json:"permission_mode"`
 	Enabled        bool    `json:"enabled"`
 	MaxBudgetUSD   float64 `json:"max_budget_usd"`
-	WorkDir        string  `json:"work_dir"`   // dedicated workspace; empty = default per-agent dir
+	WorkDir        string  `json:"work_dir"`    // dedicated workspace; empty = default per-agent dir
 	ProviderID     string  `json:"provider_id"` // force this provider for the CLI; empty = CLI default
 }
 

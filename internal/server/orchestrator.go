@@ -218,7 +218,9 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 	full := ""
 	var total chat.Event
 	for turn := 0; turn < maxOrchestratorTurns; turn++ {
-		// Harness guard per planner iteration.
+		// Harness guard per planner iteration. The system prompt is compacted
+		// together with history only on the wire — the loop always re-anchors
+		// it at index 0, because the compactor may truncate old messages.
 		if s.cfg.Harness.Enabled {
 			hMsgs := toHarnessMessages(msgs)
 			proceed, reason, compacted, err := s.harness.PreLLM(prov.convID, prov.budget, prov.model, hMsgs)
@@ -230,6 +232,9 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 				return full, total
 			} else if len(compacted) > 0 {
 				msgs = fromHarnessMessages(compacted)
+				if len(msgs) == 0 || msgs[0].Role != "system" {
+					msgs = append([]chat.Message{{Role: "system", Content: orchestratorSystemPrompt}}, msgs...)
+				}
 			}
 		}
 
@@ -521,9 +526,18 @@ func toHarnessMessages(msgs []chat.Message) []harness.Message {
 }
 
 // fromHarnessMessages converts sidecar-compacted messages back to chat form.
+// The harness wire carries only role+content — tool_call pairing is lost.
+// A role-"tool" message without a preceding assistant tool_calls entry is
+// rejected by OpenAI-compatible APIs, so any surviving tool message is
+// demoted to a user message (its content still reaches the model).
 func fromHarnessMessages(msgs []harness.Message) []chat.Message {
 	out := make([]chat.Message, 0, len(msgs))
 	for _, m := range msgs {
+		if m.Role == "tool" {
+			log.Printf("orchestrator: compaction stripped tool-call pairing — tool result demoted to user message")
+			out = append(out, chat.Message{Role: "user", Content: "[tool result]\n" + m.Content})
+			continue
+		}
 		out = append(out, chat.Message{Role: m.Role, Content: m.Content})
 	}
 	return out

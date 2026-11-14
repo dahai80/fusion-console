@@ -5,3 +5,5 @@ web/node_modules/
 *.db-shm
 *.db-wal
 dist/
+__pycache__/
+target/

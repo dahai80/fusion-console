@@ -248,11 +248,11 @@ func (s *Store) UsageDashboard(user, rangeID string) (map[string]any, error) {
 	}
 
 	type bucketRow struct {
-		Bucket   string `json:"bucket"`
-		BrainIn  int64  `json:"brain_tokens_in"`
-		BrainOut int64  `json:"brain_tokens_out"`
-		WorkIn   int64  `json:"worker_tokens_in"`
-		WorkOut  int64  `json:"worker_tokens_out"`
+		Bucket   string  `json:"bucket"`
+		BrainIn  int64   `json:"brain_tokens_in"`
+		BrainOut int64   `json:"brain_tokens_out"`
+		WorkIn   int64   `json:"worker_tokens_in"`
+		WorkOut  int64   `json:"worker_tokens_out"`
 		BrainUSD float64 `json:"brain_cost_usd"`
 		WorkUSD  float64 `json:"worker_cost_usd"`
 	}

@@ -307,6 +307,44 @@ func TestAnthropicToolMessageConversion(t *testing.T) {
 	}
 }
 
+// TestAnthropicToolResultsMerge pins that consecutive tool results land in
+// ONE user message (Anthropic API rejects separate tool_result messages).
+func TestAnthropicToolResultsMerge(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(r.Body)
+		gotBody = buf.String()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+	}))
+	defer srv.Close()
+	p := &AnthropicCompatProvider{BaseURL: srv.URL}
+	msgs := []Message{
+		{Role: "user", Content: "go"},
+		{Role: "assistant", ToolCalls: []ToolCall{
+			{ID: "a1", Name: "run_agent", Arguments: `{}`},
+			{ID: "a2", Name: "read_artifact", Arguments: `{}`},
+		}},
+		{Role: "tool", ToolCallID: "a1", Content: "r1"},
+		{Role: "tool", ToolCallID: "a2", Content: "r2"},
+	}
+	ch, err := p.ChatStream(context.Background(), "m", "k", msgs)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for range ch {
+	}
+	if !strings.Contains(gotBody, `"tool_use_id":"a1"`) || !strings.Contains(gotBody, `"tool_use_id":"a2"`) {
+		t.Fatalf("both tool results missing: %s", gotBody)
+	}
+	// One user message carries both results: a1 block is immediately
+	// followed by the a2 block in the same content array.
+	if !strings.Contains(gotBody, `"content":"r1"},{"type":"tool_result"`) {
+		t.Fatalf("tool results not merged into one message: %s", gotBody)
+	}
+}
+
 func TestNormalizeGatewayBaseURL(t *testing.T) {
 	cases := []struct {
 		in, want string

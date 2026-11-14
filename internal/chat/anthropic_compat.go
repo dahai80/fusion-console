@@ -71,7 +71,9 @@ type anthropicReqMsg struct {
 
 // toAnthropicMessages converts the unified Message list (OpenAI-style tool
 // fields) into Anthropic content blocks. System messages move to the
-// top-level system field.
+// top-level system field. Consecutive tool results merge into ONE user
+// message — the Anthropic API requires all tool_result blocks in the single
+// message that follows the assistant tool_use turn.
 func toAnthropicMessages(messages []Message) (msgs []anthropicReqMsg, system string) {
 	for _, m := range messages {
 		switch m.Role {
@@ -81,9 +83,12 @@ func toAnthropicMessages(messages []Message) (msgs []anthropicReqMsg, system str
 			}
 			system += m.Content
 		case "tool":
-			msgs = append(msgs, anthropicReqMsg{Role: "user", Content: []anthropicBlock{{
-				Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content,
-			}}})
+			block := anthropicBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content}
+			if n := len(msgs); n > 0 && msgs[n-1].Role == "user" && len(msgs[n-1].Content) > 0 && msgs[n-1].Content[0].Type == "tool_result" {
+				msgs[n-1].Content = append(msgs[n-1].Content, block)
+			} else {
+				msgs = append(msgs, anthropicReqMsg{Role: "user", Content: []anthropicBlock{block}})
+			}
 		default:
 			var blocks []anthropicBlock
 			if m.Content != "" {

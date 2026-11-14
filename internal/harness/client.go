@@ -102,6 +102,11 @@ func resolvePaths() (python, sidecar string) {
 		}
 		ok := probe(stdin, bufio.NewReader(stdout))
 		if ok {
+			// The probe instance is only a capability check — kill it so it
+			// does not leak; spawn() starts the long-lived instance.
+			stdin.Close()
+			cmd.Process.Kill()
+			cmd.Wait()
 			log.Printf("harness: sidecar started (python %s, sidecar %s)", py, sidecar)
 			return py, sidecar
 		}
