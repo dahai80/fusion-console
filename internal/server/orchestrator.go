@@ -73,6 +73,21 @@ func orchestratorTools() []chat.ToolDecl {
 				`"path":{"type":"string","description":"relative path inside the agents root"}` +
 				`},"required":["path"]}`),
 		},
+		{
+			Name:        "create_team_member",
+			Description: "Register a new member on the agent-studio team roster (creates team capacity for dispatch). Requires the agent-studio integration to be enabled.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"agent_id":{"type":"string","description":"unique member id, e.g. coder-1"},` +
+				`"name":{"type":"string","description":"display name"},` +
+				`"team":{"type":"string","description":"team name; omit for the configured default team"},` +
+				`"capabilities":{"type":"array","items":{"type":"string"},"description":"what this member can do, e.g. [\"edit\",\"test\"]"}` +
+				`},"required":["agent_id"]}`),
+		},
+		{
+			Name:        "team_status",
+			Description: "Get the current team snapshot from agent-studio: task counts by status, member roster, connection health. Read-only.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+		},
 	}
 }
 
@@ -270,6 +285,58 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 			return string(data) + "\n...(truncated at 64 KB)", nil
 		}
 		return string(data), nil
+	case "create_team_member":
+		if !s.cfg.AgentStudio.Enabled {
+			return "", fmt.Errorf("team view (agent-studio integration) is not enabled in settings")
+		}
+		var margs struct {
+			AgentID      string   `json:"agent_id"`
+			Name         string   `json:"name"`
+			Team         string   `json:"team"`
+			Capabilities []string `json:"capabilities"`
+		}
+		if err := json.Unmarshal([]byte(call.Arguments), &margs); err != nil {
+			return "", fmt.Errorf("tool %s: bad arguments: %v", call.Name, err)
+		}
+		if margs.AgentID == "" {
+			margs.AgentID = args.Agent
+		}
+		if margs.AgentID == "" {
+			return "", fmt.Errorf("agent_id required")
+		}
+		_, err := s.teamRegisterMember(margs.AgentID, margs.Name, margs.Team, "idle", margs.Capabilities)
+		if err != nil {
+			return "", fmt.Errorf("register member: %v", err)
+		}
+		log.Printf("orchestrator: create_team_member agent=%s team=%s user=%s", margs.AgentID, margs.Team, user)
+		team := margs.Team
+		if team == "" {
+			team = s.cfg.AgentStudio.Team
+		}
+		return fmt.Sprintf("member %s registered on team %s", margs.AgentID, team), nil
+
+	case "team_status":
+		if !s.cfg.AgentStudio.Enabled {
+			return "", fmt.Errorf("team view (agent-studio integration) is not enabled in settings")
+		}
+		snap := s.teamView()
+		if !snap.Connected {
+			return "team observer not connected: " + snap.Error, nil
+		}
+		byStatus := map[string]int{}
+		for _, t := range snap.Tasks {
+			st, _ := t["status"].(string)
+			byStatus[st]++
+		}
+		names := make([]string, 0, len(snap.Roster))
+		for _, m := range snap.Roster {
+			if n, ok := m["name"].(string); ok && n != "" {
+				names = append(names, n)
+			}
+		}
+		return fmt.Sprintf("team %s: %d members (%s); tasks: %v; alerts: %d",
+			s.cfg.AgentStudio.Team, len(snap.Roster), strings.Join(names, ", "), byStatus, len(snap.Alerts)), nil
+
 	case "kb_search", "kb_ask":
 		var kbArgs map[string]any
 		if err := json.Unmarshal([]byte(call.Arguments), &kbArgs); err != nil {
