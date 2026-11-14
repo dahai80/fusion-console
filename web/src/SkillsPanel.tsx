@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Sparkles, Upload } from "lucide-react";
+import { FolderCheck, PenLine, Sparkles, Upload } from "lucide-react";
 import { api, type SkillEntry } from "./api";
 import { Badge, Button, Card, Input, Select, Textarea } from "./components/ui";
 
@@ -38,11 +38,21 @@ export function parseSkillFile(content: string): { name: string; description: st
     return { name, description, body: text.slice(end + 4).trim() };
 }
 
+type SkillTab = "installed" | "new" | "draft" | "import";
+
+const TABS: { id: SkillTab; label: string; icon: typeof FolderCheck }[] = [
+    { id: "installed", label: "Installed", icon: FolderCheck },
+    { id: "new", label: "New Skill", icon: PenLine },
+    { id: "draft", label: "AI Draft", icon: Sparkles },
+    { id: "import", label: "Import from GitHub", icon: Upload },
+];
+
 // SkillsPanel manages the SKILL.md directories headless workers load:
 // list/delete installed skills, edit or create them (optionally AI-drafted
 // from a hint or pasted reference text), and import vetted industry skills
-// from GitHub.
+// from GitHub. Four tabs instead of one long scroll.
 export function SkillsPanel() {
+    const [tab, setTab] = useState<SkillTab>("installed");
     const [skills, setSkills] = useState<SkillEntry[]>([]);
     const [msg, setMsg] = useState("");
     const [err, setErr] = useState("");
@@ -62,12 +72,13 @@ export function SkillsPanel() {
     }, [repo]);
     useEffect(() => { load(); }, [load]);
 
-    const openEditor = (name = "", description = "", body = "") => {
+    const openEditor = (n = "", description = "", bodyText = "") => {
         setEditing(true);
-        setName(name);
+        setName(n);
         setDescription(description);
-        setBody(body);
+        setBody(bodyText);
         setMsg(""); setErr("");
+        setTab("new");
     };
 
     const save = async () => {
@@ -76,6 +87,7 @@ export function SkillsPanel() {
             const r = await api.saveSkill({ name, description, body, scope, repo });
             setMsg(`skill "${name}" saved to ${r.path}`);
             setEditing(false);
+            setTab("installed");
             load();
         } catch (ex) {
             setErr((ex as Error).message);
@@ -132,13 +144,49 @@ export function SkillsPanel() {
                 Scope only applies to the Claude agent.
             </p>
 
-            {!editing && (
-                <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={() => openEditor()}>New skill</Button>
+            <div className="flex flex-wrap gap-1 rounded-xl border border-zinc-200/80 bg-zinc-100/60 p-1 dark:border-zinc-800 dark:bg-zinc-900/60">
+                {TABS.map(({ id, label, icon: Icon }) => (
+                    <button key={id} onClick={() => { setTab(id); if (id !== "new") setEditing(false); }}
+                        className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+                            tab === id
+                                ? "bg-white text-indigo-600 shadow-sm dark:bg-zinc-800 dark:text-indigo-400"
+                                : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                        }`}>
+                        <Icon size={14} /> {label}
+                    </button>
+                ))}
+            </div>
+
+            {msg && <p className="text-sm text-indigo-500">{msg}</p>}
+            {err && <p className="text-sm text-red-500">{err}</p>}
+
+            {tab === "installed" && (
+                <div className="space-y-2">
+                    <p className="text-xs font-medium text-zinc-500">Installed skills ({skills.length})</p>
+                    <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+                        {skills.map((s) => (
+                            <Card key={s.path} className="flex items-center justify-between p-3 text-sm">
+                                <div className="min-w-0">
+                                    <p className="font-medium flex items-center gap-2">
+                                        {s.name} <Badge>{s.scope}</Badge>
+                                    </p>
+                                    <p className="truncate text-xs text-zinc-500">{s.description || s.path}</p>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                    <Button variant="ghost" onClick={() => editSkill(s)}>edit</Button>
+                                    <button onClick={() => remove(s)} title={`Delete skill ${s.name}`}
+                                        className="rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
+                                        delete
+                                    </button>
+                                </div>
+                            </Card>
+                        ))}
+                        {skills.length === 0 && <p className="text-sm text-zinc-400">No skills installed yet.</p>}
+                    </div>
                 </div>
             )}
 
-            {editing && (
+            {tab === "new" && (
                 <Card className="space-y-3 p-4">
                     <h3 className="font-medium">{name ? `Edit skill: ${name}` : "New skill"}</h3>
                     <div className="grid grid-cols-2 gap-3">
@@ -155,61 +203,38 @@ export function SkillsPanel() {
                     <Textarea className="min-h-48 font-mono text-xs" placeholder="Skill body — markdown instructions, steps, guardrails" value={body} onChange={(e) => setBody(e.target.value)} />
                     <div className="flex gap-2">
                         <Button onClick={save} disabled={busy || !name || !body}>Save skill</Button>
-                        <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+                        <Button variant="ghost" onClick={() => { setEditing(false); setTab("installed"); }}>Cancel</Button>
                     </div>
                 </Card>
             )}
 
-            <Card className="space-y-3 p-4">
-                <h3 className="font-medium flex items-center gap-2"><Sparkles size={16} /> AI draft</h3>
-                <p className="text-xs text-zinc-500">Describe the skill (or paste reference material — session logs, manuals, wiki) and the brain drafts a SKILL.md. Review before saving.</p>
-                <Input placeholder="what should this skill do?" value={draftHint} onChange={(e) => setDraftHint(e.target.value)} />
-                <Textarea className="min-h-20 text-xs" placeholder="optional: paste reference text to distill" value={draftText} onChange={(e) => setDraftText(e.target.value)} />
-                <Button onClick={draft} disabled={busy || (!draftHint && !draftText)}>Draft with AI</Button>
-            </Card>
+            {tab === "draft" && (
+                <Card className="space-y-3 p-4">
+                    <h3 className="font-medium flex items-center gap-2"><Sparkles size={16} /> AI draft</h3>
+                    <p className="text-xs text-zinc-500">Describe the skill (or paste reference material — session logs, manuals, wiki) and the brain drafts a SKILL.md. Review before saving.</p>
+                    <Input placeholder="what should this skill do?" value={draftHint} onChange={(e) => setDraftHint(e.target.value)} />
+                    <Textarea className="min-h-20 text-xs" placeholder="optional: paste reference text to distill" value={draftText} onChange={(e) => setDraftText(e.target.value)} />
+                    <Button onClick={draft} disabled={busy || (!draftHint && !draftText)}>Draft with AI</Button>
+                </Card>
+            )}
 
-            <Card className="space-y-3 p-4">
-                <h3 className="font-medium flex items-center gap-2"><Upload size={16} /> Import from GitHub</h3>
-                <div className="flex gap-2">
-                    <Input className="flex-1" placeholder="owner/repo or owner/repo/path (SKILL.md is fetched)" value={importSource} onChange={(e) => setImportSource(e.target.value)} />
-                    <Button onClick={() => importSkill(importSource)} disabled={busy || !importSource.trim()}>Fetch</Button>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                    {CURATED.map((c) => (
-                        <button key={c.source} onClick={() => { setImportSource(c.source); importSkill(c.source); }} disabled={busy}
-                            className="rounded-lg border border-zinc-200/80 px-2 py-1 text-xs text-zinc-500 hover:border-indigo-400 hover:text-indigo-600 dark:border-zinc-800 dark:hover:text-indigo-400">
-                            {c.label}
-                        </button>
-                    ))}
-                </div>
-            </Card>
-
-            {msg && <p className="text-sm text-indigo-500">{msg}</p>}
-            {err && <p className="text-sm text-red-500">{err}</p>}
-
-            <div className="space-y-2">
-                <p className="text-xs font-medium text-zinc-500">Installed skills ({skills.length})</p>
-                <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-                    {skills.map((s) => (
-                        <Card key={s.path} className="flex items-center justify-between p-3 text-sm">
-                            <div className="min-w-0">
-                                <p className="font-medium flex items-center gap-2">
-                                    {s.name} <Badge>{s.scope}</Badge>
-                                </p>
-                                <p className="truncate text-xs text-zinc-500">{s.description || s.path}</p>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-1">
-                                <Button variant="ghost" onClick={() => editSkill(s)}>edit</Button>
-                                <button onClick={() => remove(s)} title={`Delete skill ${s.name}`}
-                                    className="rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
-                                    delete
-                                </button>
-                            </div>
-                        </Card>
-                    ))}
-                    {skills.length === 0 && <p className="text-sm text-zinc-400">No skills installed yet.</p>}
-                </div>
-            </div>
+            {tab === "import" && (
+                <Card className="space-y-3 p-4">
+                    <h3 className="font-medium flex items-center gap-2"><Upload size={16} /> Import from GitHub</h3>
+                    <div className="flex gap-2">
+                        <Input className="flex-1" placeholder="owner/repo or owner/repo/path (SKILL.md is fetched)" value={importSource} onChange={(e) => setImportSource(e.target.value)} />
+                        <Button onClick={() => importSkill(importSource)} disabled={busy || !importSource.trim()}>Fetch</Button>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                        {CURATED.map((c) => (
+                            <button key={c.source} onClick={() => { setImportSource(c.source); importSkill(c.source); }} disabled={busy}
+                                className="rounded-lg border border-zinc-200/80 px-2 py-1 text-xs text-zinc-500 hover:border-indigo-400 hover:text-indigo-600 dark:border-zinc-800 dark:hover:text-indigo-400">
+                                {c.label}
+                            </button>
+                        ))}
+                    </div>
+                </Card>
+            )}
         </div>
     );
 
