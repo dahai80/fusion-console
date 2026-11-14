@@ -381,7 +381,10 @@ function VerifyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
     setBusy(true); setMsg(""); setErr(""); setSample("");
     try {
       const pr = await api.providers();
-      const p = (pr.providers ?? []).find((x) => x.enabled);
+      // Prefer the gateway provider — its key self-heals. A zombie direct
+      // provider (stale keychain entry) must not fail onboarding.
+      const p = (pr.providers ?? []).find((x) => x.enabled && x.type === "gateway")
+        ?? (pr.providers ?? []).find((x) => x.enabled);
       if (!p) {
         setErr("no enabled provider — finish the Providers step first");
         return;

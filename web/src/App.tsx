@@ -717,6 +717,7 @@ function GatewayPage() {
   const [adminUser, setAdminUser] = useState("");
   const [adminPass, setAdminPass] = useState("");
   const [keys, setKeys] = useState<GatewayKey[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [brainModel, setBrainModel] = useState("");
   const [gwModels, setGwModels] = useState<GatewayModelItem[]>([]);
 
@@ -730,6 +731,7 @@ function GatewayPage() {
   }, []);
   const loadBrainModel = useCallback(() => {
     api.providers().then((r) => {
+      setProviders(r.providers ?? []);
       const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled);
       if (gw) setBrainModel(gw.model || "");
     }).catch(() => {});
@@ -812,6 +814,17 @@ function GatewayPage() {
       await api.deleteGatewayKey(name);
       setMsg(`API key "${name}" deleted`);
       loadKeys();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+
+  const deleteProvider = async (p: Provider) => {
+    setMsg(""); setErr("");
+    try {
+      await api.deleteProvider(p.id);
+      setMsg(`provider "${p.id}" deleted from console config`);
+      loadBrainModel();
     } catch (ex) {
       setErr((ex as Error).message);
     }
@@ -967,6 +980,37 @@ function GatewayPage() {
               ))}
             </div>
           )}
+        </Card>
+      )}
+
+      {providers.length > 0 && (
+        <Card className="space-y-3 p-4">
+          <h3 className="font-medium flex items-center gap-2"><Cpu size={16} /> Console providers</h3>
+          <p className="text-sm text-zinc-500">
+            Provider entries in the console <code>config.json</code>. The <code>gateway</code> entry
+            is managed automatically. Old direct entries (openai/anthropic) whose API key is not in
+            this machine's keychain can be deleted here.
+          </p>
+          <div className="space-y-1">
+            {providers.map((p) => (
+              <div key={p.id} className="flex items-center gap-2 text-xs">
+                <span className="font-medium">{p.id}</span>
+                <Badge>{p.type}</Badge>
+                {!p.enabled && <Badge>disabled</Badge>}
+                <span className="min-w-0 truncate text-zinc-400">{p.model || p.base_url}</span>
+                {p.type === "gateway" ? (
+                  <span className="ml-auto rounded-lg px-2 py-0.5 text-zinc-300 dark:text-zinc-600" title="Managed by the console — chat, brain and workers all use it.">
+                    managed
+                  </span>
+                ) : (
+                  <button onClick={() => deleteProvider(p)} title={`Delete provider ${p.id}`}
+                    className="ml-auto rounded-lg px-2 py-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
+                    delete
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 

@@ -492,6 +492,32 @@ func (s *Server) handleSaveProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleDeleteProvider removes one console provider entry (config.json).
+// Used to clean up zombie direct providers left by the removed providers form.
+func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	kept := s.cfg.Provider[:0]
+	found := false
+	for _, p := range s.cfg.Provider {
+		if p.ID == id {
+			found = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown provider " + id})
+		return
+	}
+	s.cfg.Provider = kept
+	if err := s.cfg.Save(s.cfgDir); err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	log.Printf("server: provider %s deleted", id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleStoreAPIKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		KeyID  string `json:"key_id"`
@@ -532,44 +558,40 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
-// handleTestCall fires one minimal chat completion at the saved provider so
-// onboarding can verify the endpoint + key + model actually work before the
-// developer leaves the wizard.
-func (s *Server) handleTestCall(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ProviderID string `json:"provider_id"`
+// firstGatewayProvider returns the first enabled gateway-type provider —
+// used as the fallback target when a direct provider's keychain entry is
+// missing (zombie entries left by the removed providers form).
+func (s *Server) firstGatewayProvider() (*config.Provider, bool) {
+	for i := range s.cfg.Provider {
+		p := &s.cfg.Provider[i]
+		if p.Type == config.ProviderGateway && p.Enabled {
+			return p, true
+		}
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	prov, ok := s.providerByID(req.ProviderID)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled provider " + req.ProviderID})
-		return
-	}
+	return nil, false
+}
+
+// runTestCall fires one minimal chat completion at the given provider and
+// returns the JSON response body plus HTTP status.
+func (s *Server) runTestCall(ctx context.Context, prov *config.Provider) (map[string]any, int) {
 	provider, err := buildProvider(prov)
 	if err != nil {
-		serverError(w, err, http.StatusInternalServerError)
-		return
+		return map[string]any{"error": err.Error()}, http.StatusInternalServerError
 	}
-	apiKey, err := s.resolveProviderKey(r.Context(), prov)
+	apiKey, err := s.resolveProviderKey(ctx, prov)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "api key unavailable: " + err.Error()})
-		return
+		return map[string]any{"error": "api key unavailable: " + err.Error()}, http.StatusBadRequest
 	}
 	if prov.Model == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider has no model set"})
-		return
+		return map[string]any{"error": "provider has no model set"}, http.StatusBadRequest
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	start := time.Now()
-	evCh, err := provider.ChatStream(ctx, prov.Model, apiKey, []chat.Message{{Role: "user", Content: "Reply with the single word: pong"}})
+	evCh, err := provider.ChatStream(callCtx, prov.Model, apiKey, []chat.Message{{Role: "user", Content: "Reply with the single word: pong"}})
 	if err != nil {
 		log.Printf("server: test call provider=%s dial failed: %v", prov.ID, err)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
-		return
+		return map[string]any{"ok": false, "error": err.Error()}, http.StatusOK
 	}
 	sample := ""
 	var callErr string
@@ -590,16 +612,48 @@ func (s *Server) handleTestCall(w http.ResponseWriter, r *http.Request) {
 	latency := time.Since(start).Milliseconds()
 	if callErr != "" {
 		log.Printf("server: test call provider=%s stream error after %dms: %s", prov.ID, latency, callErr)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": callErr, "latency_ms": latency})
-		return
+		return map[string]any{"ok": false, "error": callErr, "latency_ms": latency}, http.StatusOK
 	}
 	if strings.TrimSpace(sample) == "" {
 		log.Printf("server: test call provider=%s empty reply after %dms", prov.ID, latency)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "model returned an empty reply", "latency_ms": latency})
-		return
+		return map[string]any{"ok": false, "error": "model returned an empty reply", "latency_ms": latency}, http.StatusOK
 	}
 	log.Printf("server: test call provider=%s model=%s ok in %dms", prov.ID, prov.Model, latency)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sample": sample, "latency_ms": latency})
+	return map[string]any{"ok": true, "sample": sample, "latency_ms": latency}, http.StatusOK
+}
+
+// handleTestCall fires one minimal chat completion at the saved provider so
+// onboarding can verify the endpoint + key + model actually work before the
+// developer leaves the wizard. When the requested provider has no usable API
+// key (stale keychain entry) the call retries once with the first enabled
+// gateway provider — the gateway key self-heals, zombie direct providers do
+// not block onboarding.
+func (s *Server) handleTestCall(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProviderID string `json:"provider_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	prov, ok := s.providerByID(req.ProviderID)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled provider " + req.ProviderID})
+		return
+	}
+	resp, status := s.runTestCall(r.Context(), prov)
+	if errText, _ := resp["error"].(string); status == http.StatusBadRequest && strings.HasPrefix(errText, "api key unavailable:") {
+		if gw, found := s.firstGatewayProvider(); found && gw.ID != prov.ID {
+			log.Printf("server: test call provider=%s key unavailable, falling back to gateway provider %s", prov.ID, gw.ID)
+			fallback, fbStatus := s.runTestCall(r.Context(), gw)
+			if fbStatus == http.StatusOK {
+				fallback["note"] = fmt.Sprintf("provider %q has no usable API key; test call ran against gateway provider %q instead", prov.ID, gw.ID)
+				writeJSON(w, http.StatusOK, fallback)
+				return
+			}
+		}
+	}
+	writeJSON(w, status, resp)
 }
 
 func modelBaseURL(p *config.Provider) string {

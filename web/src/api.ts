@@ -84,6 +84,8 @@ export const api = {
   providers: () => req<{ providers: Provider[] }>("/api/settings/providers"),
   saveProvider: (p: Provider) =>
     req<{ ok: boolean }>("/api/settings/providers", { method: "POST", body: JSON.stringify(p) }),
+  deleteProvider: (id: string) =>
+    req<{ ok: boolean }>(`/api/settings/providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
   storeApiKey: (keyId: string, secret: string) =>
     req<{ ok: boolean }>("/api/settings/apikey", { method: "POST", body: JSON.stringify({ key_id: keyId, secret }) }),
   models: (provider: string) =>

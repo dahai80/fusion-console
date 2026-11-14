@@ -87,6 +87,7 @@ func (s *Server) routes() {
 
 	m.HandleFunc("GET /api/settings/providers", s.auth.Require(s.handleListProviders))
 	m.HandleFunc("POST /api/settings/providers", s.auth.Require(s.handleSaveProvider))
+	m.HandleFunc("DELETE /api/settings/providers/{id}", s.auth.Require(s.handleDeleteProvider))
 	m.HandleFunc("POST /api/settings/apikey", s.auth.Require(s.handleStoreAPIKey))
 	m.HandleFunc("GET /api/settings/models", s.auth.Require(s.handleModels))
 	m.HandleFunc("POST /api/settings/testcall", s.auth.Require(s.handleTestCall))
