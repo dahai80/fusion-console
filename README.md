@@ -85,17 +85,34 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   API keys stored in the OS keychain (Keychain / DPAPI / libsecret), never in
   the config file.
 - **Cost accounting** — every turn lands in SQLite; per-day per-source report.
+- **Failure log (MAST taxonomy)** — orchestrator failures are auto-tagged
+  (`fc1_brief` on weak dispatch briefs with pre-flight warnings surfaced in
+  the chat tool feed, `fc3_tool` on agent errors) and accept manual notes
+  (`fc2_handoff`, `other`); the Dashboard **Failures** tab lists them and
+  exports JSONL for offline analysis ([MAST, arXiv 2503.13657]).
+- **Token economics** — the Usage tab shows the input:output ratio and the
+  brain-vs-worker token share, so planner overhead is visible at a glance;
+  the Workers tab shows each worker's per-run budget cap against lifetime
+  spend.
 - **Multi-user (light)** — per-user bcrypt passwords, HttpOnly session cookies,
   login required even inside the tailnet.
 - **Knowledge Base (optional fusion-rag)** — nothing is downloaded until you
-  click *Download & install* in the Knowledge Base menu. The installer pulls
-  the latest GitHub releases of fusion-rag and fusion-core, builds a venv and
-  pip-installs them (aliyun mirror; `FUSION_RAG_DOWNLOAD_URL` /
-  `FUSION_CORE_DOWNLOAD_URL` overrides for restricted networks). Once running,
+  click *Download & install* in the Knowledge Base menu. The installer
+  pip-installs fusion-rag (and its fusion-core dependency) from PyPI — aliyun
+  mirror first, official PyPI as a secondary index for packages the mirror
+  has not synced yet. Once running,
   the console proxies the RAG management UI same-origin at
   `/shell/fusion-rag/`, and every chat gains `kb_search` / `kb_ask` tools over
   MCP (JSON-RPC against the RAG `/mcp` endpoint; a missing `kb_id` resolves to
   the first knowledge base). Toggle exposure in chat from the menu.
+- **Coding Agent (optional fusion-code / claude / codex)** — a dropdown installs
+  whichever headless coding agent CLI you want, nothing pre-downloaded.
+  fusion-code is built from the GitHub source with bun (service + web console
+  proxied at `/shell/fusion-code/`; first open asks you to bind an API key —
+  the console copies the provider key from the OS keychain into
+  `~/.fusion-code/settings.json`, never displaying it). Claude Code and Codex
+  install via `npm install -g` and are then dispatchable from the Agents page.
+  Installer overrides: `FUSION_CODE_DOWNLOAD_URL`.
 
 ## What it deliberately does NOT do
 

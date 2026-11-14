@@ -129,6 +129,20 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		if strings.TrimSpace(args.Task) == "" {
 			return "", fmt.Errorf("empty task")
 		}
+		// Brief quality gate (issue #4): non-blocking pre-flight warnings on
+		// the dispatch payload, surfaced in the chat tool feed.
+		if warnings := checkBrief(args.Task); len(warnings) > 0 {
+			parts := make([]string, 0, len(warnings))
+			for _, w := range warnings {
+				parts = append(parts, w.Item+": "+w.Fix)
+			}
+			detail := "brief quality warning for " + args.Agent + " — " + strings.Join(parts, "; ")
+			log.Printf("orchestrator: %s", detail)
+			s.tagFailure(convID, user, args.Agent, "fc1_brief", strings.Join(parts, "; "))
+			if send != nil {
+				send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress", "detail": detail})
+			}
+		}
 		// Fleet guardrails: only enabled workers, per-worker budget/isolation
 		// from the wizard config, repo whitelist enforced for worktrees.
 		if wk != nil && !wk.Enabled {
@@ -176,6 +190,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		defer s.agentRuns.Unlock()
 		evCh, err := adapter.Run(ctx, opts)
 		if err != nil {
+			s.tagFailure(convID, user, args.Agent, "fc3_tool", "failed to start: "+err.Error())
 			return "", fmt.Errorf("agent %s failed to start: %v", args.Agent, err)
 		}
 		// Live dashboard state: mark the worker busy and publish progress.
@@ -210,6 +225,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 				case agent.EventUsage:
 					usage = ev
 				case agent.EventError:
+					s.tagFailure(convID, user, args.Agent, "fc3_tool", "agent error: "+ev.Text)
 					return "", fmt.Errorf("agent %s error: %s", args.Agent, ev.Text)
 				}
 			case <-heartbeat.C:

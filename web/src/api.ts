@@ -154,6 +154,27 @@ export const api = {
   ragSetEnabled: (enabled: boolean) =>
     req<{ enabled: boolean }>("/api/rag/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
   workersStatus: () => req<{ workers: WorkerStatus[] }>("/api/workers/status"),
+  failuresList: () => req<{ failures: FailureRow[] }>("/api/failures"),
+  failuresAdd: (body: { agent?: string; category: string; note: string }) =>
+    req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
+  codeStatus: () => req<CodeStatus>("/api/code/status"),
+  codeInstall: (agent: string) =>
+    req<{ status: string }>("/api/code/install", { method: "POST", body: JSON.stringify({ agent }) }),
+  codeStart: () => req<{ running: boolean }>("/api/code/start", { method: "POST" }),
+  codeStop: () => req<{ running: boolean }>("/api/code/stop", { method: "POST" }),
+  codeSetEnabled: (enabled: boolean) =>
+    req<{ enabled: boolean }>("/api/code/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
+  codeSetKey: (providerId: string) =>
+    req<{ ok: boolean; env_vars: string[] }>("/api/code/key", { method: "POST", body: JSON.stringify({ provider_id: providerId }) }),
+};
+
+export type FailureRow = {
+  id: number;
+  conv_id: number;
+  agent: string;
+  category: string;
+  note: string;
+  created_at: string;
 };
 
 export type WorkerStatus = {
@@ -188,6 +209,26 @@ export type RagStatus = {
   logs?: string[];
   error?: string;
   port: number;
+};
+
+export type CodeAgentRow = {
+  id: string;
+  name: string;
+  installed: boolean;
+  detail?: string;
+  running: boolean;
+};
+
+export type CodeStatus = {
+  agents: CodeAgentRow[];
+  fusion: {
+    phase: "idle" | "downloading" | "extracting" | "installing" | "done" | "error" | string;
+    logs?: string[];
+    error?: string;
+    port: number;
+    web_port: number;
+    key_configured: boolean;
+  };
 };
 
 export type WorkerSettings = {

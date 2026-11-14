@@ -128,6 +128,23 @@ type RagConfig struct {
 	InstallDir string `json:"install_dir"` // where the release tarball is unpacked and installed
 }
 
+// CodeConfig is the optional fusion-code integration. Nothing is downloaded
+// or started until the user installs it from the Coding Agent menu; the
+// section only records the decision. The web GUI is proxied at
+// /shell/fusion-code/ once installed.
+type CodeConfig struct {
+	Installed  bool   `json:"installed"`
+	Enabled    bool   `json:"enabled"`
+	Port       int    `json:"port"`        // fusion-code API service port (registered 11441)
+	WebPort    int    `json:"web_port"`    // fusion-code web GUI port (registered 11482)
+	InstallDir string `json:"install_dir"` // where the source tarball is unpacked and built
+}
+
+// DefaultCode returns the opt-in default: nothing installed, nothing enabled.
+func DefaultCode() CodeConfig {
+	return CodeConfig{Installed: false, Enabled: false, Port: 11441, WebPort: 11482, InstallDir: filepath.Join(DefaultDir(), "fusion-code")}
+}
+
 // DefaultHarness returns the M1 default: on, 400k tokens per conversation.
 func DefaultHarness() HarnessConfig {
 	return HarnessConfig{Enabled: true, BudgetTokens: 400000}
@@ -147,6 +164,7 @@ type Config struct {
 	Harness      HarnessConfig      `json:"harness"`
 	Orchestrator OrchestratorConfig `json:"orchestrator"`
 	Rag          RagConfig          `json:"rag"`
+	Code         CodeConfig         `json:"code"`
 }
 
 // UserEntry is one login account. Only the bcrypt hash is stored.
@@ -225,6 +243,20 @@ func Load(dir string) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.Rag.InstallDir) == "" {
 		cfg.Rag.InstallDir = DefaultRag().InstallDir
+	}
+	// Code integration mirrors the RAG defaults: absent section = opt-in
+	// defaults, present section gets missing ports/dirs filled.
+	if !bytes.Contains(data, []byte("\"code\"")) {
+		cfg.Code = DefaultCode()
+	}
+	if cfg.Code.Port == 0 {
+		cfg.Code.Port = 11441
+	}
+	if cfg.Code.WebPort == 0 {
+		cfg.Code.WebPort = 11482
+	}
+	if strings.TrimSpace(cfg.Code.InstallDir) == "" {
+		cfg.Code.InstallDir = DefaultCode().InstallDir
 	}
 	return cfg, nil
 }

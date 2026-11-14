@@ -30,8 +30,9 @@ type Server struct {
 	approvals  sync.Map        // confirm-mode dispatch gates: id -> chan bool
 	harness    *harness.Client // fusion-harness sidecar (chat guards)
 	autoToken  string          // one-time auto-login token for --open; empty = disabled
-	ragInstall ragInstallState // background fusion-rag install job (zero value = idle)
-	runs       workerRuns      // live worker dispatch registry (busy/idle + current task)
+	ragInstall  ragInstallState // background fusion-rag install job (zero value = idle)
+	codeInstall ragInstallState // background fusion-code install job (same job-state shape)
+	runs        workerRuns      // live worker dispatch registry (busy/idle + current task)
 	mux        *http.ServeMux
 }
 
@@ -117,6 +118,23 @@ func (s *Server) routes() {
 	}))
 	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
 		m.Handle(method+" /shell/fusion-rag/", ragProxyHandler)
+	}
+
+	// Optional fusion-code Coding Agent menu: same shape as the RAG menu.
+	m.HandleFunc("GET /api/code/status", s.auth.Require(s.handleCodeStatus))
+	m.HandleFunc("POST /api/code/install", s.auth.Require(s.handleCodeInstall))
+	m.HandleFunc("POST /api/code/start", s.auth.Require(s.handleCodeStart))
+	m.HandleFunc("POST /api/code/stop", s.auth.Require(s.handleCodeStop))
+	m.HandleFunc("POST /api/code/enabled", s.auth.Require(s.handleCodeEnabled))
+	m.HandleFunc("POST /api/code/key", s.auth.Require(s.handleCodeKey))
+	m.HandleFunc("GET /api/failures", s.auth.Require(s.handleFailureList))
+	m.HandleFunc("POST /api/failures", s.auth.Require(s.handleFailureList))
+	m.HandleFunc("GET /api/failures/export", s.auth.Require(s.handleFailureExport))
+	codeProxyHandler := s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.codeProxy().ServeHTTP(w, r)
+	}))
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		m.Handle(method+" /shell/fusion-code/", codeProxyHandler)
 	}
 
 	m.HandleFunc("GET /", s.handleStatic)

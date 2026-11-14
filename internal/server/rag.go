@@ -351,76 +351,26 @@ func (st *ragInstallState) logf(format string, args ...any) {
 	log.Printf("server: rag install: %s", line)
 }
 
-// ragReleaseAPI is overridable for tests and restricted networks.
-func ragReleaseAPI() string {
-	if u := os.Getenv("FUSION_RAG_RELEASE_API"); u != "" {
-		return u
-	}
-	return "https://api.github.com/repos/dahai80/fusion-rag/releases/latest"
-}
-
-// coreReleaseAPI is the fusion-core release lookup (fusion-rag's in-tree
-// dependency is not published to PyPI, so the installer provisions it first).
-func coreReleaseAPI() string {
-	if u := os.Getenv("FUSION_CORE_RELEASE_API"); u != "" {
-		return u
-	}
-	return "https://api.github.com/repos/dahai80/fusion-core/releases/latest"
-}
-
-func coreReleaseTarball(tag string) string {
-	if u := os.Getenv("FUSION_CORE_DOWNLOAD_URL"); u != "" {
-		return u
-	}
-	return "https://github.com/dahai80/fusion-core/archive/refs/tags/" + tag + ".tar.gz"
-}
-
-func ragReleaseTarball(tag string) string {
-	if u := os.Getenv("FUSION_RAG_DOWNLOAD_URL"); u != "" {
-		return u
-	}
-	return "https://github.com/dahai80/fusion-rag/archive/refs/tags/" + tag + ".tar.gz"
-}
-
+// Aliyun mirrors common deps fast but lags fresh PyPI uploads (fusion-rag was
+// 404 there for days after release), so official PyPI stays as a secondary
+// index — pip merges results across both.
 const ragPipMirror = "https://mirrors.aliyun.com/pypi/simple/"
+
+const ragPipFallback = "https://pypi.org/simple/"
 
 // installRAG runs the full install pipeline in the background. Phases fail
 // loudly: any error lands in st.err and stops the job.
 func (s *Server) installRAG(ctx context.Context, st *ragInstallState) {
 	dir := s.cfg.Rag.InstallDir
-	src := filepath.Join(dir, "src")
 
 	st.setPhase("downloading")
-	tag, err := latestRelease(ctx, ragReleaseAPI())
-	if err != nil {
+	// fusion-rag installs from PyPI; the download phase now only prepares the
+	// install root (kept as a phase so the UI log narrative stays honest).
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		s.ragInstallFail(st, err)
 		return
 	}
-	st.logf("latest release %s", tag)
-	tarball := filepath.Join(dir, "fusion-rag-"+tag+".tar.gz")
-	if err := downloadFile(ctx, ragReleaseTarball(tag), tarball); err != nil {
-		s.ragInstallFail(st, fmt.Errorf("download: %v", err))
-		return
-	}
-	st.logf("downloaded %s", filepath.Base(tarball))
-
-	st.setPhase("extracting")
-	// A previous partial install may have left a partial tree — start clean.
-	if err := os.RemoveAll(src); err != nil {
-		s.ragInstallFail(st, err)
-		return
-	}
-	if err := extractTreeTarGz(tarball, src); err != nil {
-		s.ragInstallFail(st, fmt.Errorf("extract: %v", err))
-		return
-	}
-	// The archive carries a versioned top directory — flatten it.
-	if err := flattenSingleDir(src); err != nil {
-		s.ragInstallFail(st, err)
-		return
-	}
-	_ = os.Remove(tarball)
-	st.logf("extracted to %s", src)
+	st.logf("install root ready at %s", dir)
 
 	st.setPhase("installing")
 	venv := filepath.Join(dir, ".venv")
@@ -436,35 +386,9 @@ func (s *Server) installRAG(ctx context.Context, st *ragInstallState) {
 	if runtime.GOOS == "windows" {
 		pip = filepath.Join(venv, "Scripts", "pip.exe")
 	}
-	// fusion-core is fusion-rag's shared-library dependency but is not on
-	// PyPI — provision it from its GitHub release first so the editable
-	// install of fusion-rag resolves.
-	coreTag, err := latestRelease(ctx, coreReleaseAPI())
-	if err != nil {
-		s.ragInstallFail(st, fmt.Errorf("fusion-core release lookup: %v", err))
-		return
-	}
-	coreTarball := filepath.Join(dir, "fusion-core-"+coreTag+".tar.gz")
-	if err := downloadFile(ctx, coreReleaseTarball(coreTag), coreTarball); err != nil {
-		s.ragInstallFail(st, fmt.Errorf("fusion-core download: %v", err))
-		return
-	}
-	coreSrc := filepath.Join(dir, "fusion-core")
-	_ = os.RemoveAll(coreSrc)
-	if err := extractTreeTarGz(coreTarball, coreSrc); err != nil {
-		s.ragInstallFail(st, fmt.Errorf("fusion-core extract: %v", err))
-		return
-	}
-	if err := flattenSingleDir(coreSrc); err != nil {
-		s.ragInstallFail(st, fmt.Errorf("fusion-core archive layout: %v", err))
-		return
-	}
-	_ = os.Remove(coreTarball)
-	if err := runStream(ctx, st, src, pip, "install", coreSrc, "-i", ragPipMirror); err != nil {
-		s.ragInstallFail(st, fmt.Errorf("pip install fusion-core: %v", err))
-		return
-	}
-	if err := runStream(ctx, st, src, pip, "install", "-e", src, "-i", ragPipMirror); err != nil {
+	// fusion-rag is on PyPI now (its fusion-core dependency resolves with it),
+	// so a plain pip install replaces the old release-tarball + editable path.
+	if err := runStream(ctx, st, dir, pip, "install", "fusion-rag", "-i", ragPipMirror, "--extra-index-url", ragPipFallback); err != nil {
 		s.ragInstallFail(st, fmt.Errorf("pip install fusion-rag: %v", err))
 		return
 	}

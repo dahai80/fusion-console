@@ -75,6 +75,16 @@ func (s *Store) migrate() error {
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_id, id)`,
+		`CREATE TABLE IF NOT EXISTS failure_tags (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			conv_id INTEGER NOT NULL DEFAULT 0,
+			user TEXT NOT NULL,
+			agent TEXT NOT NULL DEFAULT '',
+			category TEXT NOT NULL,
+			note TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_failure_tags_user ON failure_tags(user, id)`,
 		`CREATE TABLE IF NOT EXISTS cost_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			conv_id INTEGER NOT NULL,
@@ -329,6 +339,69 @@ func (s *Store) WorkerSpend(user string) (map[string]map[string]any, error) {
 			"calls": calls, "cost_usd": cost,
 			"tokens_in": tin.Int64, "tokens_out": tout.Int64, "last_run": last,
 		}
+	}
+	return out, rows.Err()
+}
+
+// LogFailure records one failure-tag row (MAST taxonomy, issue #4):
+// category is fc1_brief | fc2_handoff | fc3_tool | other.
+func (s *Store) LogFailure(convID int64, user, agentName, category, note string) error {
+	if _, err := s.db.Exec(
+		`INSERT INTO failure_tags (conv_id, user, agent, category, note, created_at) VALUES (?,?,?,?,?,?)`,
+		convID, user, agentName, category, note, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("store: log failure: %w", err)
+	}
+	return nil
+}
+
+// ListFailures returns recent failure tags for a user, newest first.
+func (s *Store) ListFailures(user string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.Query(
+		`SELECT id, conv_id, agent, category, note, created_at
+		 FROM failure_tags WHERE user = ? ORDER BY id DESC LIMIT ?`, user, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list failures: %w", err)
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, convID int64
+		var agentName, category, note, created string
+		if err := rows.Scan(&id, &convID, &agentName, &category, &note, &created); err != nil {
+			return nil, fmt.Errorf("store: scan failures: %w", err)
+		}
+		out = append(out, map[string]any{
+			"id": id, "conv_id": convID, "agent": agentName,
+			"category": category, "note": note, "created_at": created,
+		})
+	}
+	return out, rows.Err()
+}
+
+// FailuresForExport returns every failure tag for a user in chronological
+// order (JSONL export feed).
+func (s *Store) FailuresForExport(user string) ([]map[string]any, error) {
+	rows, err := s.db.Query(
+		`SELECT id, conv_id, agent, category, note, created_at
+		 FROM failure_tags WHERE user = ? ORDER BY id ASC`, user)
+	if err != nil {
+		return nil, fmt.Errorf("store: export failures: %w", err)
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, convID int64
+		var agentName, category, note, created string
+		if err := rows.Scan(&id, &convID, &agentName, &category, &note, &created); err != nil {
+			return nil, fmt.Errorf("store: scan export failures: %w", err)
+		}
+		out = append(out, map[string]any{
+			"id": id, "conv_id": convID, "agent": agentName,
+			"category": category, "note": note, "created_at": created,
+		})
 	}
 	return out, rows.Err()
 }
