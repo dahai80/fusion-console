@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Terminal } from "lucide-react";
-import { api, type AgentInfo, type Provider, type WorkerSettings } from "./api";
+import { api, type AgentInfo, type Orchestrator, type Provider, type WorkerSettings } from "./api";
 import { Button, Input, Select } from "./components/ui";
 
 // Worker management shared by the wizard's Workers step and the Agents page.
@@ -151,7 +151,7 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
           title="Cross-run memory: notes = read/append NOTES.md in the workspace (default, zero deps); fusion-memory = also recall/commit experience via the fusion-memory hub (best effort); off = raw task only">
           worker memory
           <Select className="w-40" value={orch?.worker_memory ?? "notes"}
-            onChange={(e) => orch && setOrch({ ...orch, worker_memory: e.target.value })}>
+            onChange={(e) => orch && setOrch({ ...orch, worker_memory: e.target.value as Orchestrator["worker_memory"] })}>
             <option value="notes">notes (NOTES.md)</option>
             <option value="fusion-memory">fusion-memory hub</option>
             <option value="off">off</option>
