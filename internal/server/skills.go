@@ -245,12 +245,24 @@ func (s *Server) handleSkillsDraft(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provide a hint or reference text"})
 		return
 	}
+	// Prefer the gateway provider (its key self-heals) and resolve the key
+	// through resolveProviderKey — same policy as handleTestCall. A zombie
+	// direct provider with a stale keychain entry must not break drafting.
 	var prov *config.Provider
 	for i := range s.cfg.Provider {
 		p := &s.cfg.Provider[i]
-		if p.Enabled && p.Model != "" {
+		if p.Enabled && p.Model != "" && p.Type == config.ProviderGateway {
 			prov = p
 			break
+		}
+	}
+	if prov == nil {
+		for i := range s.cfg.Provider {
+			p := &s.cfg.Provider[i]
+			if p.Enabled && p.Model != "" {
+				prov = p
+				break
+			}
 		}
 	}
 	if prov == nil {
@@ -262,7 +274,7 @@ func (s *Server) handleSkillsDraft(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	apiKey, err := config.GetAPIKey(providerKeyID(prov))
+	apiKey, err := s.resolveProviderKey(r.Context(), prov)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "api key unavailable: " + err.Error()})
 		return
