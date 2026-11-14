@@ -205,7 +205,7 @@ func (s *Server) startCode() error {
 		webCmd.Stderr = logFile
 	}
 	if runtime.GOOS != "windows" {
-		webCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		detachProcess(webCmd)
 	}
 	if err := webCmd.Start(); err != nil {
 		return fmt.Errorf("start web server: %v", err)
