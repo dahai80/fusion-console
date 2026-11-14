@@ -91,8 +91,8 @@ export function RagPage() {
             opens the knowledge base management console.
           </p>
           <p className="text-xs text-zinc-400">
-            Not downloaded by default. Install fetches the latest GitHub release, builds a local venv and pip-installs
-            it (aliyun mirror). Requires python3 on this machine.
+            Not downloaded by default. Install pip-installs fusion-rag from PyPI (Tsinghua mirror, official PyPI
+            fallback) into a local venv. Requires python3 on this machine.
           </p>
           <Button onClick={() => action(() => api.ragInstall(), "install")} disabled={busy !== ""}>
             <Download size={14} /> Download &amp; install

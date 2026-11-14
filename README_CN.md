@@ -28,7 +28,7 @@
 - **Token 经济学**：Usage 页显示输入:输出比与 brain/worker token 占比，规划器开销一眼可见；Workers 页显示每个 worker 的单次预算上限与累计消耗。
 - **团队视图（可选 agent-studio 观察端）**：配置 `agentstudio` 段并启用后（默认关闭），console 轮询 fusion-agent-studio 守护进程的 WS JSON-RPC 端点，实时渲染团队看板：任务分列、成员花名册、健康度、限制、简报质量警告与失败告警。纯观察者 — 团队状态不落 console。操作仅限守护进程已暴露的（task cancel/rerun、编排器 limits）。密钥走环境变量（`FUSION_WS_TOKEN`、`FUSION_CONSOLE_APIKEY_AGENT_STUDIO`）或钥匙串。
 - **轻量多用户**：每人 bcrypt 口令，HttpOnly session cookie，tailnet 内也必须登录。
-- **知识库（可选 fusion-rag）**：默认不下载任何东西。在「知识库」菜单点「下载安装」后，后台任务从 PyPI pip 安装 fusion-rag（连带 fusion-core 依赖）— 优先 aliyun 镜像，官方 PyPI 作为第二索引兜底镜像未同步的新包，装完自动写入配置并启用。启动后 console 以同源反向代理方式挂载 RAG 管理 UI（`/shell/fusion-rag/`），所有对话自动获得 `kb_search` / `kb_ask` 两个 MCP 工具（走 RAG `/mcp` JSON-RPC；模型漏传 `kb_id` 时自动落到第一个知识库）。是否在对话中暴露工具可在菜单里开关。
+- **知识库（可选 fusion-rag）**：默认不下载任何东西。在「知识库」菜单点「下载安装」后，后台任务从 PyPI pip 安装 fusion-rag（连带 fusion-core 依赖）— 优先清华镜像，官方 PyPI 作为第二索引兜底镜像未同步的新包，装完自动写入配置并启用。启动后 console 以同源反向代理方式挂载 RAG 管理 UI（`/shell/fusion-rag/`），所有对话自动获得 `kb_search` / `kb_ask` 两个 MCP 工具（走 RAG `/mcp` JSON-RPC；模型漏传 `kb_id` 时自动落到第一个知识库）。是否在对话中暴露工具可在菜单里开关。
 - **编码代理（可选 fusion-code / claude / codex）**：「编码代理」菜单下拉选择要安装的 headless 编码代理 CLI，默认一个都不下载。fusion-code 从 GitHub 源码用 bun 构建（服务 + web 控制台同源代理在 `/shell/fusion-code/`；首次打开要求绑定 API key——console 从系统钥匙串把所选 provider 的 key 写入 `~/.fusion-code/settings.json` 的 env 块，全程不回显）。Claude Code 与 Codex 走 `npm install -g`，装完后在「Agents」页派发使用。受限网络可用 `FUSION_CODE_DOWNLOAD_URL` 覆盖下载地址。
 
 ## 明确不做

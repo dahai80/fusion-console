@@ -351,10 +351,10 @@ func (st *ragInstallState) logf(format string, args ...any) {
 	log.Printf("server: rag install: %s", line)
 }
 
-// Aliyun mirrors common deps fast but lags fresh PyPI uploads (fusion-rag was
-// 404 there for days after release), so official PyPI stays as a secondary
-// index — pip merges results across both.
-const ragPipMirror = "https://mirrors.aliyun.com/pypi/simple/"
+// Tsinghua mirrors PyPI quickly and carries fresh uploads (aliyun lagged
+// fusion-rag by days); official PyPI stays as a secondary index for
+// anything the mirror has not synced — pip merges results across both.
+const ragPipMirror = "https://pypi.tuna.tsinghua.edu.cn/simple/"
 
 const ragPipFallback = "https://pypi.org/simple/"
 

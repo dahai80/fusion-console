@@ -106,9 +106,9 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   login required even inside the tailnet.
 - **Knowledge Base (optional fusion-rag)** — nothing is downloaded until you
   click *Download & install* in the Knowledge Base menu. The installer
-  pip-installs fusion-rag (and its fusion-core dependency) from PyPI — aliyun
-  mirror first, official PyPI as a secondary index for packages the mirror
-  has not synced yet. Once running,
+  pip-installs fusion-rag (and its fusion-core dependency) from PyPI —
+  Tsinghua mirror first, official PyPI as a secondary index for packages the
+  mirror has not synced yet. Once running,
   the console proxies the RAG management UI same-origin at
   `/shell/fusion-rag/`, and every chat gains `kb_search` / `kb_ask` tools over
   MCP (JSON-RPC against the RAG `/mcp` endpoint; a missing `kb_id` resolves to
