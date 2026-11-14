@@ -247,6 +247,32 @@ func (s *Server) teamRegisterMember(agentID, name, team, status string, capabili
 	})
 }
 
+// teamListAgents returns the daemon's registered agents (agent.list) so the
+// UI can offer a pick-list of real workers instead of free-text member ids —
+// tasks dispatched to a roster id that is not a real agent fail with
+// "agent not found".
+func (s *Server) teamListAgents() ([]map[string]any, error) {
+	jwt, err := s.teamEnsureJWT()
+	if err != nil {
+		return nil, err
+	}
+	res, err := teamRPC(studioSocketPath(), jwt, "agent.list", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := res["agents"].([]any)
+	if !ok {
+		return []map[string]any{}, nil
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, a := range raw {
+		if m, ok := a.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
 // jsonMarshal / jsonUnmarshal thin wrappers keep encoding/json usage in one
 // place for the UDS client.
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }

@@ -24,8 +24,9 @@ export default function TeamPage() {
   const [snap, setSnap] = useState<TeamSnapshot | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
-  const [memberName, setMemberName] = useState("");
   const [memberCaps, setMemberCaps] = useState("");
+  const [agents, setAgents] = useState<Record<string, any>[]>([]);
+  const [memberId, setMemberId] = useState("");
   const load = () => {
     setErr("");
     api.teamView().then(setSnap).catch((e) => setErr((e as Error).message));
@@ -34,6 +35,11 @@ export default function TeamPage() {
   useEffect(() => {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
+  }, []);
+  // Pick-list source: the daemon's real agents — tasks dispatched to a roster
+  // id that is not a real agent fail with "agent not found".
+  useEffect(() => {
+    api.teamAgents().then((r) => setAgents(r.agents ?? [])).catch(() => setAgents([]));
   }, []);
 
   const op = async (op: string, task_id?: string) => {
@@ -48,19 +54,20 @@ export default function TeamPage() {
     }
   };
 
-  // Add-member = the console-side team-creation entry: registers a member
-  // on the daemon roster (team.roster_register pass-through).
+  // Add-member = the console-side team-creation entry: registers an existing
+  // daemon agent on the team roster (team.roster_register pass-through).
   const addMember = async () => {
-    if (!memberName.trim()) return;
+    if (!memberId) return;
+    const agent = agents.find((a) => a.id === memberId);
     setBusy("register_member");
     try {
       await api.teamOp({
         op: "register_member",
-        agent_id: memberName.trim(),
-        name: memberName.trim(),
+        agent_id: memberId,
+        name: (agent?.name as string) || memberId,
         capabilities: memberCaps.split(",").map((s) => s.trim()).filter(Boolean),
       });
-      setMemberName("");
+      setMemberId("");
       setMemberCaps("");
       load();
     } catch (e) {
@@ -69,6 +76,10 @@ export default function TeamPage() {
       setBusy("");
     }
   };
+
+  // Only offer agents not already on the roster.
+  const rosterIds = new Set((snap?.roster ?? []).map((m) => String(m.member_id || m.agent_id || m.name || "")));
+  const candidates = agents.filter((a) => !rosterIds.has(String(a.id)));
 
   const tasks = snap?.tasks ?? [];
   const alerts = snap?.alerts ?? [];
@@ -93,13 +104,51 @@ export default function TeamPage() {
 
       {err && <p className="text-sm text-red-500">{err}</p>}
 
+      {/* Members first — team creation is the primary entry on this page. */}
+      <Card className="p-4">
+        <h3 className="mb-2 text-sm font-medium">Members</h3>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <select value={memberId} onChange={(e) => {
+            setMemberId(e.target.value);
+            const a = agents.find((x) => x.id === e.target.value);
+            const caps = (a?.capabilities as string[] | undefined)?.filter(Boolean) ?? [];
+            setMemberCaps(caps.join(", "));
+          }}
+            className="w-56 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700">
+            <option value="">select an existing worker…</option>
+            {candidates.map((a) => (
+              <option key={String(a.id)} value={String(a.id)}>{String(a.name)} ({String(a.id)})</option>
+            ))}
+          </select>
+          <input value={memberCaps} onChange={(e) => setMemberCaps(e.target.value)} placeholder="capabilities, comma-separated"
+            className="min-w-48 flex-1 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700" />
+          <Button onClick={addMember} disabled={busy !== "" || !memberId}>Add member</Button>
+        </div>
+        {(snap?.roster ?? []).length === 0 ? (
+          <p className="text-sm text-zinc-400">No roster reported by the daemon.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {snap!.roster.map((m, i) => (
+              <div key={m.member_id || m.name || i} className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium">{m.name || m.member_id}</span>
+                {m.role && <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{m.role}</span>}
+                {m.status && <span className="text-xs text-zinc-400">{m.status}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
       {alerts.length > 0 && (
         <Card className="border-amber-300/60 p-3 dark:border-amber-500/30">
-          {alerts.map((a, i) => (
+          {alerts.slice(0, 5).map((a, i) => (
             <p key={i} className="flex items-start gap-1.5 text-sm text-amber-600 dark:text-amber-400">
               <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {a}
             </p>
           ))}
+          {alerts.length > 5 && (
+            <p className="mt-1 text-xs text-zinc-400">+{alerts.length - 5} more alerts suppressed — export the failure log for the full list</p>
+          )}
         </Card>
       )}
 
@@ -142,31 +191,6 @@ export default function TeamPage() {
           );
         })}
       </div>
-
-      {/* Members */}
-      <Card className="p-4">
-        <h3 className="mb-2 text-sm font-medium">Members</h3>
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <input value={memberName} onChange={(e) => setMemberName(e.target.value)} placeholder="member id (e.g. coder-1)"
-            className="w-44 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700" />
-          <input value={memberCaps} onChange={(e) => setMemberCaps(e.target.value)} placeholder="capabilities, comma-separated"
-            className="min-w-48 flex-1 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700" />
-          <Button onClick={addMember} disabled={busy !== ""}>Add member</Button>
-        </div>
-        {(snap?.roster ?? []).length === 0 ? (
-          <p className="text-sm text-zinc-400">No roster reported by the daemon.</p>
-        ) : (
-          <div className="space-y-1.5">
-            {snap!.roster.map((m, i) => (
-              <div key={m.member_id || m.name || i} className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="font-medium">{m.name || m.member_id}</span>
-                {m.role && <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{m.role}</span>}
-                {m.status && <span className="text-xs text-zinc-400">{m.status}</span>}
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
 
       {/* Health + limits */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

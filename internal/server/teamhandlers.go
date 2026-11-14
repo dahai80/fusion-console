@@ -14,6 +14,18 @@ func (s *Server) handleTeamView(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.teamView())
 }
 
+// handleTeamAgents serves GET /api/team/agents — the daemon's registered
+// agents for the add-member pick-list (real workers only).
+func (s *Server) handleTeamAgents(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.teamListAgents()
+	if err != nil {
+		log.Printf("server: team agents list: %v", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
+}
+
 // handleTeamOp serves POST /api/team/op — pass-through operations to the
 // daemon. Body: {"op": "cancel"|"rerun", "task_id": "..."} or
 // {"op": "set_limits", "max_concurrent": N, "max_depth": N}.

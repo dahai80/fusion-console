@@ -158,6 +158,7 @@ export const api = {
   failuresAdd: (body: { agent?: string; category: string; note: string }) =>
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
   teamView: () => req<TeamSnapshot>("/api/team/view"),
+  teamAgents: () => req<{ agents: Record<string, any>[] }>("/api/team/agents"),
   teamOp: (body: { op: string; task_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[] }) =>
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),

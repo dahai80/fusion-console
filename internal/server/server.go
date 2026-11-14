@@ -133,6 +133,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/failures", s.auth.Require(s.handleFailureList))
 	m.HandleFunc("GET /api/failures/export", s.auth.Require(s.handleFailureExport))
 	m.HandleFunc("GET /api/team/view", s.auth.Require(s.handleTeamView))
+	m.HandleFunc("GET /api/team/agents", s.auth.Require(s.handleTeamAgents))
 	m.HandleFunc("POST /api/team/op", s.auth.Require(s.handleTeamOp))
 	codeProxyHandler := s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.codeProxy().ServeHTTP(w, r)
