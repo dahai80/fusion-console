@@ -94,6 +94,14 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   brain-vs-worker token share, so planner overhead is visible at a glance;
   the Workers tab shows each worker's per-run budget cap against lifetime
   spend.
+- **Team view (optional agent-studio observer)** — when enabled in config
+  (`agentstudio` section; off by default), the console polls the
+  fusion-agent-studio daemon's WS JSON-RPC endpoint and renders a live team
+  board: tasks by status, member roster, health, limits, brief-quality
+  warnings and failure alerts. Pure observer — no team state is stored in
+  the console. Operations are limited to what the daemon exposes today
+  (task cancel/rerun, orchestrator limits). Secrets resolve from env
+  (`FUSION_WS_TOKEN`, `FUSION_CONSOLE_APIKEY_AGENT_STUDIO`) or keychain.
 - **Multi-user (light)** — per-user bcrypt passwords, HttpOnly session cookies,
   login required even inside the tailnet.
 - **Knowledge Base (optional fusion-rag)** — nothing is downloaded until you

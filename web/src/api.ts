@@ -157,6 +157,9 @@ export const api = {
   failuresList: () => req<{ failures: FailureRow[] }>("/api/failures"),
   failuresAdd: (body: { agent?: string; category: string; note: string }) =>
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
+  teamView: () => req<TeamSnapshot>("/api/team/view"),
+  teamOp: (body: { op: string; task_id?: string; max_concurrent?: number; max_depth?: number }) =>
+    req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
   codeInstall: (agent: string) =>
     req<{ status: string }>("/api/code/install", { method: "POST", body: JSON.stringify({ agent }) }),
@@ -166,6 +169,18 @@ export const api = {
     req<{ enabled: boolean }>("/api/code/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
   codeSetKey: (providerId: string) =>
     req<{ ok: boolean; env_vars: string[] }>("/api/code/key", { method: "POST", body: JSON.stringify({ provider_id: providerId }) }),
+};
+
+export type TeamSnapshot = {
+  fetched_at: string;
+  connected: boolean;
+  error?: string;
+  tasks: Record<string, any>[];
+  roster: Record<string, any>[];
+  health?: Record<string, any>;
+  limits?: Record<string, any>;
+  brief_warnings: Record<string, { item: string; fix: string }[]>;
+  alerts: string[];
 };
 
 export type FailureRow = {

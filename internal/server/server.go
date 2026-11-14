@@ -33,6 +33,7 @@ type Server struct {
 	ragInstall  ragInstallState // background fusion-rag install job (zero value = idle)
 	codeInstall ragInstallState // background fusion-code install job (same job-state shape)
 	runs        workerRuns      // live worker dispatch registry (busy/idle + current task)
+	team        teamDialer      // agent-studio team observer (poller + snapshot cache)
 	mux        *http.ServeMux
 }
 
@@ -53,6 +54,7 @@ func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	}
 	s.mux = http.NewServeMux()
 	s.routes()
+	s.startTeamPoller()
 	return s
 }
 
@@ -130,6 +132,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/failures", s.auth.Require(s.handleFailureList))
 	m.HandleFunc("POST /api/failures", s.auth.Require(s.handleFailureList))
 	m.HandleFunc("GET /api/failures/export", s.auth.Require(s.handleFailureExport))
+	m.HandleFunc("GET /api/team/view", s.auth.Require(s.handleTeamView))
+	m.HandleFunc("POST /api/team/op", s.auth.Require(s.handleTeamOp))
 	codeProxyHandler := s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.codeProxy().ServeHTTP(w, r)
 	}))
