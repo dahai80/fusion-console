@@ -171,6 +171,13 @@ export type WorkerStatus = {
   tokens_in: number;
   tokens_out: number;
   last_run: string;
+  // Live dispatch state (from the in-memory run registry).
+  busy?: boolean;
+  task?: string;
+  detail?: string;
+  elapsed_s?: number;
+  last_task?: string;
+  last_elapsed_s?: number;
 };
 
 export type RagStatus = {

@@ -383,6 +383,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		send(map[string]any{"type": "error", "text": err.Error()})
 		return
 	}
+	// Live dashboard state: mark the worker busy and publish progress.
+	s.runs.start(req.Agent, req.Task)
+	defer s.runs.end(req.Agent)
 	full, result := "", ""
 	var usage agent.Event
 	for ev := range evCh {
@@ -393,6 +396,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 				send(map[string]any{"type": "text", "text": ev.Text})
 			}
 		case agent.EventTool:
+			s.runs.progress(req.Agent, ev.ToolDetail)
 			send(map[string]any{"type": "tool", "tool": ev.ToolName, "detail": ev.ToolDetail})
 		case agent.EventResult:
 			result = ev.Text
@@ -786,6 +790,9 @@ func (s *Server) handleWorkersStatus(w http.ResponseWriter, r *http.Request) {
 			"isolation": w.Isolation, "work_dir": s.cfg.ResolveWorkerDir(w),
 			"repo": w.Repo, "provider_id": w.ProviderID, "max_budget_usd": w.MaxBudgetUSD,
 			"calls": 0, "cost_usd": 0.0, "tokens_in": 0, "tokens_out": 0, "last_run": "",
+		}
+		for k, v := range s.runs.snapshot(id) {
+			row[k] = v
 		}
 		if sp, ok := spend["agent:"+id]; ok {
 			for k, v := range sp {

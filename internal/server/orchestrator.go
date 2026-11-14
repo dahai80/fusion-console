@@ -178,6 +178,9 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		if err != nil {
 			return "", fmt.Errorf("agent %s failed to start: %v", args.Agent, err)
 		}
+		// Live dashboard state: mark the worker busy and publish progress.
+		s.runs.start(args.Agent, args.Task)
+		defer s.runs.end(args.Agent)
 		full, result := "", ""
 		var usage agent.Event
 		// Live progress: forward the agent's own tool activity plus a periodic
@@ -197,6 +200,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 				case agent.EventText:
 					full += ev.Text
 				case agent.EventTool:
+					s.runs.progress(args.Agent, ev.ToolDetail)
 					if send != nil {
 						send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
 							"detail": fmt.Sprintf("%s: %s", args.Agent, ev.ToolDetail)})
@@ -209,6 +213,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 					return "", fmt.Errorf("agent %s error: %s", args.Agent, ev.Text)
 				}
 			case <-heartbeat.C:
+				s.runs.progress(args.Agent, fmt.Sprintf("running (%ds elapsed)", int(time.Since(start).Seconds())))
 				if send != nil {
 					send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
 						"detail": fmt.Sprintf("%s still running (%ds elapsed)", args.Agent, int(time.Since(start).Seconds()))})

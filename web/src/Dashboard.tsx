@@ -72,6 +72,11 @@ function WorkersTab() {
     api.workersStatus().then((r) => setWorkers(r.workers ?? [])).catch((e) => setErr((e as Error).message));
   };
   useEffect(load, []);
+  // Poll while mounted: busy/idle and current activity change live.
+  useEffect(() => {
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, []);
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -92,16 +97,25 @@ function WorkersTab() {
           {workers.map((w) => (
             <Card key={w.name} className="p-4">
               <div className="flex flex-wrap items-center gap-2">
-                <Bot size={15} className="text-indigo-500" />
+                <Bot size={15} className={w.busy ? "text-amber-500" : "text-indigo-500"} />
                 <span className="font-medium">{w.name}</span>
                 <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800">type: {w.agent}</span>
-                {w.enabled ? (
-                  <span className="rounded-lg bg-emerald-500/10 px-1.5 py-0.5 text-xs text-emerald-600 dark:text-emerald-400">enabled</span>
+                {w.busy ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                    <RefreshCw size={11} className="animate-spin" /> busy · {w.elapsed_s ?? 0}s
+                  </span>
                 ) : (
-                  <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800">disabled</span>
+                  <span className="rounded-lg bg-emerald-500/10 px-1.5 py-0.5 text-xs text-emerald-600 dark:text-emerald-400">idle</span>
                 )}
+                {!w.enabled && <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800">disabled</span>}
                 {!w.detected && <span className="text-xs text-amber-500">CLI not on PATH</span>}
               </div>
+              {w.busy && (
+                <div className="mt-2 rounded-xl bg-amber-500/5 px-3 py-2 text-xs dark:bg-amber-500/10">
+                  <p className="truncate font-medium text-amber-600 dark:text-amber-400" title={w.task}>▸ {w.task}</p>
+                  {w.detail && <p className="mt-0.5 truncate text-zinc-500 dark:text-zinc-400" title={w.detail}>{w.detail}</p>}
+                </div>
+              )}
               <dl className="mt-3 space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                 <div className="flex gap-2"><dt className="w-20 shrink-0">isolation</dt><dd className="truncate">{w.isolation || "worktree"}{w.repo ? ` · ${w.repo}` : ""}</dd></div>
                 <div className="flex gap-2"><dt className="w-20 shrink-0">work dir</dt><dd className="truncate" title={w.work_dir}>{w.work_dir}</dd></div>

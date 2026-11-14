@@ -31,6 +31,7 @@ type Server struct {
 	harness    *harness.Client // fusion-harness sidecar (chat guards)
 	autoToken  string          // one-time auto-login token for --open; empty = disabled
 	ragInstall ragInstallState // background fusion-rag install job (zero value = idle)
+	runs       workerRuns      // live worker dispatch registry (busy/idle + current task)
 	mux        *http.ServeMux
 }
 
