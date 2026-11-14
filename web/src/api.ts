@@ -147,6 +147,22 @@ export const api = {
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>
     req<{ ok: boolean }>("/api/settings/orchestration", { method: "POST", body: JSON.stringify(o) }),
+  ragStatus: () => req<RagStatus>("/api/rag/status"),
+  ragInstall: () => req<{ status: string }>("/api/rag/install", { method: "POST" }),
+  ragStart: () => req<{ running: boolean }>("/api/rag/start", { method: "POST" }),
+  ragStop: () => req<{ running: boolean }>("/api/rag/stop", { method: "POST" }),
+  ragSetEnabled: (enabled: boolean) =>
+    req<{ enabled: boolean }>("/api/rag/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
+};
+
+export type RagStatus = {
+  installed: boolean;
+  enabled: boolean;
+  running: boolean;
+  phase: "idle" | "downloading" | "extracting" | "installing" | "done" | "error" | string;
+  logs?: string[];
+  error?: string;
+  port: number;
 };
 
 export type WorkerSettings = {

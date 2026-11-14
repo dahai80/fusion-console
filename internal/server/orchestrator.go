@@ -249,6 +249,12 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 			return string(data) + "\n...(truncated at 64 KB)", nil
 		}
 		return string(data), nil
+	case "kb_search", "kb_ask":
+		var kbArgs map[string]any
+		if err := json.Unmarshal([]byte(call.Arguments), &kbArgs); err != nil {
+			return "", fmt.Errorf("tool %s: bad arguments: %v", call.Name, err)
+		}
+		return s.ragToolCall(ctx, call.Name, kbArgs)
 	}
 	return "", fmt.Errorf("unknown tool %q", call.Name)
 }
@@ -258,6 +264,11 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 // and cumulative usage.
 func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov *providerOpts, apiKey string, msgs []chat.Message, send func(map[string]any)) (string, chat.Event) {
 	tools := orchestratorTools()
+	if s.ragEnabled() {
+		// Knowledge base tools ride along in orchestrated turns too; they are
+		// read-only MCP calls executed against the local fusion-rag server.
+		tools = append(tools, ragToolDecls()...)
+	}
 	msgs = append([]chat.Message{{Role: "system", Content: orchestratorSystemPrompt}}, msgs...)
 	full := ""
 	var total chat.Event

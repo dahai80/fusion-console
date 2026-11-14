@@ -237,6 +237,28 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		send(map[string]any{"type": "tool", "tool": "orchestrate", "status": "error", "detail": "provider does not support tool calls"})
 	}
 
+	// fusion-rag knowledge base: once installed and enabled, every plain
+	// conversation gets the kb_search / kb_ask MCP tools (bounded loop).
+	if s.ragEnabled() {
+		if tp, ok := provider.(chat.ToolProvider); ok {
+			log.Printf("server: rag tools active conv=%d", req.ConversationID)
+			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: prov.Model, user: user}
+			full, total := s.runRAGChatLoop(r.Context(), tp, &opts, apiKey, chatMsgs, send)
+			if full != "" {
+				meta, _ := json.Marshal(map[string]any{
+					"provider": prov.ID, "model": prov.Model, "rag": true,
+					"tokens_in": total.TokensIn, "tokens_out": total.TokensOut,
+				})
+				_, _ = s.store.AppendMessage(req.ConversationID, "assistant", full, string(meta))
+				if total.TokensIn > 0 || total.TokensOut > 0 {
+					_ = s.store.LogCost(req.ConversationID, user, "chat:"+prov.ID, total.CostUSD, total.TokensIn, total.TokensOut)
+				}
+			}
+			send(map[string]any{"type": "done"})
+			return
+		}
+	}
+
 	evCh, err := provider.ChatStream(r.Context(), prov.Model, apiKey, chatMsgs)
 	if err != nil {
 		send(map[string]any{"type": "error", "text": err.Error()})

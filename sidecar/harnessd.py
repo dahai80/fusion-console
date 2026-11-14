@@ -46,7 +46,8 @@ class ConvBudget:
 
 # Orchestrator tool allowlist. Everything else stays fail-closed (deny) —
 # the console planner only ever calls these five tools.
-ORCHESTRATOR_TOOLS = ("list_agents", "run_agent", "read_artifact", "run_workflow", "run_status")
+ORCHESTRATOR_TOOLS = ("list_agents", "run_agent", "read_artifact", "run_workflow", "run_status",
+                      "kb_search", "kb_ask")
 
 
 class ConvState:

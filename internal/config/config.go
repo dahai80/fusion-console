@@ -116,9 +116,26 @@ type HarnessConfig struct {
 	BudgetTokens int  `json:"budget_tokens"` // per conversation; 0 = unlimited
 }
 
+// RagConfig is the optional fusion-rag knowledge base integration. Nothing
+// is downloaded or started until the user installs it from the Knowledge
+// Base menu; the section only records the decision. The RAG UI is proxied
+// at /shell/fusion-rag/ and the chat box reaches it over MCP (tools
+// kb_search / kb_ask) once installed and enabled.
+type RagConfig struct {
+	Installed  bool   `json:"installed"`
+	Enabled    bool   `json:"enabled"`
+	Port       int    `json:"port"`        // fusion-rag HTTP port (registered 11436)
+	InstallDir string `json:"install_dir"` // where the release tarball is unpacked and installed
+}
+
 // DefaultHarness returns the M1 default: on, 400k tokens per conversation.
 func DefaultHarness() HarnessConfig {
 	return HarnessConfig{Enabled: true, BudgetTokens: 400000}
+}
+
+// DefaultRag returns the opt-in default: nothing installed, nothing enabled.
+func DefaultRag() RagConfig {
+	return RagConfig{Installed: false, Enabled: false, Port: 11436, InstallDir: filepath.Join(DefaultDir(), "fusion-rag")}
 }
 
 // Config is the on-disk config document.
@@ -129,6 +146,7 @@ type Config struct {
 	Agent        []AgentSettings    `json:"agents"`
 	Harness      HarnessConfig      `json:"harness"`
 	Orchestrator OrchestratorConfig `json:"orchestrator"`
+	Rag          RagConfig          `json:"rag"`
 }
 
 // UserEntry is one login account. Only the bcrypt hash is stored.
@@ -184,6 +202,17 @@ func Load(dir string) (*Config, error) {
 	// the config file does not mention it (first run / older configs).
 	if !bytes.Contains(data, []byte("\"worker_memory\"")) {
 		cfg.Orchestrator.WorkerMemory = "notes"
+	}
+	// RAG integration defaults to not-installed/not-enabled; an explicit
+	// section is honored verbatim, but a missing port/install_dir is filled.
+	if !bytes.Contains(data, []byte("\"rag\"")) {
+		cfg.Rag = DefaultRag()
+	}
+	if cfg.Rag.Port == 0 {
+		cfg.Rag.Port = 11436
+	}
+	if strings.TrimSpace(cfg.Rag.InstallDir) == "" {
+		cfg.Rag.InstallDir = DefaultRag().InstallDir
 	}
 	return cfg, nil
 }

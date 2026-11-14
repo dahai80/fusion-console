@@ -21,6 +21,7 @@ import {
   Trash2,
   Download,
   ExternalLink,
+  Database,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -30,9 +31,10 @@ import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
 import Dashboard from "./Dashboard";
 import { SkillsPanel } from "./SkillsPanel";
+import { RagPage } from "./RagPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "onboard";
 
 export default function App() {
   return (
@@ -100,6 +102,7 @@ function Shell() {
         {page === "chat" && <ChatPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
+        {page === "rag" && <RagPage />}
       </main>
     </div>
   );
@@ -137,6 +140,7 @@ function TopBar({
           {tab("agents", "Agents", Bot)}
           {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("gateway", "Gateway", Network)}
+          {tab("rag", "Knowledge Base", Database)}
         </nav>
       </div>
       <div className="flex items-center gap-2 text-sm text-zinc-500">

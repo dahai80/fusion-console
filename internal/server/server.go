@@ -20,17 +20,18 @@ import (
 
 // Server holds shared dependencies for all handlers.
 type Server struct {
-	cfg       *config.Config
-	cfgDir    string
-	auth      *auth.Manager
-	store     *store.Store
-	models    *chat.ModelList
-	agents    map[string]agent.Adapter
-	agentRuns sync.Mutex      // one agent subprocess per host at a time
-	approvals sync.Map        // confirm-mode dispatch gates: id -> chan bool
-	harness   *harness.Client // fusion-harness sidecar (chat guards)
-	autoToken string          // one-time auto-login token for --open; empty = disabled
-	mux       *http.ServeMux
+	cfg        *config.Config
+	cfgDir     string
+	auth       *auth.Manager
+	store      *store.Store
+	models     *chat.ModelList
+	agents     map[string]agent.Adapter
+	agentRuns  sync.Mutex      // one agent subprocess per host at a time
+	approvals  sync.Map        // confirm-mode dispatch gates: id -> chan bool
+	harness    *harness.Client // fusion-harness sidecar (chat guards)
+	autoToken  string          // one-time auto-login token for --open; empty = disabled
+	ragInstall ragInstallState // background fusion-rag install job (zero value = idle)
+	mux        *http.ServeMux
 }
 
 // New builds the server and its route table.
@@ -98,6 +99,23 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/dashboard", s.auth.Require(s.handleDashboard))
 	m.HandleFunc("GET /api/settings/orchestration", s.auth.Require(s.handleGetOrchestration))
 	m.HandleFunc("POST /api/settings/orchestration", s.auth.Require(s.handleSaveOrchestration))
+
+	// Optional fusion-rag knowledge base: menu status/actions plus a
+	// path-preserving reverse proxy for its UI and REST API. Auth-gated like
+	// every other console surface.
+	m.HandleFunc("GET /api/rag/status", s.auth.Require(s.handleRagStatus))
+	m.HandleFunc("POST /api/rag/install", s.auth.Require(s.handleRagInstall))
+	m.HandleFunc("POST /api/rag/start", s.auth.Require(s.handleRagStart))
+	m.HandleFunc("POST /api/rag/stop", s.auth.Require(s.handleRagStop))
+	m.HandleFunc("POST /api/rag/enabled", s.auth.Require(s.handleRagEnabled))
+	// Method-qualified registrations: a bare "/shell/fusion-rag/" subtree
+	// pattern conflicts with the "GET /" SPA fallback in Go's mux.
+	ragProxyHandler := s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.ragProxy().ServeHTTP(w, r)
+	}))
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		m.Handle(method+" /shell/fusion-rag/", ragProxyHandler)
+	}
 
 	m.HandleFunc("GET /", s.handleStatic)
 }
