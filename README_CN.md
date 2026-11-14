@@ -25,6 +25,7 @@
 - **配置界面**：provider + baseURL + 模型（从 /v1/models 拉取）；apiKey 存 OS keychain（Keychain / DPAPI / libsecret），绝不写进配置文件。
 - **成本账**：每轮入 SQLite，按天按来源出报表。
 - **轻量多用户**：每人 bcrypt 口令，HttpOnly session cookie，tailnet 内也必须登录。
+- **知识库（可选 fusion-rag）**：默认不下载任何东西。在「知识库」菜单点「下载安装」后，后台任务拉取 fusion-rag 与 fusion-core 的最新 GitHub release（fusion-core 不在 PyPI，需一并安装；受限网络可用 `FUSION_RAG_DOWNLOAD_URL` / `FUSION_CORE_DOWNLOAD_URL` 覆盖下载地址），解压到 `~/.fusion-console/fusion-rag`，建 venv 并经 aliyun 镜像 pip 安装，装完自动写入配置并启用。启动后 console 以同源反向代理方式挂载 RAG 管理 UI（`/shell/fusion-rag/`），所有对话自动获得 `kb_search` / `kb_ask` 两个 MCP 工具（走 RAG `/mcp` JSON-RPC；模型漏传 `kb_id` 时自动落到第一个知识库）。是否在对话中暴露工具可在菜单里开关。
 
 ## 明确不做
 

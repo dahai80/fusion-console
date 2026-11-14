@@ -72,6 +72,15 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
 - **Cost accounting** — every turn lands in SQLite; per-day per-source report.
 - **Multi-user (light)** — per-user bcrypt passwords, HttpOnly session cookies,
   login required even inside the tailnet.
+- **Knowledge Base (optional fusion-rag)** — nothing is downloaded until you
+  click *Download & install* in the Knowledge Base menu. The installer pulls
+  the latest GitHub releases of fusion-rag and fusion-core, builds a venv and
+  pip-installs them (aliyun mirror; `FUSION_RAG_DOWNLOAD_URL` /
+  `FUSION_CORE_DOWNLOAD_URL` overrides for restricted networks). Once running,
+  the console proxies the RAG management UI same-origin at
+  `/shell/fusion-rag/`, and every chat gains `kb_search` / `kb_ask` tools over
+  MCP (JSON-RPC against the RAG `/mcp` endpoint; a missing `kb_id` resolves to
+  the first knowledge base). Toggle exposure in chat from the menu.
 
 ## What it deliberately does NOT do
 
