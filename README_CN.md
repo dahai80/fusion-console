@@ -48,6 +48,20 @@ make cross      # darwin/linux/windows 交叉编译
 make test       # go test ./...
 ```
 
+## pip 安装（无需克隆源码）
+
+平台 wheel 内置预编译二进制（同 ruff/uv 的分发模式），安装后得到
+`fusion-console` 命令：
+
+```bash
+pip install fusion-console      # 自动选择当前平台 wheel
+fusion-console -open=false      # 无头启动；加 -open 自动打开浏览器并免密登录
+```
+
+覆盖 macOS（arm64/x86_64）、Linux（x86_64/arm64，manylinux2014）与
+Windows x86_64。其他平台请用上面"构建"从源码编译。发新 wheel：
+`make cross` → `scripts/pypi-build.sh <X.Y.Z>` → `twine upload dist-pypi/*`。
+
 ## 运行
 
 > 从 release 下载开始的逐步配置指南：[docs/START_GUIDE_CN.md](docs/START_GUIDE_CN.md) · [English](docs/START_GUIDE.md)

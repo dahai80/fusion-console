@@ -8,3 +8,4 @@ dist/
 __pycache__/
 target/
 *.tsbuildinfo
+dist-pypi/

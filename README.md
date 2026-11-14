@@ -43,6 +43,21 @@ git clone https://github.com/dahai80/fusion-console && cd fusion-console
 ./startup.sh                # gateway + console + browser (auto-login)
 ```
 
+### Install via pip (no clone)
+
+Platform wheels bundle the prebuilt binary (same distribution model as
+ruff/uv); pip installs a `fusion-console` command that runs it directly:
+
+```bash
+pip install fusion-console          # picks the wheel for your platform
+fusion-console --open=false         # headless start; add -open for browser auto-login
+```
+
+Wheels cover macOS (arm64/x86_64), Linux (x86_64/arm64, manylinux2014) and
+Windows x86_64. On an unsupported platform, build from source with the
+Quickstart commands instead. Publishing new wheels: `make cross` then
+`scripts/pypi-build.sh <X.Y.Z>` and `twine upload dist-pypi/*`.
+
 The first-run wizard walks you through provider → brain → workers; finish it
 and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_GUIDE.md).
 

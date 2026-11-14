@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fusion-console"
+version = "0.0.0.dev0"
+description = "Browser console for cloud/local LLM chat and headless coding agents (single Go binary)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+classifiers = [
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Go",
+    "Topic :: Software Development",
+]
+
+[project.scripts]
+fusion-console = "fusion_console:main"
+
+[tool.setuptools]
+packages = ["fusion_console"]

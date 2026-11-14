@@ -17,6 +17,8 @@ if [ -z "$TARGET" ]; then
 else
     OS="${TARGET%-*}"
     ARCH="${TARGET#*-}"
-    GOOS="$OS" GOARCH="$ARCH" go build -trimpath -o "$OUT/fusion-console-$TARGET" ./cmd/console
+    EXT=""
+    [ "$OS" = "windows" ] && EXT=".exe"
+    GOOS="$OS" GOARCH="$ARCH" go build -trimpath -o "$OUT/fusion-console-$TARGET$EXT" ./cmd/console
 fi
 echo "built: $OUT"
