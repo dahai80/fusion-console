@@ -1,19 +1,22 @@
 // Team view client (T4b, issue #6): a pure-observer poller over the
-// agent-studio daemon's WebSocket JSON-RPC endpoint. The console stores no
-// team state — every field in the snapshot comes from the daemon, refreshed
-// on a fixed interval and cached in memory for the /api/team/view handler.
+// agent-studio daemon's UDS JSON-RPC socket (newline-delimited JSON-RPC 2.0,
+// _auth JWT enforced). The console stores no team state — every field in the
+// snapshot comes from the daemon, refreshed on a fixed interval and cached in
+// memory for the /api/team/view handler.
 package server
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
+	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/dahai80/fusion-console/internal/config"
-	"github.com/gorilla/websocket"
 )
 
 // teamSnapshot is the last successful poll (or the connection failure).
@@ -38,30 +41,25 @@ type teamDialer struct {
 
 const teamPollInterval = 5 * time.Second
 
-// teamWSToken resolves the daemon's WS shared secret: env first (same
-// FUSION_WS_TOKEN the daemon reads), then keychain under a fixed ref.
-func teamWSToken() (string, error) {
-	if v := os.Getenv("FUSION_WS_TOKEN"); v != "" {
-		return v, nil
+// studioSocketPath resolves the daemon's UDS socket: env override first, then
+// the default /tmp/fusion-studio.sock written by agent-studio's start.sh.
+func studioSocketPath() string {
+	if p := os.Getenv("FUSION_STUDIO_SOCKET"); p != "" {
+		return p
 	}
-	return config.GetAPIKey("agent-studio-ws")
+	return "/tmp/fusion-studio.sock"
 }
 
-// teamRPC opens a WS connection, returns one RPC result, closes it. Per-call
-// connections keep the client stateless — the poll is 4 requests every 5s,
-// cheap enough at team-observability scale.
-func teamRPC(wsURL, wsToken, jwt, method string, params map[string]any) (map[string]any, error) {
-	hdr := http.Header{}
-	if wsToken != "" {
-		hdr.Set("Sec-WebSocket-Protocol", "Bearer "+wsToken)
-	}
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+// teamRPC opens a UDS connection, returns one JSON-RPC result, closes it.
+// Per-call connections keep the client stateless — the poll is a handful of
+// requests every 5s, cheap at team-observability scale.
+func teamRPC(socketPath, jwt, method string, params map[string]any) (map[string]any, error) {
+	conn, err := net.DialTimeout("unix", socketPath, 3*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("dial %s: %v", wsURL, err)
+		return nil, fmt.Errorf("dial %s: %v", socketPath, err)
 	}
 	defer conn.Close()
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	if params == nil {
 		params = map[string]any{}
 	}
@@ -69,10 +67,18 @@ func teamRPC(wsURL, wsToken, jwt, method string, params map[string]any) (map[str
 		params["_auth"] = jwt
 	}
 	reqID := time.Now().UnixNano()
-	if err := conn.WriteJSON(map[string]any{
+	req, err := jsonMarshal(map[string]any{
 		"jsonrpc": "2.0", "id": reqID, "method": method, "params": params,
-	}); err != nil {
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode %s: %v", method, err)
+	}
+	if _, err := conn.Write(append(req, '\n')); err != nil {
 		return nil, fmt.Errorf("write %s: %v", method, err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %v", method, err)
 	}
 	var resp struct {
 		ID     any            `json:"id"`
@@ -82,8 +88,8 @@ func teamRPC(wsURL, wsToken, jwt, method string, params map[string]any) (map[str
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := conn.ReadJSON(&resp); err != nil {
-		return nil, fmt.Errorf("read %s: %v", method, err)
+	if err := jsonUnmarshal(line, &resp); err != nil {
+		return nil, fmt.Errorf("decode %s: %v", method, err)
 	}
 	if resp.Error != nil {
 		return nil, fmt.Errorf("%s: rpc error %d: %s", method, resp.Error.Code, resp.Error.Message)
@@ -92,7 +98,7 @@ func teamRPC(wsURL, wsToken, jwt, method string, params map[string]any) (map[str
 }
 
 // teamEnsureJWT exchanges the configured apikey for a daemon JWT (cached).
-func (s *Server) teamEnsureJWT(wsToken string) (string, error) {
+func (s *Server) teamEnsureJWT() (string, error) {
 	s.team.mu.Lock()
 	jwt := s.team.jwt
 	s.team.mu.Unlock()
@@ -103,7 +109,7 @@ func (s *Server) teamEnsureJWT(wsToken string) (string, error) {
 	if err != nil || apikey == "" {
 		return "", fmt.Errorf("no agent-studio apikey (set FUSION_CONSOLE_APIKEY_%s or store it in the keychain)", s.cfg.AgentStudio.APIKeyID)
 	}
-	res, err := teamRPC(s.cfg.AgentStudio.WSURL, wsToken, "", "auth.login", map[string]any{"apikey": apikey})
+	res, err := teamRPC(studioSocketPath(), "", "auth.login", map[string]any{"apikey": apikey})
 	if err != nil {
 		return "", fmt.Errorf("auth.login: %v", err)
 	}
@@ -124,8 +130,8 @@ func (s *Server) startTeamPoller() {
 	if !s.cfg.AgentStudio.Enabled {
 		return
 	}
+	log.Printf("server: team observer started (socket=%s team=%s)", studioSocketPath(), s.cfg.AgentStudio.Team)
 	go func() {
-		log.Printf("server: team observer started (ws=%s team=%s)", s.cfg.AgentStudio.WSURL, s.cfg.AgentStudio.Team)
 		for {
 			snap := s.pollTeam()
 			s.team.mu.Lock()
@@ -147,19 +153,14 @@ func (s *Server) pollTeam() *teamSnapshot {
 		Brief:     map[string][]briefWarning{},
 		Alerts:    []string{},
 	}
-	wsToken, err := teamWSToken()
-	if err != nil || wsToken == "" {
-		snap.Error = "no WS token (set FUSION_WS_TOKEN or keychain ref agent-studio-ws)"
-		return snap
-	}
-	jwt, err := s.teamEnsureJWT(wsToken)
+	jwt, err := s.teamEnsureJWT()
 	if err != nil {
 		snap.Error = err.Error()
 		return snap
 	}
 	team := s.cfg.AgentStudio.Team
 
-	if res, err := teamRPC(s.cfg.AgentStudio.WSURL, wsToken, jwt, "task.list", map[string]any{"team": team, "limit": 100}); err != nil {
+	if res, err := teamRPC(studioSocketPath(), jwt, "task.list", map[string]any{"team": team, "limit": 100}); err != nil {
 		snap.Error = err.Error()
 	} else if raw, ok := res["tasks"].([]any); ok {
 		for _, t := range raw {
@@ -173,8 +174,8 @@ func (s *Server) pollTeam() *teamSnapshot {
 	}
 	snap.Connected = true
 
-	if res, err := teamRPC(s.cfg.AgentStudio.WSURL, wsToken, jwt, "team.roster_list", map[string]any{"team": team}); err == nil {
-		if raw, ok := res["members"].([]any); ok {
+	if res, err := teamRPC(studioSocketPath(), jwt, "team.roster_list", map[string]any{"team": team}); err == nil {
+		if raw, ok := res["agents"].([]any); ok {
 			for _, m := range raw {
 				if mm, ok := m.(map[string]any); ok {
 					snap.Roster = append(snap.Roster, mm)
@@ -182,10 +183,10 @@ func (s *Server) pollTeam() *teamSnapshot {
 			}
 		}
 	}
-	if res, err := teamRPC(s.cfg.AgentStudio.WSURL, wsToken, jwt, "team.health", map[string]any{"team": team}); err == nil {
+	if res, err := teamRPC(studioSocketPath(), jwt, "team.health", map[string]any{"team": team}); err == nil {
 		snap.Health = res
 	}
-	if res, err := teamRPC(s.cfg.AgentStudio.WSURL, wsToken, jwt, "team.get_limits", map[string]any{}); err == nil {
+	if res, err := teamRPC(studioSocketPath(), jwt, "team.get_limits", map[string]any{}); err == nil {
 		snap.Limits = res
 	}
 
@@ -227,3 +228,26 @@ func (s *Server) teamView() *teamSnapshot {
 	}
 	return s.team.snap
 }
+
+// teamRegisterMember passes a team.roster_register call through to the
+// daemon — the console-side "create team member" entry (user-facing team
+// setup without leaving the console). Returns the daemon result verbatim.
+func (s *Server) teamRegisterMember(agentID, name, team, status string, capabilities []string) (map[string]any, error) {
+	jwt, err := s.teamEnsureJWT()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(team) == "" {
+		team = s.cfg.AgentStudio.Team
+	}
+	return teamRPC(studioSocketPath(), jwt, "team.roster_register", map[string]any{
+		"agent_id": agentID, "name": name, "team": team,
+		"capabilities": capabilities, "status": status,
+	})
+}
+
+// jsonMarshal / jsonUnmarshal thin wrappers keep encoding/json usage in one
+// place for the UDS client.
+func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
+
+func jsonUnmarshal(data string, v any) error { return json.Unmarshal([]byte(data), v) }

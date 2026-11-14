@@ -24,6 +24,8 @@ export default function TeamPage() {
   const [snap, setSnap] = useState<TeamSnapshot | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
+  const [memberName, setMemberName] = useState("");
+  const [memberCaps, setMemberCaps] = useState("");
   const load = () => {
     setErr("");
     api.teamView().then(setSnap).catch((e) => setErr((e as Error).message));
@@ -38,6 +40,28 @@ export default function TeamPage() {
     setBusy(task_id ? `${op}:${task_id}` : op);
     try {
       await api.teamOp({ op, task_id });
+      load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // Add-member = the console-side team-creation entry: registers a member
+  // on the daemon roster (team.roster_register pass-through).
+  const addMember = async () => {
+    if (!memberName.trim()) return;
+    setBusy("register_member");
+    try {
+      await api.teamOp({
+        op: "register_member",
+        agent_id: memberName.trim(),
+        name: memberName.trim(),
+        capabilities: memberCaps.split(",").map((s) => s.trim()).filter(Boolean),
+      });
+      setMemberName("");
+      setMemberCaps("");
       load();
     } catch (e) {
       setErr((e as Error).message);
@@ -122,6 +146,13 @@ export default function TeamPage() {
       {/* Members */}
       <Card className="p-4">
         <h3 className="mb-2 text-sm font-medium">Members</h3>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <input value={memberName} onChange={(e) => setMemberName(e.target.value)} placeholder="member id (e.g. coder-1)"
+            className="w-44 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700" />
+          <input value={memberCaps} onChange={(e) => setMemberCaps(e.target.value)} placeholder="capabilities, comma-separated"
+            className="min-w-48 flex-1 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700" />
+          <Button onClick={addMember} disabled={busy !== ""}>Add member</Button>
+        </div>
         {(snap?.roster ?? []).length === 0 ? (
           <p className="text-sm text-zinc-400">No roster reported by the daemon.</p>
         ) : (

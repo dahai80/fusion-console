@@ -19,24 +19,45 @@ func (s *Server) handleTeamView(w http.ResponseWriter, r *http.Request) {
 // {"op": "set_limits", "max_concurrent": N, "max_depth": N}.
 func (s *Server) handleTeamOp(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Op            string `json:"op"`
-		TaskID        string `json:"task_id"`
-		MaxConcurrent *int   `json:"max_concurrent"`
-		MaxDepth      *int   `json:"max_depth"`
+		Op            string   `json:"op"`
+		TaskID        string   `json:"task_id"`
+		MaxConcurrent *int     `json:"max_concurrent"`
+		MaxDepth      *int     `json:"max_depth"`
+		AgentID       string   `json:"agent_id"`
+		Name          string   `json:"name"`
+		Team          string   `json:"team"`
+		Status        string   `json:"status"`
+		Capabilities  []string `json:"capabilities"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
-	wsToken, err := teamWSToken()
-	if err != nil || wsToken == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no agent-studio WS token configured"})
-		return
-	}
-	jwt, err := s.teamEnsureJWT(wsToken)
+	jwt, err := s.teamEnsureJWT()
 	if err != nil {
 		log.Printf("server: team op auth: %v", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	// register_member = the console-side team-creation entry: passes
+	// team.roster_register through to the daemon verbatim.
+	if in.Op == "register_member" {
+		if in.AgentID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_id required"})
+			return
+		}
+		status := in.Status
+		if status == "" {
+			status = "idle"
+		}
+		res, err := s.teamRegisterMember(in.AgentID, in.Name, in.Team, status, in.Capabilities)
+		if err != nil {
+			log.Printf("server: team register_member: %v", err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		log.Printf("server: team register_member agent=%s team=%s", in.AgentID, in.Team)
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
 	var method string
@@ -67,7 +88,7 @@ func (s *Server) handleTeamOp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "op must be cancel, rerun or set_limits"})
 		return
 	}
-	res, err := teamRPC(s.cfg.AgentStudio.WSURL, wsToken, jwt, method, params)
+	res, err := teamRPC(studioSocketPath(), jwt, method, params)
 	if err != nil {
 		log.Printf("server: team op %s: %v", in.Op, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})

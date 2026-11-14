@@ -1,78 +1,92 @@
 package server
 
 import (
-	"net/http"
-	"net/http/httptest"
-	"strings"
+	"bufio"
+	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/gorilla/websocket"
 )
 
-// TestTeamRPCRoundTrip verifies the WS JSON-RPC wire format: Bearer token in
-// Sec-WebSocket-Protocol, _auth injection, result/error decoding.
-func TestTeamRPCRoundTrip(t *testing.T) {
-	up := websocket.Upgrader{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Sec-WebSocket-Protocol"); got != "Bearer tok-1" {
-			t.Errorf("missing/incorrect WS token header: %q", got)
+// fakeStudio serves newline-delimited JSON-RPC over a UDS socket, mirroring
+// the agent-studio daemon wire format (auth.login + one echo method).
+func fakeStudio(t *testing.T, requireAuth bool) string {
+	t.Helper()
+	dir, _ := os.MkdirTemp("", "fc-studio-*")
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "studio.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				sc := bufio.NewScanner(c)
+				sc.Buffer(make([]byte, 64*1024), 1024*1024)
+				for sc.Scan() {
+					var req struct {
+						ID     int64          `json:"id"`
+						Method string         `json:"method"`
+						Params map[string]any `json:"params"`
+					}
+					if json.Unmarshal(sc.Bytes(), &req) != nil {
+						continue
+					}
+					if req.Method == "auth.login" {
+						_ = json.NewEncoder(c).Encode(map[string]any{
+							"id": req.ID, "result": map[string]any{"jwt": "jwt-test"},
+						})
+						continue
+					}
+					if requireAuth && req.Params["_auth"] != "jwt-test" {
+						_ = json.NewEncoder(c).Encode(map[string]any{
+							"id": req.ID, "error": map[string]any{"code": 401, "message": "no _auth"},
+						})
+						continue
+					}
+					_ = json.NewEncoder(c).Encode(map[string]any{
+						"id": req.ID, "result": map[string]any{"ok": true, "method": req.Method},
+					})
+				}
+			}(conn)
 		}
-		conn, err := up.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		var req struct {
-			ID     int64          `json:"id"`
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
-		}
-		if err := conn.ReadJSON(&req); err != nil {
-			return
-		}
-		if req.Params["_auth"] != "jwt-abc" {
-			_ = conn.WriteJSON(map[string]any{"id": req.ID, "error": map[string]any{"code": 401, "message": "no _auth"}})
-			return
-		}
-		_ = conn.WriteJSON(map[string]any{"id": req.ID, "result": map[string]any{"jwt": "ok", "tasks": []any{}}})
-	}))
-	defer srv.Close()
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	}()
+	return sock
+}
 
-	res, err := teamRPC(wsURL, "tok-1", "jwt-abc", "task.list", nil)
+// TestTeamRPCUDSRoundTrip verifies the UDS wire format: newline-delimited
+// JSON-RPC, _auth injection, result decoding.
+func TestTeamRPCUDSRoundTrip(t *testing.T) {
+	sock := fakeStudio(t, true)
+	res, err := teamRPC(sock, "jwt-test", "task.list", nil)
 	if err != nil {
 		t.Fatalf("teamRPC: %v", err)
 	}
-	if res["jwt"] != "ok" {
+	if res["method"] != "task.list" {
 		t.Errorf("unexpected result: %v", res)
 	}
 }
 
 // TestTeamRPCErrorSurface verifies RPC errors come back as errors, not nil.
 func TestTeamRPCErrorSurface(t *testing.T) {
-	up := websocket.Upgrader{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := up.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		var req struct {
-			ID     int64          `json:"id"`
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		if err := conn.ReadJSON(&req); err != nil {
-			return
-		}
-		_ = conn.WriteJSON(map[string]any{"id": req.ID, "error": map[string]any{"code": -32601, "message": "method not found"}})
-	}))
-	defer srv.Close()
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-
-	if _, err := teamRPC(wsURL, "", "", "nope.method", nil); err == nil {
+	sock := fakeStudio(t, true)
+	if _, err := teamRPC(sock, "wrong-jwt", "task.list", nil); err == nil {
 		t.Fatal("expected error for rpc failure, got nil")
+	}
+}
+
+// TestTeamRPCDialFailure verifies a missing socket is a visible error.
+func TestTeamRPCDialFailure(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "missing.sock")
+	if _, err := teamRPC(sock, "", "task.list", nil); err == nil {
+		t.Fatal("expected dial error, got nil")
 	}
 }

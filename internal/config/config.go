@@ -156,20 +156,20 @@ func DefaultRag() RagConfig {
 }
 
 // AgentStudioConfig is the optional team-view integration (T4b, issue #6).
-// The console is a pure observer: it dials the agent-studio daemon's WS
-// JSON-RPC endpoint, polls team/task state and renders it. No team state is
-// stored in the console. Secrets (WS shared token, RPC apikey) resolve from
-// env first, then the OS keychain — never the config file.
+// The console observes and drives the agent-studio daemon over its UDS
+// JSON-RPC socket (newline-delimited, _auth JWT enforced). No team state is
+// stored in the console. The RPC apikey resolves from env first, then the
+// OS keychain — never the config file.
 type AgentStudioConfig struct {
-	Enabled  bool   `json:"enabled"`
-	WSURL    string `json:"ws_url"`     // default ws://127.0.0.1:11433
-	APIKeyID string `json:"api_key_id"` // keychain/env reference for auth.login
-	Team     string `json:"team"`       // default "default"
+	Enabled    bool   `json:"enabled"`
+	SocketPath string `json:"socket_path"` // default /tmp/fusion-studio.sock
+	APIKeyID   string `json:"api_key_id"`  // keychain/env reference for auth.login
+	Team       string `json:"team"`        // default "default"
 }
 
 // DefaultAgentStudio returns the opt-in default: disabled.
 func DefaultAgentStudio() AgentStudioConfig {
-	return AgentStudioConfig{Enabled: false, WSURL: "ws://127.0.0.1:11433", APIKeyID: "agent-studio", Team: "default"}
+	return AgentStudioConfig{Enabled: false, SocketPath: "/tmp/fusion-studio.sock", APIKeyID: "agent-studio", Team: "default"}
 }
 
 // Config is the on-disk config document.
@@ -281,8 +281,8 @@ func Load(dir string) (*Config, error) {
 	if !bytes.Contains(data, []byte("\"agentstudio\"")) {
 		cfg.AgentStudio = DefaultAgentStudio()
 	}
-	if strings.TrimSpace(cfg.AgentStudio.WSURL) == "" {
-		cfg.AgentStudio.WSURL = "ws://127.0.0.1:11433"
+	if strings.TrimSpace(cfg.AgentStudio.SocketPath) == "" {
+		cfg.AgentStudio.SocketPath = "/tmp/fusion-studio.sock"
 	}
 	if strings.TrimSpace(cfg.AgentStudio.Team) == "" {
 		cfg.AgentStudio.Team = "default"
