@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Brain, Bot, CircleDollarSign, RefreshCw, Table2, BarChart3 } from "lucide-react";
+import { Brain, Bot, Sigma, RefreshCw, Table2, BarChart3 } from "lucide-react";
 import { api, type DashboardBucket, type DashboardData, type UsageRange, type WorkerStatus } from "./api";
 import { Button, Card, useTheme } from "./components/ui";
 
@@ -21,12 +21,6 @@ function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + "k";
   return String(n);
-}
-
-function fmtUSD(n: number): string {
-  if (n === 0) return "$0";
-  if (n < 0.01) return "<$0.01";
-  return "$" + n.toFixed(2);
 }
 
 // Bucket strings come from SQL substr: hour "13", day "2026-11-13",
@@ -121,10 +115,9 @@ function WorkersTab() {
                 <div className="flex gap-2"><dt className="w-20 shrink-0">work dir</dt><dd className="truncate" title={w.work_dir}>{w.work_dir}</dd></div>
                 <div className="flex gap-2"><dt className="w-20 shrink-0">budget</dt><dd>${w.max_budget_usd ?? 5} / run{w.provider_id ? ` · provider ${w.provider_id}` : " · CLI default provider"}</dd></div>
               </dl>
-              <div className="mt-3 grid grid-cols-3 gap-2 border-t border-zinc-200/80 pt-3 text-center dark:border-zinc-800">
+              <div className="mt-3 grid grid-cols-2 gap-2 border-t border-zinc-200/80 pt-3 text-center dark:border-zinc-800">
                 <div><p className="text-sm font-semibold">{w.calls}</p><p className="text-xs text-zinc-500">runs</p></div>
                 <div><p className="text-sm font-semibold">{fmtTokens((w.tokens_in ?? 0) + (w.tokens_out ?? 0))}</p><p className="text-xs text-zinc-500">tokens</p></div>
-                <div><p className="text-sm font-semibold">{fmtUSD(w.cost_usd ?? 0)}</p><p className="text-xs text-zinc-500">spend</p></div>
               </div>
               <p className="mt-2 text-xs text-zinc-400">{w.last_run ? `last run ${w.last_run} UTC` : "no runs yet"}</p>
             </Card>
@@ -186,9 +179,9 @@ function UsageTab() {
       {err && <p className="text-sm text-red-500">{err}</p>}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatTile icon={<Brain size={16} />} label="Brain tokens" value={totals ? fmtTokens(totals.brain_tokens) : "—"} sub={totals ? fmtUSD(totals.brain_cost_usd) : ""} swatch={colors.brain} />
-        <StatTile icon={<Bot size={16} />} label="Worker tokens" value={totals ? fmtTokens(totals.worker_tokens) : "—"} sub={totals ? fmtUSD(totals.worker_cost_usd) : ""} swatch={colors.worker} />
-        <StatTile icon={<CircleDollarSign size={16} />} label="Total cost" value={totals ? fmtUSD(totals.brain_cost_usd + totals.worker_cost_usd) : "—"} sub={`${buckets.length} ${data?.bucket_unit ?? ""} buckets`} />
+        <StatTile icon={<Brain size={16} />} label="Brain tokens" value={totals ? fmtTokens(totals.brain_tokens) : "—"} sub="chat turns" swatch={colors.brain} />
+        <StatTile icon={<Bot size={16} />} label="Worker tokens" value={totals ? fmtTokens(totals.worker_tokens) : "—"} sub="agent runs" swatch={colors.worker} />
+        <StatTile icon={<Sigma size={16} />} label="Total tokens" value={totals ? fmtTokens(totals.brain_tokens + totals.worker_tokens) : "—"} sub={`${buckets.length} ${data?.bucket_unit ?? ""} buckets`} />
       </div>
 
       <Card className="p-4">
@@ -351,12 +344,10 @@ function UsageChart({
           <p className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
             <span className="h-2 w-2 rounded-sm" style={{ background: colors.brain }} />
             brain {fmtTokens(hovered.brain_tokens_in + hovered.brain_tokens_out)}
-            <span className="ml-auto tabular-nums text-zinc-400">{fmtUSD(hovered.brain_cost_usd)}</span>
           </p>
           <p className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
             <span className="h-2 w-2 rounded-sm" style={{ background: colors.worker }} />
             workers {fmtTokens(hovered.worker_tokens_in + hovered.worker_tokens_out)}
-            <span className="ml-auto tabular-nums text-zinc-400">{fmtUSD(hovered.worker_cost_usd)}</span>
           </p>
         </div>
       )}
@@ -372,8 +363,7 @@ function UsageTable({ buckets, unit }: { buckets: DashboardBucket[]; unit: strin
           <tr className="border-b border-zinc-200/80 dark:border-zinc-800 text-left text-xs text-zinc-500">
             <th className="py-1.5 pr-3 font-medium">{unit}</th>
             <th className="py-1.5 pr-3 text-right font-medium">Brain tokens</th>
-            <th className="py-1.5 pr-3 text-right font-medium">Worker tokens</th>
-            <th className="py-1.5 text-right font-medium">Cost</th>
+            <th className="py-1.5 text-right font-medium">Worker tokens</th>
           </tr>
         </thead>
         <tbody className="tabular-nums">
@@ -381,8 +371,7 @@ function UsageTable({ buckets, unit }: { buckets: DashboardBucket[]; unit: strin
             <tr key={b.bucket} className="border-b border-zinc-100 dark:border-zinc-800/50">
               <td className="py-1.5 pr-3 text-zinc-600 dark:text-zinc-400">{bucketLabel(b.bucket, unit)}</td>
               <td className="py-1.5 pr-3 text-right">{fmtTokens(b.brain_tokens_in + b.brain_tokens_out)}</td>
-              <td className="py-1.5 pr-3 text-right">{fmtTokens(b.worker_tokens_in + b.worker_tokens_out)}</td>
-              <td className="py-1.5 text-right">{fmtUSD(b.brain_cost_usd + b.worker_cost_usd)}</td>
+              <td className="py-1.5 text-right">{fmtTokens(b.worker_tokens_in + b.worker_tokens_out)}</td>
             </tr>
           ))}
         </tbody>
