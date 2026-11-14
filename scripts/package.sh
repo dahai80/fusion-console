@@ -113,7 +113,7 @@ for t in "${TARGETS[@]}"; do
     if [ "$os" = "windows" ]; then
         d="$DIST/fusion-console-$VERSION-$t"
         mkdir -p "$d"
-        cp "bin/fusion-console-$t" "$d/fusion-console.exe"
+        cp "bin/fusion-console-$t.exe" "$d/fusion-console.exe"
         [ "$GW" != "-" ] && cp "$GW" "$d/fusion-gateway.exe"
         mkdir -p "$d/sidecar"
         cp sidecar/harnessd.py "$d/sidecar/"
