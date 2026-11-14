@@ -91,7 +91,7 @@ func TestProviderEnv(t *testing.T) {
 		{Agent: "fusion-code", Enabled: true},
 	}
 
-	env, model := s.providerEnv("claude")
+	env, model := s.providerEnv("claude", s.workerConfig("claude"))
 	if env == nil || env["ANTHROPIC_BASE_URL"] != "https://anth.example" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-test-anthropic" || env["ANTHROPIC_MODEL"] != "claude-sonnet-5-5" {
 		t.Fatalf("anthropic env wrong: %v", env)
 	}
@@ -99,21 +99,21 @@ func TestProviderEnv(t *testing.T) {
 		t.Fatalf("anthropic path must not force --model, got %q", model)
 	}
 
-	env, model = s.providerEnv("codex")
+	env, model = s.providerEnv("codex", s.workerConfig("codex"))
 	if env == nil || env["OPENAI_BASE_URL"] != "https://oai.example/v1" || env["OPENAI_API_KEY"] != "sk-test-openai" || model != "gpt-test" {
 		t.Fatalf("openai env wrong: %v model=%q", env, model)
 	}
 
-	if env, _ := s.providerEnv("opencode"); env != nil {
+	if env, _ := s.providerEnv("opencode", s.workerConfig("opencode")); env != nil {
 		t.Fatalf("disabled provider must fall back to CLI default: %v", env)
 	}
-	if env, model := s.providerEnv("fusion-code"); env != nil || model != "" {
+	if env, model := s.providerEnv("fusion-code", s.workerConfig("fusion-code")); env != nil || model != "" {
 		t.Fatalf("no provider configured must be empty: %v %q", env, model)
 	}
 
 	// Agent-settings override beats the wizard worker config.
 	s.cfg.Agent = []config.AgentSettings{{Name: "claude", ProviderID: "p-oai"}}
-	env, model = s.providerEnv("claude")
+	env, model = s.providerEnv("claude", s.workerConfig("claude"))
 	if env == nil || env["OPENAI_BASE_URL"] == "" || model != "gpt-test" {
 		t.Fatalf("agent settings override not honored: %v %q", env, model)
 	}

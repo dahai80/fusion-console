@@ -14,6 +14,8 @@ export type AgentInfo = {
   detected: boolean;
   permission_mode: string;
   max_budget_usd: number;
+  is_worker?: boolean;
+  agent_type?: string;
 };
 
 export type Conversation = {
@@ -148,6 +150,7 @@ export const api = {
 };
 
 export type WorkerSettings = {
+  name?: string;
   agent: string;
   enabled: boolean;
   isolation: "worktree" | "standalone";
@@ -155,6 +158,7 @@ export type WorkerSettings = {
   max_budget_usd: number;
   provider_id: string;
   work_dir: string;
+  repo?: string;
 };
 
 export type UsageRange = "today" | "week" | "month" | "all";

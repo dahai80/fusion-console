@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>贪食蛇</title>
+<style>
+  /* 全局深色主题 */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0f1115;
+    color: #e4e4e7;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 16px;
+  }
+  /* 标题 */
+  h1 { font-size: 20px; font-weight: 600; color: #818cf8; letter-spacing: 2px; }
+  /* 计分板 */
+  .scoreboard {
+    display: flex;
+    gap: 12px;
+  }
+  .scoreboard span {
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 8px;
+    padding: 6px 16px;
+    font-size: 14px;
+    color: #a1a1aa;
+  }
+  .scoreboard b { color: #e4e4e7; margin-left: 6px; }
+  /* 画布容器（相对定位，覆盖层绝对定位其上） */
+  .board { position: relative; }
+  canvas {
+    display: block;
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 12px;
+    touch-action: none; /* 禁止浏览器默认滑动行为，保证手势识别 */
+  }
+  /* 游戏结束 / 暂停覆盖层 */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: rgba(15, 17, 21, 0.82);
+    border-radius: 12px;
+    visibility: hidden;
+  }
+  .overlay.show { visibility: visible; }
+  .overlay .title { font-size: 24px; font-weight: 700; }
+  .overlay .sub { font-size: 14px; color: #a1a1aa; }
+  .overlay button {
+    margin-top: 4px;
+    background: #6366f1;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 24px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .overlay button:hover { background: #4f46e5; }
+  /* 底部操作提示 */
+  .hint { font-size: 12px; color: #71717a; text-align: center; line-height: 1.8; }
+</style>
+</head>
+<body>
+
+<h1>贪食蛇</h1>
+
+<div class="scoreboard">
+  <span>得分<b id="score">0</b></span>
+  <span>最高分<b id="best">0</b></span>
+</div>
+
+<div class="board">
+  <canvas id="game" width="480" height="480"></canvas>
+  <div class="overlay" id="overlay">
+    <div class="title" id="overlayTitle"></div>
+    <div class="sub" id="overlaySub"></div>
+    <button id="restartBtn">重新开始</button>
+  </div>
+</div>
+
+<p class="hint">
+  方向键 / WASD 控制方向 · P 或空格 暂停 · 移动端滑动屏幕改变方向<br>
+  游戏结束后按空格或回车重新开始
+</p>
+
+<script>
+(function () {
+  'use strict';
+
+  // ========== 常量 ==========
+  var COLS = 20;           // 列数
+  var ROWS = 20;           // 行数
+  var CELL = 24;           // 每格像素
+  var STEP_MS = 120;       // 每格移动间隔（毫秒）
+
+  // 方向向量：上右下左
+  var DIRS = {
+    up:    { x: 0,  y: -1 },
+    right: { x: 1,  y: 0 },
+    down:  { x: 0,  y: 1 },
+    left:  { x: -1, y: 0 }
+  };
+  // 反方向映射，用于禁止 180 度掉头
+  var OPPOSITE = { up: 'down', down: 'up', left: 'right', right: 'left' };
+
+  // 键盘键 -> 方向
+  var KEY_DIR = {
+    ArrowUp: 'up', KeyW: 'up',
+    ArrowDown: 'down', KeyS: 'down',
+    ArrowLeft: 'left', KeyA: 'left',
+    ArrowRight: 'right', KeyD: 'right'
+  };
+
+  // ========== DOM 元素 ==========
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+  var overlay = document.getElementById('overlay');
+  var overlayTitle = document.getElementById('overlayTitle');
+  var overlaySub = document.getElementById('overlaySub');
+  var restartBtn = document.getElementById('restartBtn');
+
+  // ========== 游戏状态 ==========
+  var snake = [];        // 蛇身，数组头在前，元素为 {x, y}
+  var dir = 'right';     // 当前移动方向
+  var nextDir = null;    // 输入缓冲：下一次移动要应用的方向
+  var food = null;       // 食物坐标 {x, y}
+  var score = 0;
+  var best = 0;
+  var state = 'ready';   // ready | running | paused | over
+  var acc = 0;           // rAF 时间累积器
+  var lastTime = 0;
+
+  // 最高分持久化
+  try {
+    best = parseInt(localStorage.getItem('snake_best'), 10) || 0;
+  } catch (e) { best = 0; }
+  bestEl.textContent = best;
+
+  // ========== 初始化 / 重开 ==========
+  function reset() {
+    // 3 节蛇，位于棋盘中部，头在中间向右
+    var cx = Math.floor(COLS / 2);
+    var cy = Math.floor(ROWS / 2);
+    snake = [
+      { x: cx,     y: cy },
+      { x: cx - 1, y: cy },
+      { x: cx - 2, y: cy }
+    ];
+    dir = 'right';
+    nextDir = null;
+    score = 0;
+    acc = 0;
+    state = 'running';
+    scoreEl.textContent = score;
+    overlay.classList.remove('show');
+    placeFood();
+  }
+
+  // ========== 食物生成（避开蛇身） ==========
+  function placeFood() {
+    var free = [];
+    var occupied = {};
+    snake.forEach(function (s) { occupied[s.x + ',' + s.y] = true; });
+    for (var x = 0; x < COLS; x++) {
+      for (var y = 0; y < ROWS; y++) {
+        if (!occupied[x + ',' + y]) free.push({ x: x, y: y });
+      }
+    }
+    // 蛇占满全盘则无空位（理论通关）
+    if (free.length === 0) { food = null; return; }
+    food = free[Math.floor(Math.random() * free.length)];
+  }
+
+  // ========== 单步移动 ==========
+  function step() {
+    // 应用输入缓冲方向（禁止 180 度掉头）
+    if (nextDir && nextDir !== OPPOSITE[dir]) {
+      dir = nextDir;
+    }
+    nextDir = null;
+
+    var d = DIRS[dir];
+    var head = snake[0];
+    var nx = head.x + d.x;
+    var ny = head.y + d.y;
+
+    // 撞墙
+    if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) {
+      return gameOver();
+    }
+    // 撞自己（尾巴即将移走的格子除外：不吃食物时尾尖会让出）
+    var willEat = food && nx === food.x && ny === food.y;
+    var checkLen = willEat ? snake.length : snake.length - 1;
+    for (var i = 0; i < checkLen; i++) {
+      if (snake[i].x === nx && snake[i].y === ny) {
+        return gameOver();
+      }
+    }
+
+    // 头部入列
+    snake.unshift({ x: nx, y: ny });
+    if (willEat) {
+      // 吃到食物：加分、加长（不移除尾部）、重新生成食物
+      score++;
+      scoreEl.textContent = score;
+      if (score > best) {
+        best = score;
+        bestEl.textContent = best;
+        try { localStorage.setItem('snake_best', String(best)); } catch (e) {}
+      }
+      placeFood();
+    } else {
+      // 未吃到：尾部出列
+      snake.pop();
+    }
+  }
+
+  // ========== 游戏结束 ==========
+  function gameOver() {
+    state = 'over';
+    overlayTitle.textContent = '游戏结束';
+    overlaySub.textContent = '最终得分：' + score + ' · 最高分：' + best;
+    overlay.classList.add('show');
+  }
+
+  // ========== 暂停 / 继续 ==========
+  function togglePause() {
+    if (state === 'running') {
+      state = 'paused';
+      overlayTitle.textContent = '已暂停';
+      overlaySub.textContent = '按 P 或空格继续';
+      restartBtn.style.display = 'none';
+      overlay.classList.add('show');
+    } else if (state === 'paused') {
+      state = 'running';
+      lastTime = 0; // 重置时间基准，避免恢复瞬间跳格
+      overlay.classList.remove('show');
+      restartBtn.style.display = '';
+    }
+  }
+
+  // ========== 绘制 ==========
+  function draw() {
+    // 背景
+    ctx.fillStyle = '#18181b';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 棋盘格细线（增加质感）
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.lineWidth = 1;
+    for (var i = 1; i < COLS; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * CELL + 0.5, 0);
+      ctx.lineTo(i * CELL + 0.5, canvas.height);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, i * CELL + 0.5);
+      ctx.lineTo(canvas.width, i * CELL + 0.5);
+      ctx.stroke();
+    }
+
+    // 食物：红色圆点
+    if (food) {
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(
+        food.x * CELL + CELL / 2,
+        food.y * CELL + CELL / 2,
+        CELL * 0.32, 0, Math.PI * 2
+      );
+      ctx.fill();
+    }
+
+    // 蛇身：头最亮，向后渐暗
+    for (var j = snake.length - 1; j >= 0; j--) {
+      var seg = snake[j];
+      var t = j / Math.max(snake.length - 1, 1); // 0 头 -> 1 尾
+      var g = Math.round(107 + t * 40);          // 6366f1 -> 渐暗
+      ctx.fillStyle = j === 0 ? '#818cf8' : 'rgb(' + Math.round(99 - t * 30) + ',' + g + ',' + Math.round(241 - t * 40) + ')';
+      ctx.fillRect(seg.x * CELL + 1, seg.y * CELL + 1, CELL - 2, CELL - 2);
+    }
+  }
+
+  // ========== 主循环：requestAnimationFrame + 时间累积 ==========
+  function loop(time) {
+    requestAnimationFrame(loop);
+    if (state !== 'running') { lastTime = time; return; }
+    if (lastTime === 0) { lastTime = time; return; }
+    acc += time - lastTime;
+    lastTime = time;
+    // 用 while 处理长帧（如标签页切回）导致的多次步进
+    while (acc >= STEP_MS && state === 'running') {
+      acc -= STEP_MS;
+      step();
+    }
+    draw();
+  }
+
+  // ========== 输入：键盘 ==========
+  document.addEventListener('keydown', function (e) {
+    // 空格 / 回车：游戏中暂停，结束后重开
+    if (e.code === 'Space' || e.code === 'Enter') {
+      e.preventDefault();
+      if (state === 'over') {
+        reset();
+      } else if (e.code === 'Space') {
+        togglePause();
+      }
+      return;
+    }
+    if (e.code === 'KeyP') {
+      togglePause();
+      return;
+    }
+    var d = KEY_DIR[e.code];
+    if (d) {
+      e.preventDefault();
+      // 180 度反向的输入直接忽略；同向或垂直方向进入缓冲
+      if (state === 'running' && d !== OPPOSITE[dir]) {
+        nextDir = d;
+      }
+    }
+  });
+
+  restartBtn.addEventListener('click', reset);
+
+  // ========== 输入：移动端滑动手势 ==========
+  var touchStart = null;
+  canvas.addEventListener('touchstart', function (e) {
+    e.preventDefault();
+    var t = e.touches[0];
+    touchStart = { x: t.clientX, y: t.clientY };
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function (e) {
+    e.preventDefault();
+    if (!touchStart || state !== 'running') return;
+    var t = e.touches[0];
+    var dx = t.clientX - touchStart.x;
+    var dy = t.clientY - touchStart.y;
+    // 位移超过阈值才判定方向，避免误触
+    if (Math.abs(dx) < 24 && Math.abs(dy) < 24) return;
+    var d;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      d = dx > 0 ? 'right' : 'left';
+    } else {
+      d = dy > 0 ? 'down' : 'up';
+    }
+    if (d !== OPPOSITE[dir]) {
+      nextDir = d;
+      touchStart = { x: t.clientX, y: t.clientY }; // 支持连续滑动不抬手
+    }
+  }, { passive: false });
+
+  // ========== 启动 ==========
+  reset();
+  draw();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

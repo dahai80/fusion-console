@@ -83,8 +83,9 @@ func (s *Server) agentsRoot() string {
 }
 
 // executeToolCall runs one admitted tool call. The returned string becomes
-// the tool-role message for the next planner iteration.
-func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user string, convID int64) (string, error) {
+// the tool-role message for the next planner iteration. Long-running agent
+// dispatches stream progress through send so the browser shows live status.
+func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user string, convID int64, send func(map[string]any)) (string, error) {
 	var args struct {
 		Agent string `json:"agent"`
 		Task  string `json:"task"`
@@ -96,7 +97,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 	}
 	switch call.Name {
 	case "list_agents":
-		names := make([]string, 0, len(s.agents))
+		names := make([]string, 0, len(s.agents)+len(s.cfg.Orchestrator.Workers))
 		for name, ad := range s.agents {
 			status := "installed"
 			if !ad.Detect() {
@@ -104,11 +105,24 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 			}
 			names = append(names, fmt.Sprintf("%s (%s)", name, status))
 		}
+		// Named workers are first-class dispatch targets: the brain should
+		// address them by name so parallel workers of one CLI stay distinct.
+		for _, w := range s.cfg.Orchestrator.Workers {
+			if w.Name == "" {
+				continue
+			}
+			status := "installed"
+			if ad, ok := s.agents[w.Agent]; ok && !ad.Detect() {
+				status = "not installed"
+			}
+			names = append(names, fmt.Sprintf("%s (worker, type %s, %s)", w.Name, w.Agent, status))
+		}
 		sort.Strings(names)
 		return "available agents:\n" + strings.Join(names, "\n"), nil
 
 	case "run_agent":
-		adapter, ok := s.agents[args.Agent]
+		cli, wk := s.resolveWorkerTarget(args.Agent)
+		adapter, ok := s.agents[cli]
 		if !ok {
 			return "", fmt.Errorf("unknown agent %q", args.Agent)
 		}
@@ -117,36 +131,37 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		}
 		// Fleet guardrails: only enabled workers, per-worker budget/isolation
 		// from the wizard config, repo whitelist enforced for worktrees.
-		wk := s.workerConfig(args.Agent)
 		if wk != nil && !wk.Enabled {
 			return "", fmt.Errorf("worker %s is disabled in settings", args.Agent)
 		}
-		settings := s.agentSettings(args.Agent)
+		settings := s.agentSettings(cli)
 		budget := settings.MaxBudgetUSD
 		if wk != nil && wk.MaxBudgetUSD > 0 {
 			budget = wk.MaxBudgetUSD
 		}
-		workdir := s.cfg.ResolveWorkDir(args.Agent)
-		if wk != nil && wk.Isolation != "worktree" && strings.TrimSpace(wk.WorkDir) != "" {
-			abs, err := filepath.Abs(wk.WorkDir)
-			if err != nil {
-				return "", fmt.Errorf("worker %s: bad work_dir: %v", args.Agent, err)
+		workdir := s.cfg.ResolveWorkDir(cli)
+		if wk != nil {
+			if wk.Isolation == "worktree" {
+				// Named workers carry their own default repo; the per-run
+				// argument wins when the brain passes one explicitly.
+				repo := args.Repo
+				if strings.TrimSpace(repo) == "" {
+					repo = wk.Repo
+				}
+				if strings.TrimSpace(repo) != "" {
+					wt, err := s.createWorktree(repo, args.Agent)
+					if err != nil {
+						return "", err
+					}
+					workdir = wt
+				}
+			} else {
+				workdir = s.cfg.ResolveWorkerDir(*wk)
 			}
-			if err := os.MkdirAll(abs, 0o700); err != nil {
-				return "", fmt.Errorf("worker %s: create work_dir: %v", args.Agent, err)
-			}
-			workdir = abs
 		}
-		if wk != nil && wk.Isolation == "worktree" && strings.TrimSpace(args.Repo) != "" {
-			wt, err := s.createWorktree(args.Repo, args.Agent)
-			if err != nil {
-				return "", err
-			}
-			workdir = wt
-		}
-		log.Printf("orchestrator: dispatch agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
-			args.Agent, isolationOf(wk), workdir, budget, user)
-		pEnv, forcedModel := s.providerEnv(args.Agent)
+		log.Printf("orchestrator: dispatch worker=%s agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
+			args.Agent, cli, isolationOf(wk), workdir, budget, user)
+		pEnv, forcedModel := s.providerEnv(cli, wk)
 		opts := agent.RunOpts{
 			Task: args.Task, Workdir: workdir,
 			Model:          forcedModel,
@@ -164,16 +179,41 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		}
 		full, result := "", ""
 		var usage agent.Event
-		for ev := range evCh {
-			switch ev.Type {
-			case agent.EventText:
-				full += ev.Text
-			case agent.EventResult:
-				result = ev.Text
-			case agent.EventUsage:
-				usage = ev
-			case agent.EventError:
-				return "", fmt.Errorf("agent %s error: %s", args.Agent, ev.Text)
+		// Live progress: forward the agent's own tool activity plus a periodic
+		// heartbeat, so the chat shows the worker is actually running.
+		start := time.Now()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
+		running := true
+		for running {
+			select {
+			case ev, ok := <-evCh:
+				if !ok {
+					running = false
+					break
+				}
+				switch ev.Type {
+				case agent.EventText:
+					full += ev.Text
+				case agent.EventTool:
+					if send != nil {
+						send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
+							"detail": fmt.Sprintf("%s: %s", args.Agent, ev.ToolDetail)})
+					}
+				case agent.EventResult:
+					result = ev.Text
+				case agent.EventUsage:
+					usage = ev
+				case agent.EventError:
+					return "", fmt.Errorf("agent %s error: %s", args.Agent, ev.Text)
+				}
+			case <-heartbeat.C:
+				if send != nil {
+					send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
+						"detail": fmt.Sprintf("%s still running (%ds elapsed)", args.Agent, int(time.Since(start).Seconds()))})
+				}
+			case <-ctx.Done():
+				return "", fmt.Errorf("agent %s canceled: %v", args.Agent, ctx.Err())
 			}
 		}
 		final := result
@@ -332,7 +372,7 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 				}
 			}
 			send(map[string]any{"type": "tool", "tool": call.Name, "status": "running", "detail": toolDetail(call)})
-			out, execErr := s.executeToolCall(ctx, call, user, prov.convID)
+			out, execErr := s.executeToolCall(ctx, call, user, prov.convID, send)
 			status := "done"
 			if execErr != nil {
 				out = "error: " + execErr.Error()
@@ -399,14 +439,33 @@ func toolDetail(call chat.ToolCall) string {
 }
 
 // workerConfig returns the wizard-configured worker entry for one agent, or
-// nil when the agent has no worker entry.
+// nil when the agent has no worker entry. Legacy entries are addressed by
+// agent type; named workers must match their Name exactly.
 func (s *Server) workerConfig(name string) *config.WorkerConfig {
 	for i := range s.cfg.Orchestrator.Workers {
-		if s.cfg.Orchestrator.Workers[i].Agent == name {
-			return &s.cfg.Orchestrator.Workers[i]
+		w := &s.cfg.Orchestrator.Workers[i]
+		if w.Name != "" && w.Name == name {
+			return w
+		}
+	}
+	for i := range s.cfg.Orchestrator.Workers {
+		w := &s.cfg.Orchestrator.Workers[i]
+		if w.Name == "" && w.Agent == name {
+			return w
 		}
 	}
 	return nil
+}
+
+// resolveWorkerTarget maps a dispatch id (worker name or agent type) to the
+// agent CLI that backs it plus its worker entry (nil = bare agent type with
+// no worker config). Named workers win over agent-type matches so multiple
+// workers can share one CLI.
+func (s *Server) resolveWorkerTarget(id string) (cli string, wk *config.WorkerConfig) {
+	if w := s.workerConfig(id); w != nil {
+		return w.Agent, w
+	}
+	return id, nil
 }
 
 // providerEnv resolves a worker's forced provider (agent settings override,
@@ -414,17 +473,15 @@ func (s *Server) workerConfig(name string) *config.WorkerConfig {
 // model override. Anthropic-compatible providers speak the ANTHROPIC_* env
 // family; OpenAI-compatible and gateway providers speak the OPENAI_* family.
 // Empty result = the CLI uses its own default login.
-func (s *Server) providerEnv(agentName string) (map[string]string, string) {
+func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]string, string) {
 	pid := ""
 	for _, a := range s.cfg.Agent {
-		if a.Name == agentName && a.ProviderID != "" {
+		if a.Name == cli && a.ProviderID != "" {
 			pid = a.ProviderID
 		}
 	}
-	if pid == "" {
-		if wk := s.workerConfig(agentName); wk != nil {
-			pid = wk.ProviderID
-		}
+	if pid == "" && wk != nil {
+		pid = wk.ProviderID
 	}
 	if pid == "" {
 		return nil, ""
@@ -436,12 +493,12 @@ func (s *Server) providerEnv(agentName string) (map[string]string, string) {
 		}
 	}
 	if prov == nil || !prov.Enabled {
-		log.Printf("orchestrator: worker %s: provider %s not found or disabled, using CLI default", agentName, pid)
+		log.Printf("orchestrator: worker %s: provider %s not found or disabled, using CLI default", cli, pid)
 		return nil, ""
 	}
 	key, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil || key == "" {
-		log.Printf("orchestrator: worker %s: provider %s has no stored key, using CLI default", agentName, pid)
+		log.Printf("orchestrator: worker %s: provider %s has no stored key, using CLI default", cli, pid)
 		return nil, ""
 	}
 	env := map[string]string{"PROVIDER_ID": pid}
@@ -460,10 +517,10 @@ func (s *Server) providerEnv(agentName string) (map[string]string, string) {
 			model = prov.Model
 		}
 	default:
-		log.Printf("orchestrator: worker %s: provider %s type %q not injectable, using CLI default", agentName, pid, prov.Type)
+		log.Printf("orchestrator: worker %s: provider %s type %q not injectable, using CLI default", cli, pid, prov.Type)
 		return nil, ""
 	}
-	log.Printf("orchestrator: worker %s forced to provider %s (%s)", agentName, pid, prov.Type)
+	log.Printf("orchestrator: worker %s forced to provider %s (%s)", cli, pid, prov.Type)
 	return env, model
 }
 

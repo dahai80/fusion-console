@@ -290,16 +290,30 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	adapter, ok := s.agents[req.Agent]
+	// Accept a worker name (named workers are first-class @-mention targets)
+	// or a bare agent type; resolve to the backing CLI and its worker config.
+	cli, wk := s.resolveWorkerTarget(req.Agent)
+	adapter, ok := s.agents[cli]
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown agent " + req.Agent})
 		return
 	}
-	settings := s.agentSettings(req.Agent)
+	if wk != nil && !wk.Enabled {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker " + req.Agent + " is disabled in settings"})
+		return
+	}
+	settings := s.agentSettings(cli)
+	if wk != nil && wk.PermissionMode != "" {
+		settings.PermissionMode = wk.PermissionMode
+	}
 	workdir := req.Workdir
 	if workdir == "" {
-		// Dedicated per-agent workspace (default ~/.fusion-console/agents/<name>).
-		workdir = s.cfg.ResolveWorkDir(req.Agent)
+		// Dedicated workspace: named workers get their own directory.
+		if wk != nil {
+			workdir = s.cfg.ResolveWorkerDir(*wk)
+		} else {
+			workdir = s.cfg.ResolveWorkDir(cli)
+		}
 	}
 	if fi, err := os.Stat(workdir); err != nil || !fi.IsDir() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workdir not accessible: " + workdir})
@@ -328,12 +342,16 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	user := s.auth.User(r)
 	log.Printf("server: agent=%s conv=%d workdir=%s user=%s", req.Agent, req.ConversationID, workdir, user)
 
-	pEnv, forcedModel := s.providerEnv(req.Agent)
+	pEnv, forcedModel := s.providerEnv(cli, wk)
+	budget := settings.MaxBudgetUSD
+	if wk != nil && wk.MaxBudgetUSD > 0 {
+		budget = wk.MaxBudgetUSD
+	}
 	opts := agent.RunOpts{
 		Task: req.Task, Workdir: workdir,
 		Model:          forcedModel,
 		PermissionMode: settings.PermissionMode,
-		MaxBudgetUSD:   settings.MaxBudgetUSD,
+		MaxBudgetUSD:   budget,
 		Command:        settings.Command,
 		Env:            pEnv,
 	}
@@ -399,6 +417,8 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		Detected       bool    `json:"detected"`
 		PermissionMode string  `json:"permission_mode"`
 		MaxBudgetUSD   float64 `json:"max_budget_usd"`
+		Worker         bool    `json:"is_worker"`
+		AgentType      string  `json:"agent_type,omitempty"`
 	}
 	out := []agentInfo{}
 	for name, ad := range s.agents {
@@ -406,6 +426,30 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		out = append(out, agentInfo{
 			Name: name, Command: ad.Name(), Detected: ad.Detect(),
 			PermissionMode: st.PermissionMode, MaxBudgetUSD: st.MaxBudgetUSD,
+		})
+	}
+	// Named workers are dispatchable @-mention targets in their own right —
+	// several can share one agent CLI.
+	for _, wk := range s.cfg.Orchestrator.Workers {
+		if wk.Name == "" || !wk.Enabled {
+			continue
+		}
+		ad, ok := s.agents[wk.Agent]
+		if !ok {
+			continue
+		}
+		st := s.agentSettings(wk.Agent)
+		if wk.PermissionMode != "" {
+			st.PermissionMode = wk.PermissionMode
+		}
+		budget := st.MaxBudgetUSD
+		if wk.MaxBudgetUSD > 0 {
+			budget = wk.MaxBudgetUSD
+		}
+		out = append(out, agentInfo{
+			Name: wk.Name, Command: ad.Name(), Detected: ad.Detect(),
+			PermissionMode: st.PermissionMode, MaxBudgetUSD: budget,
+			Worker: true, AgentType: wk.Agent,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": out})

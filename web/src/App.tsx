@@ -430,6 +430,7 @@ function ChatPage() {
             setApproval(null);
             const detail = (ev.detail as string) ?? "";
             if (status === "running") last.content += `\n\n> ⚙️ dispatch \`${ev.tool}\`${detail ? ` — ${detail}` : ""}\n\n`;
+            else if (status === "progress") last.content += `> ⏳ ${detail}\n`;
             else if (status === "done") last.content += "> ↳ done\n\n";
             else if (status === "denied") last.content += `> ↳ denied: ${detail}\n\n`;
             else if (status === "error") last.content += "> ↳ error\n\n";
@@ -617,6 +618,7 @@ function ChatPage() {
                 <button key={a.name} onClick={() => insertMention(a.name)}
                   className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <Bot size={14} className="text-indigo-500" /> @{a.name}
+                  {a.is_worker && <span className="text-xs text-zinc-400">worker · {a.agent_type}</span>}
                 </button>
               ))}
             </div>

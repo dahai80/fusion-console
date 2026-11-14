@@ -71,14 +71,18 @@ func (c *Config) ResolveWorkDir(agentName string) string {
 }
 
 // WorkerConfig is one worker entry in the guided brain-and-workers setup.
+// Several workers may share one agent type; each has its own Name (used for
+// @-mention dispatch and log lines) and its own workspace directory.
 type WorkerConfig struct {
-	Agent          string  `json:"agent"`
+	Name           string  `json:"name"`  // unique worker name; empty = legacy single worker addressed by agent type
+	Agent          string  `json:"agent"` // agent CLI type (claude, fusion-code, ...)
 	Enabled        bool    `json:"enabled"`
 	Isolation      string  `json:"isolation"` // "worktree" | "standalone"; empty = worktree
 	PermissionMode string  `json:"permission_mode"`
 	MaxBudgetUSD   float64 `json:"max_budget_usd"`
 	ProviderID     string  `json:"provider_id"` // force this provider for the worker CLI; empty = CLI default
-	WorkDir        string  `json:"work_dir"`    // standalone workspace override; empty = default per-agent dir
+	WorkDir        string  `json:"work_dir"`    // dedicated workspace; empty = ~/.fusion-console/agents/<name-or-agent>
+	Repo           string  `json:"repo"`        // default repo for worktree isolation; empty = per-run repo argument
 }
 
 // OrchestratorConfig captures the onboarding wizard's brain-and-workers
@@ -213,4 +217,33 @@ func (c *Config) User(name string) (*UserEntry, bool) {
 		}
 	}
 	return nil, false
+}
+
+// ResolveWorkerDir returns the dedicated workspace for one worker entry: the
+// explicit override when set, otherwise ~/.fusion-console/agents/<worker-name>
+// (falling back to the agent type for legacy entries without a name). The
+// directory is created on demand.
+func (c *Config) ResolveWorkerDir(w WorkerConfig) string {
+	if strings.TrimSpace(w.WorkDir) != "" {
+		dir := w.WorkDir
+		if !filepath.IsAbs(dir) {
+			abs, err := filepath.Abs(dir)
+			if err == nil {
+				dir = abs
+			}
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			log.Printf("config: mkdir worker workdir %s: %v", dir, err)
+		}
+		return dir
+	}
+	id := w.Name
+	if id == "" {
+		id = w.Agent
+	}
+	dir := filepath.Join(DefaultDir(), "agents", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Printf("config: mkdir default worker workdir %s: %v", dir, err)
+	}
+	return dir
 }
