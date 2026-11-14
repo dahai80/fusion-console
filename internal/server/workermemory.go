@@ -46,28 +46,51 @@ func memoryServerURL() string {
 }
 
 // memoryPost issues one JSON-RPC-over-HTTP call against fm-server with a hard
-// short timeout. Best effort: errors are logged, never propagated.
-func memoryPost(ctx context.Context, path string, body any, out any, timeout time.Duration) error {
+// short timeout. fm-server speaks JSON-RPC 2.0 ({"jsonrpc","method","params"},
+// RPC method v1.<name> on pinned /v1/ paths) and enforces Bearer auth (B5);
+// the key comes from the same env var fm-server itself uses, so both
+// processes read one source. Best effort: errors are logged, never propagated.
+func memoryPost(ctx context.Context, method string, params any, out any, timeout time.Duration) error {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	encoded, err := json.Marshal(body)
+	envelope := map[string]any{"jsonrpc": "2.0", "method": method, "params": params, "id": 1}
+	encoded, err := json.Marshal(envelope)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, memoryServerURL()+path, bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, memoryServerURL()+"/v1/memory/"+method, bytes.NewReader(encoded))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if k := os.Getenv("FUSION_MEMORY_API_KEY"); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fm-server %s returned %d", path, resp.StatusCode)
+		return fmt.Errorf("fm-server %s returned %d", method, resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	var rpc struct {
+		Result *json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rpc); err != nil {
+		return err
+	}
+	if rpc.Error != nil {
+		return fmt.Errorf("fm-server %s rpc error %d: %s", method, rpc.Error.Code, rpc.Error.Message)
+	}
+	if out != nil && rpc.Result != nil {
+		return json.Unmarshal(*rpc.Result, out)
+	}
+	return nil
 }
 
 // recallWorkerMemory fetches past experience relevant to the task from
@@ -80,7 +103,7 @@ func (s *Server) recallWorkerMemory(ctx context.Context, workerID, task string) 
 		} `json:"blocks"`
 	}
 	body := map[string]any{"text": task, "top_k": 3, "token_budget": 800}
-	if err := memoryPost(ctx, "/v1/memory/retrieve", body, &resp, 2*time.Second); err != nil {
+	if err := memoryPost(ctx, "retrieve", body, &resp, 2*time.Second); err != nil {
 		log.Printf("server: worker memory recall unavailable (%v) — falling back to notes", err)
 		return ""
 	}
@@ -121,7 +144,7 @@ func (s *Server) commitWorkerMemory(ctx context.Context, workerID, task, result 
 			"metadata":  map[string]any{"source": "fusion-console", "worker": workerID},
 		},
 	}
-	if err := memoryPost(ctx, "/v1/memory/commit", body, &struct{}{}, 3*time.Second); err != nil {
+	if err := memoryPost(ctx, "commit", body, nil, 3*time.Second); err != nil {
 		log.Printf("server: worker memory commit failed worker=%s: %v", workerID, err)
 		return
 	}
