@@ -162,8 +162,9 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		log.Printf("orchestrator: dispatch worker=%s agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
 			args.Agent, cli, isolationOf(wk), workdir, budget, user)
 		pEnv, forcedModel := s.providerEnv(cli, wk)
+		taskText := s.prefixWorkerTask(ctx, args.Agent, args.Task)
 		opts := agent.RunOpts{
-			Task: args.Task, Workdir: workdir,
+			Task: taskText, Workdir: workdir,
 			Model:          forcedModel,
 			PermissionMode: settings.PermissionMode,
 			MaxBudgetUSD:   budget,
@@ -223,6 +224,9 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		// Cost rows stay separate: planner chat vs agent runs.
 		_ = s.store.LogCost(convID, user, "agent:"+args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
 		log.Printf("orchestrator: agent=%s finished cost=%.4f tokens_in=%d tokens_out=%d", args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
+		if s.workerMemoryMode() == "fusion-memory" && final != "" {
+			s.commitWorkerMemory(ctx, args.Agent, args.Task, final)
+		}
 		if final == "" {
 			return "agent returned no output", nil
 		}

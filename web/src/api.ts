@@ -224,6 +224,7 @@ export type Orchestrator = {
   repos: string[];
   workers: WorkerSettings[];
   configured: boolean;
+  worker_memory?: "notes" | "fusion-memory" | "off";
 };
 
 // streamPOST performs a POST that yields SSE "data:" JSON events.

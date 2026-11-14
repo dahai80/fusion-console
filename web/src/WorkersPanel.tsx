@@ -146,6 +146,19 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
         <Input className="w-40" placeholder="name (optional)" value={newName} onChange={(e) => setNewName(e.target.value)} />
         <Button variant="outline" onClick={addWorker} disabled={!newAgent}>Add worker</Button>
       </div>
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
+        <label className="flex items-center gap-2 text-xs text-zinc-500"
+          title="Cross-run memory: notes = read/append NOTES.md in the workspace (default, zero deps); fusion-memory = also recall/commit experience via the fusion-memory hub (best effort); off = raw task only">
+          worker memory
+          <Select className="w-40" value={orch?.worker_memory ?? "notes"}
+            onChange={(e) => orch && setOrch({ ...orch, worker_memory: e.target.value })}>
+            <option value="notes">notes (NOTES.md)</option>
+            <option value="fusion-memory">fusion-memory hub</option>
+            <option value="off">off</option>
+          </Select>
+        </label>
+        <span className="text-xs text-zinc-400">fusion-memory hub runs at 127.0.0.1:11435; unavailable hub degrades to notes</span>
+      </div>
       <div className="flex items-center gap-3">
         <Button onClick={save}>Save workers</Button>
         {msg && <span className="text-sm text-indigo-500">{msg}</span>}

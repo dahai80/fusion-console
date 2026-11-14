@@ -347,8 +347,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	if wk != nil && wk.MaxBudgetUSD > 0 {
 		budget = wk.MaxBudgetUSD
 	}
+	taskText := s.prefixWorkerTask(r.Context(), req.Agent, req.Task)
 	opts := agent.RunOpts{
-		Task: req.Task, Workdir: workdir,
+		Task: taskText, Workdir: workdir,
 		Model:          forcedModel,
 		PermissionMode: settings.PermissionMode,
 		MaxBudgetUSD:   budget,
@@ -396,6 +397,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		})
 		_, _ = s.store.AppendMessage(req.ConversationID, "assistant", final, string(meta))
 		_ = s.store.LogCost(req.ConversationID, user, "agent:"+req.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
+		if s.workerMemoryMode() == "fusion-memory" {
+			s.commitWorkerMemory(r.Context(), req.Agent, req.Task, final)
+		}
 	}
 	send(map[string]any{"type": "done"})
 }

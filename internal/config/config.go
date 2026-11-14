@@ -89,16 +89,17 @@ type WorkerConfig struct {
 // decisions. The architect session and dispatch loop are NOT implemented by
 // this prototype — this section only persists what the wizard collected.
 type OrchestratorConfig struct {
-	Mode       string         `json:"mode"` // "off" | "confirm" | "auto"
-	BrainAgent string         `json:"brain_agent"`
-	Repos      []string       `json:"repos"`
-	Workers    []WorkerConfig `json:"workers"`
-	Configured bool           `json:"configured"`
+	Mode         string         `json:"mode"` // "off" | "confirm" | "auto"
+	BrainAgent   string         `json:"brain_agent"`
+	Repos        []string       `json:"repos"`
+	Workers      []WorkerConfig `json:"workers"`
+	Configured   bool           `json:"configured"`
+	WorkerMemory string         `json:"worker_memory"` // "notes" (default) | "fusion-memory" | "off"
 }
 
 // DefaultOrchestrator returns safe wizard defaults.
 func DefaultOrchestrator() OrchestratorConfig {
-	return OrchestratorConfig{Mode: "confirm", BrainAgent: "claude", Repos: []string{}, Workers: []WorkerConfig{}}
+	return OrchestratorConfig{Mode: "confirm", BrainAgent: "claude", Repos: []string{}, Workers: []WorkerConfig{}, WorkerMemory: "notes"}
 }
 
 // ServerConfig is the [server] section.
@@ -178,6 +179,11 @@ func Load(dir string) (*Config, error) {
 	// Orchestrator section defaults likewise (guided setup not yet run).
 	if !bytes.Contains(data, []byte("\"orchestrator\"")) {
 		cfg.Orchestrator = DefaultOrchestrator()
+	}
+	// Worker memory defaults to the zero-dependency NOTES.md convention when
+	// the config file does not mention it (first run / older configs).
+	if !bytes.Contains(data, []byte("\"worker_memory\"")) {
+		cfg.Orchestrator.WorkerMemory = "notes"
 	}
 	return cfg, nil
 }
