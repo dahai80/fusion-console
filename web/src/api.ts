@@ -148,6 +148,10 @@ export const api = {
     req<{ content: string; doc: SkillDoc; warnings: string[] | null }>("/api/skills/draft", { method: "POST", body: JSON.stringify(d) }),
   importSkill: (source: string) =>
     req<SkillImport>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) }),
+  skillsCatalog: (repo?: string) =>
+    req<{ skills: CatalogSkill[] }>(`/api/skills/catalog${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`),
+  installCatalogSkill: (s: { name: string; scope: string; repo?: string; overwrite?: boolean }) =>
+    req<{ ok: boolean; path: string }>("/api/skills/catalog/install", { method: "POST", body: JSON.stringify(s) }),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>
@@ -316,6 +320,23 @@ export type SkillImport = {
   via_mirror: boolean;
   warnings: string[] | null;
   missing_files: string[] | null;
+};
+
+// CatalogSkill is one vendored skill (internal/skillcatalog). Status per
+// scope: "" = not installed, "installed" = identical to the catalog copy,
+// "modified" = present but different (local edits or another version).
+export type CatalogSkill = {
+  name: string;
+  description: string;
+  category: string;
+  source: string;
+  commit: string;
+  license: string;
+  url: string;
+  files: number;
+  bytes: number;
+  global: "" | "installed" | "modified";
+  project?: "" | "installed" | "modified";
 };
 
 export type DashboardBucket = {

@@ -87,7 +87,8 @@ func scanSkillsDir(dir, scope string) []skillEntry {
 	}
 	var out []skillEntry
 	for _, e := range entries {
-		if !e.IsDir() {
+		// Hidden directories are install staging areas, not skills.
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		skillFile := filepath.Join(dir, e.Name(), "SKILL.md")

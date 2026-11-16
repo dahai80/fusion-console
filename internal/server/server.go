@@ -97,6 +97,8 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/skills/{name}", s.auth.Require(s.handleSkillsDelete))
 	m.HandleFunc("POST /api/skills/draft", s.auth.Require(s.handleSkillsDraft))
 	m.HandleFunc("POST /api/skills/import", s.auth.Require(s.handleSkillsImport))
+	m.HandleFunc("GET /api/skills/catalog", s.auth.Require(s.handleSkillsCatalog))
+	m.HandleFunc("POST /api/skills/catalog/install", s.auth.Require(s.handleSkillsCatalogInstall))
 
 	m.HandleFunc("GET /api/conversations", s.auth.Require(s.handleListConversations))
 	m.HandleFunc("POST /api/conversations", s.auth.Require(s.handleCreateConversation))
