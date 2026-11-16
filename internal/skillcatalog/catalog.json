@@ -1,0 +1,57 @@
+{
+  "_comment": "Vendored skills catalog. Edit this file, then run `make skills-sync` to re-vendor internal/skillcatalog/skills/ from the pinned commits. Only redistributable licenses (MIT, Apache-2.0); every vendored skill directory carries its license file.",
+  "sources": [
+    {
+      "id": "anthropics",
+      "repo": "anthropics/skills",
+      "commit": "e4bb5d960d87126ff3b3a8af1a104b7db67560ba",
+      "base": "skills",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE.txt"
+    },
+    {
+      "id": "superpowers",
+      "repo": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "base": "skills",
+      "license": "MIT",
+      "repo_license_file": "LICENSE"
+    },
+    {
+      "id": "openai",
+      "repo": "openai/skills",
+      "commit": "49f948faa9258a0c61caceaf225e179651397431",
+      "base": "skills/.curated",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE.txt"
+    }
+  ],
+  "skills": [
+    {"name": "brainstorming", "source": "superpowers", "category": "planning"},
+    {"name": "writing-plans", "source": "superpowers", "category": "planning"},
+    {"name": "executing-plans", "source": "superpowers", "category": "planning"},
+    {"name": "systematic-debugging", "source": "superpowers", "category": "debugging"},
+    {"name": "test-driven-development", "source": "superpowers", "category": "testing"},
+    {"name": "verification-before-completion", "source": "superpowers", "category": "testing"},
+    {"name": "requesting-code-review", "source": "superpowers", "category": "review"},
+    {"name": "receiving-code-review", "source": "superpowers", "category": "review"},
+    {"name": "using-git-worktrees", "source": "superpowers", "category": "git"},
+    {"name": "finishing-a-development-branch", "source": "superpowers", "category": "git"},
+    {"name": "dispatching-parallel-agents", "source": "superpowers", "category": "agents"},
+    {"name": "subagent-driven-development", "source": "superpowers", "category": "agents"},
+    {"name": "writing-skills", "source": "superpowers", "category": "meta"},
+    {"name": "skill-creator", "source": "anthropics", "category": "meta"},
+    {"name": "mcp-builder", "source": "anthropics", "category": "development"},
+    {"name": "frontend-design", "source": "anthropics", "category": "development"},
+    {"name": "web-artifacts-builder", "source": "anthropics", "category": "development"},
+    {"name": "webapp-testing", "source": "anthropics", "category": "testing"},
+    {"name": "docx", "source": "anthropics", "category": "documents"},
+    {"name": "pdf", "source": "anthropics", "category": "documents"},
+    {"name": "pptx", "source": "anthropics", "category": "documents"},
+    {"name": "xlsx", "source": "anthropics", "category": "documents"},
+    {"name": "gh-fix-ci", "source": "openai", "category": "git"},
+    {"name": "gh-address-comments", "source": "openai", "category": "review"},
+    {"name": "security-best-practices", "source": "openai", "category": "security"},
+    {"name": "security-threat-model", "source": "openai", "category": "security"}
+  ]
+}

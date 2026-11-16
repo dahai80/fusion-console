@@ -1,4 +1,4 @@
-.PHONY: all web build test vet fmt cross clean
+.PHONY: all web build test vet fmt cross clean skills-sync
 
 all: web build
 
@@ -23,6 +23,10 @@ cross:
 	./scripts/build.sh linux-amd64
 	./scripts/build.sh linux-arm64
 	./scripts/build.sh windows-amd64
+
+# Re-vendor internal/skillcatalog/skills from the commits pinned in catalog.json.
+skills-sync:
+	go run ./cmd/skillsync
 
 clean:
 	rm -rf bin
