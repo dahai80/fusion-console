@@ -1,6 +1,6 @@
 // Package agent adapts headless coding-agent CLIs (claude, fusion-code,
-// codex, opencode) into one normalized event stream. No orchestration here —
-// each Run is a single task handed to one CLI subprocess.
+// codex, opencode, atlascode) into one normalized event stream. No
+// orchestration here — each Run is a single task handed to one CLI subprocess.
 package agent
 
 import (
@@ -20,8 +20,60 @@ const (
 	EventResult EventType = "result" // final result text
 	EventUsage  EventType = "usage"  // cost/token accounting
 	EventError  EventType = "error"
+	EventNotice EventType = "notice" // non-fatal visibility signal (drift/version hints)
 	EventDone   EventType = "done"
 )
+
+// Protocol family identifiers shared with internal/config. Adapters are
+// selected by protocol (config) with a legacy fallback by agent name.
+const (
+	ProtocolClaudeStreamJSON = "claude-stream-json"
+	ProtocolCodexJSONL       = "codex-jsonl"
+	ProtocolOpencodeJSONL    = "opencode-jsonl"
+)
+
+// defaultCommands maps agent names to their CLI executable when the settings
+// leave the command empty.
+var defaultCommands = map[string]string{
+	"claude":      "claude",
+	"fusion-code": "fusion",
+	"codex":       "codex",
+	"opencode":    "opencode",
+	"atlascode":   "atlascode",
+}
+
+// protocolForName is the legacy name→protocol mapping used when an agent
+// settings entry predates the protocol field.
+func protocolForName(name string) string {
+	switch name {
+	case "codex":
+		return ProtocolCodexJSONL
+	case "opencode":
+		return ProtocolOpencodeJSONL
+	default:
+		return ProtocolClaudeStreamJSON
+	}
+}
+
+// ProtocolFor resolves the effective protocol for an agent settings entry:
+// the explicit protocol when set, otherwise the legacy name mapping.
+func ProtocolFor(name, protocol string) string {
+	if protocol != "" {
+		return protocol
+	}
+	return protocolForName(name)
+}
+
+// CommandFor resolves the effective executable for an agent settings entry.
+func CommandFor(name, command string) string {
+	if command != "" {
+		return command
+	}
+	if def, ok := defaultCommands[name]; ok {
+		return def
+	}
+	return name
+}
 
 // Event is one normalized agent event.
 type Event struct {
@@ -33,6 +85,10 @@ type Event struct {
 	CostUSD    float64
 	TokensIn   int
 	TokensOut  int
+	// Cache token accounting (claude stream-json family). Optional: older
+	// rows/CLIs leave both at zero.
+	TokensCacheRead  int
+	TokensCacheWrite int
 }
 
 // RunOpts parameterizes one agent run.
@@ -42,8 +98,12 @@ type RunOpts struct {
 	Model          string
 	PermissionMode string
 	MaxBudgetUSD   float64
-	Command        string            // optional executable override from settings
-	Env            map[string]string // extra env vars for the subprocess (provider forcing)
+	// MaxBudgetTokens is the fallback kill switch for CLIs that never report
+	// cost (e.g. atlascode on endpoints without pricing). It only arms until
+	// the first positive CostUSD event arrives; 0 disables it.
+	MaxBudgetTokens int
+	Command         string            // optional executable override from settings
+	Env             map[string]string // extra env vars for the subprocess (provider forcing)
 }
 
 // Adapter is one coding-agent CLI integration.
@@ -71,4 +131,17 @@ func detect(command string) bool {
 		return false
 	}
 	return true
+}
+
+// NewFor builds the adapter for one agent settings entry. Protocol decides
+// the parser family; name/command decide branding and the executable.
+func NewFor(name, protocol, command string) Adapter {
+	switch ProtocolFor(name, protocol) {
+	case ProtocolCodexJSONL:
+		return CodexCompatAdapter{AgentName: name, Command: CommandFor(name, command)}
+	case ProtocolOpencodeJSONL:
+		return OpencodeCompatAdapter{AgentName: name, Command: CommandFor(name, command)}
+	default:
+		return ClaudeCompatAdapter{AgentName: name, Command: CommandFor(name, command)}
+	}
 }

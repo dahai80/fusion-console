@@ -59,6 +59,13 @@ func main() {
 			log.Fatalf("console: save default agents: %v", err)
 		}
 		log.Printf("console: initialized default agent settings")
+	} else if cfg.BuiltinMergedCount() > 0 {
+		// Older config: persist newly added built-in agents (e.g. atlascode).
+		n := cfg.BuiltinMergedCount()
+		if err := cfg.Save(dir); err != nil {
+			log.Printf("console: save merged built-in agents: %v", err)
+		}
+		log.Printf("console: merged %d built-in agent defaults into config", n)
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

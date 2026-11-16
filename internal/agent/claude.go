@@ -7,19 +7,25 @@ import (
 	"strconv"
 )
 
-// ClaudeAdapter runs `claude -p --output-format stream-json --verbose`
-// (Claude Code headless). fusion-code reuses the same stream-json protocol.
-type ClaudeAdapter struct{}
+// ClaudeCompatAdapter runs a claude-stream-json family CLI headless:
+// `<cmd> -p --output-format stream-json --verbose`. claude, fusion-code and
+// atlascode all speak this protocol (atlascode ≥0.1.120 carries usage on the
+// result event; older versions only report usage per assistant message, which
+// the run-state accumulator folds in as a fallback).
+type ClaudeCompatAdapter struct {
+	AgentName string // agent name from settings (claude, fusion-code, atlascode, ...)
+	Command   string // resolved executable (CommandFor)
+}
 
 // Name implements Adapter.
-func (ClaudeAdapter) Name() string { return "claude" }
+func (a ClaudeCompatAdapter) Name() string { return a.AgentName }
 
 // Detect implements Adapter.
-func (ClaudeAdapter) Detect() bool { return detect("claude") }
+func (a ClaudeCompatAdapter) Detect() bool { return detect(a.Command) }
 
 // Run implements Adapter.
-func (a ClaudeAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, error) {
-	command := orCommand(opts.Command, "claude")
+func (a ClaudeCompatAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, error) {
+	command := orCommand(opts.Command, a.Command)
 	args := []string{
 		"-p", opts.Task,
 		"--output-format", "stream-json",
@@ -35,34 +41,10 @@ func (a ClaudeAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, err
 	return stream, err
 }
 
-// FusionCodeAdapter targets the fusion CLI binary. fusion-code emits the same
-// stream-json protocol as Claude Code (documented in the fusion-console design).
-type FusionCodeAdapter struct{}
-
-// Name implements Adapter.
-func (FusionCodeAdapter) Name() string { return "fusion-code" }
-
-// Detect implements Adapter.
-func (FusionCodeAdapter) Detect() bool { return detect("fusion") }
-
-// Run implements Adapter.
-func (a FusionCodeAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, error) {
-	command := orCommand(opts.Command, "fusion")
-	args := []string{
-		"-p", opts.Task,
-		"--output-format", "stream-json",
-		"--verbose",
-	}
-	if opts.PermissionMode != "" {
-		args = append(args, "--permission-mode", opts.PermissionMode)
-	}
-	_, stream, err := launch(ctx, opts, command, args, false, parseClaudeJSON)
-	return stream, err
-}
-
-// parseClaudeJSON parses Claude Code stream-json lines:
-// system/init, assistant (content blocks), user (tool_result), result.
-func parseClaudeJSON(raw map[string]any) []Event {
+// parseClaudeJSON parses claude-stream-json lines:
+// system/init, assistant (content blocks + per-message usage), user
+// (tool_result), result (final text + usage + optional total_cost_usd).
+func parseClaudeJSON(raw map[string]any, st *parseState) []Event {
 	typ, _ := raw["type"].(string)
 	switch typ {
 	case "system":
@@ -72,6 +54,13 @@ func parseClaudeJSON(raw map[string]any) []Event {
 		return nil
 	case "assistant":
 		msg, _ := raw["message"].(map[string]any)
+		// Per-message usage reports (atlascode emits these; claude carries
+		// them too). Accumulated for the fallback path when the result event
+		// arrives without a usage object.
+		if u, ok := msg["usage"].(map[string]any); ok {
+			st.addUsage(intNum(u["input_tokens"]), intNum(u["output_tokens"]),
+				intNum(u["cache_read_input_tokens"]), intNum(u["cache_creation_input_tokens"]))
+		}
 		blocks, _ := msg["content"].([]any)
 		var events []Event
 		for _, b := range blocks {
@@ -100,20 +89,32 @@ func parseClaudeJSON(raw map[string]any) []Event {
 			events = append(events, Event{Type: EventResult, Text: res})
 		}
 		usage, _ := raw["usage"].(map[string]any)
+		tokensIn, tokensOut := intNum(usage["input_tokens"]), intNum(usage["output_tokens"])
+		cacheRead, cacheWrite := intNum(usage["cache_read_input_tokens"]), intNum(usage["cache_creation_input_tokens"])
+		// Fallback: CLIs whose result event lacks usage (atlascode <0.1.120)
+		// get the assistant-message accumulation instead.
+		if tokensIn == 0 && tokensOut == 0 {
+			tokensIn, tokensOut = st.tokensIn, st.tokensOut
+		}
+		if cacheRead == 0 && cacheWrite == 0 {
+			cacheRead, cacheWrite = st.cacheRead, st.cacheWrite
+		}
 		cost := num(raw["total_cost_usd"])
 		events = append(events, Event{
-			Type:      EventUsage,
-			CostUSD:   cost,
-			TokensIn:  intNum(usage["input_tokens"]),
-			TokensOut: intNum(usage["output_tokens"]),
-			SessionID: str(raw["session_id"]),
+			Type:             EventUsage,
+			CostUSD:          cost,
+			TokensIn:         tokensIn,
+			TokensOut:        tokensOut,
+			TokensCacheRead:  cacheRead,
+			TokensCacheWrite: cacheWrite,
+			SessionID:        str(raw["session_id"]),
 		})
 		if isErr, _ := raw["is_error"].(bool); isErr {
 			events = append(events, Event{Type: EventError, Text: orDefaultStr(str(raw["result"]), "agent run reported is_error")})
 		}
 		return events
 	default:
-		log.Printf("agent: claude: ignoring event type=%s", typ)
+		log.Printf("agent: claude-family: ignoring event type=%s", typ)
 		return nil
 	}
 }

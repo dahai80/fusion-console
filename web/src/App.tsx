@@ -482,6 +482,7 @@ function ChatPage() {
           else if (type === "tool") last.content += `\n\n> 🔧 \`${ev.tool}\` ${ev.detail ?? ""}\n`;
           else if (type === "result") last.content += (ev.text as string) ?? "";
           else if (type === "usage") last.meta = JSON.stringify(ev);
+          else if (type === "notice") last.content += `\n\n> ℹ️ ${ev.text}\n`;
           else if (type === "error") last.content += `\n\n**error:** ${ev.text}`;
           return copy;
         });

@@ -28,20 +28,39 @@ type Provider struct {
 	Name     string       `json:"name"`
 	Type     ProviderType `json:"type"`
 	BaseURL  string       `json:"base_url"`
-	Model    string       `json:"model"`
+	Model    string       `json:"model"`  // default model; legacy single-model field
+	Models   []string     `json:"models"` // model pool offered by this provider; Model stays the default
 	APIKeyID string       `json:"api_key_id"`
 	Enabled  bool         `json:"enabled"`
+}
+
+// DefaultModel returns the provider's default model: the legacy Model field
+// when set, otherwise the first pool entry.
+func (p *Provider) DefaultModel() string {
+	if strings.TrimSpace(p.Model) != "" {
+		return p.Model
+	}
+	if len(p.Models) > 0 {
+		return p.Models[0]
+	}
+	return ""
 }
 
 // AgentSettings holds per-agent executable path and defaults.
 type AgentSettings struct {
 	Name           string  `json:"name"`
 	Command        string  `json:"command"`
+	Protocol       string  `json:"protocol"` // stream protocol family; empty = legacy mapping by name
 	PermissionMode string  `json:"permission_mode"`
 	Enabled        bool    `json:"enabled"`
 	MaxBudgetUSD   float64 `json:"max_budget_usd"`
-	WorkDir        string  `json:"work_dir"`    // dedicated workspace; empty = default per-agent dir
-	ProviderID     string  `json:"provider_id"` // force this provider for the CLI; empty = CLI default
+	// MaxBudgetTokens is the kill switch for CLIs that never report cost
+	// (cost cap stays authoritative once cost data flows). 0 = disabled.
+	MaxBudgetTokens int    `json:"max_budget_tokens"`
+	Model           string `json:"model"`       // per-agent default model override; empty = provider default
+	WorkDir         string `json:"work_dir"`    // dedicated workspace; empty = default per-agent dir
+	ProviderID      string `json:"provider_id"` // force this provider for the CLI; empty = CLI default
+	Builtin         bool   `json:"builtin"`     // built-in entry; re-added by merge when missing from config
 }
 
 // ResolveWorkDir returns the dedicated workspace for one agent: the explicit
@@ -81,6 +100,7 @@ type WorkerConfig struct {
 	PermissionMode string  `json:"permission_mode"`
 	MaxBudgetUSD   float64 `json:"max_budget_usd"`
 	ProviderID     string  `json:"provider_id"` // force this provider for the worker CLI; empty = CLI default
+	Model          string  `json:"model"`       // per-worker model override; empty = agent settings, then provider default
 	WorkDir        string  `json:"work_dir"`    // dedicated workspace; empty = ~/.fusion-console/agents/<name-or-agent>
 	Repo           string  `json:"repo"`        // default repo for worktree isolation; empty = per-run repo argument
 }
@@ -174,16 +194,24 @@ func DefaultAgentStudio() AgentStudioConfig {
 
 // Config is the on-disk config document.
 type Config struct {
-	Server       ServerConfig       `json:"server"`
-	Users        []UserEntry        `json:"users"`
-	Provider     []Provider         `json:"providers"`
-	Agent        []AgentSettings    `json:"agents"`
-	Harness      HarnessConfig      `json:"harness"`
-	Orchestrator OrchestratorConfig `json:"orchestrator"`
-	Rag          RagConfig          `json:"rag"`
-	Code         CodeConfig         `json:"code"`
-	AgentStudio  AgentStudioConfig  `json:"agentstudio"`
+	Server   ServerConfig    `json:"server"`
+	Users    []UserEntry     `json:"users"`
+	Provider []Provider      `json:"providers"`
+	Agent    []AgentSettings `json:"agents"`
+	Harness  HarnessConfig   `json:"harness"`
+
+	// builtinMerged counts built-in agent entries MergeBuiltinAgents appended
+	// during Load (not serialized; the entrypoint persists the merge once).
+	builtinMerged int
+	Orchestrator  OrchestratorConfig `json:"orchestrator"`
+	Rag           RagConfig          `json:"rag"`
+	Code          CodeConfig         `json:"code"`
+	AgentStudio   AgentStudioConfig  `json:"agentstudio"`
 }
+
+// BuiltinMergedCount reports how many built-in agent entries Load appended
+// (the entrypoint persists the merge once after startup).
+func (c *Config) BuiltinMergedCount() int { return c.builtinMerged }
 
 // UserEntry is one login account. Only the bcrypt hash is stored.
 type UserEntry struct {
@@ -287,6 +315,10 @@ func Load(dir string) (*Config, error) {
 	if strings.TrimSpace(cfg.AgentStudio.Team) == "" {
 		cfg.AgentStudio.Team = "default"
 	}
+	// Built-in agents missing from older configs are appended additively so
+	// new CLIs (e.g. atlascode) appear without a config migration. The count
+	// is kept for the entrypoint to persist the merge once.
+	cfg.builtinMerged = cfg.MergeBuiltinAgents()
 	return cfg, nil
 }
 
@@ -306,14 +338,42 @@ func (c *Config) Save(dir string) error {
 	return os.Rename(tmp, Path(dir))
 }
 
-// DefaultAgents returns the built-in agent registry used on first run.
+// DefaultAgents returns the built-in agent registry used on first run. All
+// entries carry Builtin so MergeBuiltinAgents can re-add missing ones to
+// older configs. atlascode arms the token budget cap because its result
+// events carry no cost when the endpoint has no pricing (cost cap only works
+// once cost data flows).
 func DefaultAgents() []AgentSettings {
 	return []AgentSettings{
-		{Name: "claude", Command: "claude", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5},
-		{Name: "fusion-code", Command: "fusion", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5},
-		{Name: "codex", Command: "codex", PermissionMode: "dontAsk", Enabled: true, MaxBudgetUSD: 5},
-		{Name: "opencode", Command: "opencode", PermissionMode: "dontAsk", Enabled: true, MaxBudgetUSD: 5},
+		{Name: "claude", Command: "claude", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
+		{Name: "fusion-code", Command: "fusion", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
+		{Name: "codex", Command: "codex", PermissionMode: "dontAsk", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
+		{Name: "opencode", Command: "opencode", PermissionMode: "dontAsk", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
+		{Name: "atlascode", Command: "atlascode", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5, MaxBudgetTokens: 2_000_000, Builtin: true},
 	}
+}
+
+// MergeBuiltinAgents appends built-in agent entries missing from the config
+// (additive only — user-edited fields and disabled entries are never
+// touched). Called after Load so older configs pick up new built-ins without
+// a migration. Returns how many entries were added.
+func (c *Config) MergeBuiltinAgents() int {
+	added := 0
+	for _, def := range DefaultAgents() {
+		found := false
+		for i := range c.Agent {
+			if c.Agent[i].Name == def.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.Agent = append(c.Agent, def)
+			added++
+			log.Printf("config: added built-in agent %q from defaults", def.Name)
+		}
+	}
+	return added
 }
 
 // User looks up a user by name.

@@ -4,6 +4,7 @@ export type Provider = {
   type: "openai_compat" | "anthropic_compat" | "gateway";
   base_url: string;
   model: string;
+  models?: string[];
   api_key_id: string;
   enabled: boolean;
 };
@@ -14,6 +15,10 @@ export type AgentInfo = {
   detected: boolean;
   permission_mode: string;
   max_budget_usd: number;
+  model?: string;
+  protocol?: string;
+  max_budget_tokens?: number;
+  provider_id?: string;
   is_worker?: boolean;
   agent_type?: string;
 };
@@ -255,6 +260,7 @@ export type WorkerSettings = {
   permission_mode: string;
   max_budget_usd: number;
   provider_id: string;
+  model?: string;
   work_dir: string;
   repo?: string;
 };

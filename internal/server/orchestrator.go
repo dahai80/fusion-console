@@ -194,15 +194,19 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		taskText := s.prefixWorkerTask(ctx, args.Agent, args.Task)
 		opts := agent.RunOpts{
 			Task: taskText, Workdir: workdir,
-			Model:          forcedModel,
-			PermissionMode: settings.PermissionMode,
-			MaxBudgetUSD:   budget,
-			Command:        settings.Command,
-			Env:            pEnv,
+			Model:           forcedModel,
+			PermissionMode:  settings.PermissionMode,
+			MaxBudgetUSD:    budget,
+			MaxBudgetTokens: settings.MaxBudgetTokens,
+			Command:         settings.Command,
+			Env:             pEnv,
 		}
 		// One agent subprocess at a time, same gate as manual agent runs.
 		s.agentRuns.Lock()
 		defer s.agentRuns.Unlock()
+		if note := s.versionChangeNotice(args.Agent, agent.CommandFor(settings.Name, settings.Command)); note != "" && send != nil {
+			send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress", "detail": note})
+		}
 		evCh, err := adapter.Run(ctx, opts)
 		if err != nil {
 			s.tagFailure(convID, user, args.Agent, "fc3_tool", "failed to start: "+err.Error())
@@ -239,6 +243,13 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 					result = ev.Text
 				case agent.EventUsage:
 					usage = ev
+				case agent.EventNotice:
+					// Non-fatal visibility signal (drift/version hints): pass
+					// through to the chat stream without failing the dispatch.
+					if send != nil {
+						send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
+							"detail": fmt.Sprintf("%s notice: %s", args.Agent, ev.Text)})
+					}
 				case agent.EventError:
 					s.tagFailure(convID, user, args.Agent, "fc3_tool", "agent error: "+ev.Text)
 					return "", fmt.Errorf("agent %s error: %s", args.Agent, ev.Text)
@@ -578,13 +589,21 @@ func (s *Server) resolveWorkerTarget(id string) (cli string, wk *config.WorkerCo
 // Empty result = the CLI uses its own default login.
 func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]string, string) {
 	pid := ""
+	agentModel := ""
 	for _, a := range s.cfg.Agent {
-		if a.Name == cli && a.ProviderID != "" {
-			pid = a.ProviderID
+		if a.Name == cli {
+			if a.ProviderID != "" {
+				pid = a.ProviderID
+			}
+			agentModel = a.Model
 		}
 	}
 	if pid == "" && wk != nil {
 		pid = wk.ProviderID
+	}
+	if wk != nil && wk.Model != "" {
+		// Worker-level override beats the agent-type default.
+		agentModel = wk.Model
 	}
 	if pid == "" {
 		return nil, ""
@@ -604,26 +623,53 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		log.Printf("orchestrator: worker %s: provider %s has no stored key, using CLI default", cli, pid)
 		return nil, ""
 	}
+	// atlascode ignores OPENAI_* env when its settings.json resolves a
+	// provider, so forcing goes through a settings.json merge instead
+	// (user-ruled approach, see atlasconfig.go).
+	settings := s.agentSettings(cli)
+	cmdBase := filepath.Base(agent.CommandFor(settings.Name, settings.Command))
+	if cmdBase == "atlascode" || cmdBase == "atlas" {
+		if prov.Type != "openai_compat" && prov.Type != "gateway" {
+			log.Printf("orchestrator: worker %s: atlascode needs an openai_compat provider, %s is %q", cli, pid, prov.Type)
+			return nil, ""
+		}
+		modelID := agentModel
+		if modelID == "" {
+			modelID = prov.DefaultModel()
+		}
+		ref, err := writeAtlasProvider(prov, modelID)
+		if err != nil {
+			log.Printf("orchestrator: worker %s: atlas settings write failed: %v", cli, err)
+			return nil, ""
+		}
+		log.Printf("orchestrator: worker %s forced to provider %s via atlas settings (%s)", cli, pid, ref)
+		return map[string]string{"PROVIDER_ID": pid}, ref
+	}
 	env := map[string]string{"PROVIDER_ID": pid}
-	model := ""
+	// Model precedence: per-agent override > provider default (pool head).
+	// Anthropic keeps its historical contract: the model is forced via
+	// ANTHROPIC_MODEL env only, so --model stays unset for claude.
+	model := agentModel
+	if model == "" {
+		model = prov.DefaultModel()
+	}
 	switch prov.Type {
 	case "anthropic_compat":
 		env["ANTHROPIC_BASE_URL"] = prov.BaseURL
 		env["ANTHROPIC_AUTH_TOKEN"] = key
-		if prov.Model != "" {
-			env["ANTHROPIC_MODEL"] = prov.Model
+		if model != "" {
+			env["ANTHROPIC_MODEL"] = model
 		}
+		log.Printf("orchestrator: worker %s forced to provider %s (anthropic_compat) model=%q via env", cli, pid, model)
+		return env, ""
 	case "openai_compat", "gateway":
 		env["OPENAI_BASE_URL"] = prov.BaseURL
 		env["OPENAI_API_KEY"] = key
-		if prov.Model != "" {
-			model = prov.Model
-		}
 	default:
 		log.Printf("orchestrator: worker %s: provider %s type %q not injectable, using CLI default", cli, pid, prov.Type)
 		return nil, ""
 	}
-	log.Printf("orchestrator: worker %s forced to provider %s (%s)", cli, pid, prov.Type)
+	log.Printf("orchestrator: worker %s forced to provider %s (%s) model=%q", cli, pid, prov.Type, model)
 	return env, model
 }
 
