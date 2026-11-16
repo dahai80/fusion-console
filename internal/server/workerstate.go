@@ -21,9 +21,9 @@ type workerRun struct {
 
 // workerRuns guards the registry.
 type workerRuns struct {
-	mu    sync.Mutex
-	live  map[string]*workerRun
-	last  map[string]*workerRun // most recent finished run, for context
+	mu   sync.Mutex
+	live map[string]*workerRun
+	last map[string]*workerRun // most recent finished run, for context
 }
 
 func (w *workerRuns) start(id, task string) {

@@ -1,9 +1,27 @@
 name: CI
 
+# fusion#2 checklist: skip runs for docs-only changes (README, docs/,
+# acceptance/ evidence) — CI still gates every code path.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "acceptance/**"
+      - "LICENSE"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "acceptance/**"
+      - "LICENSE"
+
+# Cancel superseded runs on the same ref (branch) so pushes that land in
+# quick succession do not queue redundant full pipelines.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -16,6 +34,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      # web/bun.lock is the lockfile hash key; node_modules restores in ~2s
+      # vs ~20s cold install.
+      - name: Cache web dependencies
+        uses: actions/cache@v4
+        with:
+          path: web/node_modules
+          key: web-bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          restore-keys: web-bun-${{ runner.os }}-
       - name: Build web SPA
         run: ./scripts/build-web.sh
       - name: Vet
@@ -36,9 +62,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+        # setup-go@v5 caches the Go build/module cache keyed on go.sum by
+        # default — no extra action needed for the Go side.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Cache web dependencies
+        uses: actions/cache@v4
+        with:
+          path: web/node_modules
+          key: web-bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          restore-keys: web-bun-${{ runner.os }}-
       - name: Build web SPA
         run: ./scripts/build-web.sh
       - name: Cross compile ${{ matrix.target }}
