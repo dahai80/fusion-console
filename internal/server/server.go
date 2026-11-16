@@ -20,21 +20,21 @@ import (
 
 // Server holds shared dependencies for all handlers.
 type Server struct {
-	cfg        *config.Config
-	cfgDir     string
-	auth       *auth.Manager
-	store      *store.Store
-	models     *chat.ModelList
-	agents     map[string]agent.Adapter
-	agentRuns  sync.Mutex      // one agent subprocess per host at a time
-	approvals  sync.Map        // confirm-mode dispatch gates: id -> chan bool
-	harness    *harness.Client // fusion-harness sidecar (chat guards)
-	autoToken  string          // one-time auto-login token for --open; empty = disabled
+	cfg         *config.Config
+	cfgDir      string
+	auth        *auth.Manager
+	store       *store.Store
+	models      *chat.ModelList
+	agents      map[string]agent.Adapter
+	agentRuns   sync.Mutex      // one agent subprocess per host at a time
+	approvals   sync.Map        // confirm-mode dispatch gates: id -> chan bool
+	harness     *harness.Client // fusion-harness sidecar (chat guards)
+	autoToken   string          // one-time auto-login token for --open; empty = disabled
 	ragInstall  ragInstallState // background fusion-rag install job (zero value = idle)
 	codeInstall ragInstallState // background fusion-code install job (same job-state shape)
 	runs        workerRuns      // live worker dispatch registry (busy/idle + current task)
 	team        teamDialer      // agent-studio team observer (poller + snapshot cache)
-	mux        *http.ServeMux
+	mux         *http.ServeMux
 }
 
 // New builds the server and its route table.

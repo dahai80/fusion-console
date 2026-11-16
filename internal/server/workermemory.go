@@ -4,6 +4,7 @@
 //   - "notes" (default): zero-dependency convention — the task prompt tells
 //     the worker to read NOTES.md in its workspace at start and append
 //     lessons before finishing. Persistence comes from the workspace itself.
+//
 //   - "fusion-memory": additionally recalls relevant past experience from
 //     the fusion-memory hub (fm-server HTTP, 127.0.0.1:11435) before the run
 //     and commits the task/result afterwards. Best effort: any fm-server
