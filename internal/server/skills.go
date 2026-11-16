@@ -18,19 +18,11 @@ import (
 	"github.com/dahai80/fusion-console/internal/config"
 )
 
-// Skills are SKILL.md directories (Claude Code agent-skill format) that
-// headless workers load from ~/.claude/skills (global) or
-// <repo>/.claude/skills (project). The console only manages the files —
-// the agents load them natively.
-
-func globalSkillsDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "skills")
-}
-
-func projectSkillsDir(repo string) string {
-	return filepath.Join(repo, ".claude", "skills")
-}
+// Skills are SKILL.md directories (agent-skill format) that headless
+// workers load from their own skills directories — each agent CLI has its
+// own global and project locations (see agentskills.go). The console only
+// manages the files; the agents load them natively. Requests carry an
+// optional "agent" (default claude).
 
 var skillNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
@@ -41,26 +33,6 @@ func sanitizeSkillName(name string) (string, error) {
 		return "", fmt.Errorf("skill name must be lowercase letters, digits and dashes (got %q)", name)
 	}
 	return name, nil
-}
-
-// skillsDirFor resolves the target directory for a scope, validating the
-// project repo path. Returns an error for unknown scopes.
-func skillsDirFor(scope, repo string) (string, error) {
-	switch scope {
-	case "", "global":
-		return globalSkillsDir(), nil
-	case "project":
-		repo = strings.TrimSpace(repo)
-		if repo == "" {
-			return "", fmt.Errorf("project scope needs a repo path")
-		}
-		if !filepath.IsAbs(repo) {
-			return "", fmt.Errorf("repo path must be absolute")
-		}
-		return projectSkillsDir(repo), nil
-	default:
-		return "", fmt.Errorf("unknown scope %q", scope)
-	}
 }
 
 type skillEntry struct {
@@ -106,9 +78,14 @@ func scanSkillsDir(dir, scope string) []skillEntry {
 }
 
 func (s *Server) handleSkillsList(w http.ResponseWriter, r *http.Request) {
-	skills := scanSkillsDir(globalSkillsDir(), "global")
-	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" {
-		skills = append(skills, scanSkillsDir(projectSkillsDir(repo), "project")...)
+	layout, err := s.skillLayoutFor(r.URL.Query().Get("agent"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	skills := scanSkillsDir(layout.Global, "global")
+	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" && filepath.IsAbs(repo) {
+		skills = append(skills, scanSkillsDir(filepath.Join(repo, layout.Project), "project")...)
 	}
 	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
 	if skills == nil {
@@ -124,6 +101,7 @@ func (s *Server) handleSkillsSave(w http.ResponseWriter, r *http.Request) {
 		Body        string `json:"body"`
 		Scope       string `json:"scope"`
 		Repo        string `json:"repo"`
+		Agent       string `json:"agent"`
 		// Extra is every other frontmatter line (allowed-tools, license,
 		// metadata, ...), written back verbatim. When the field is absent
 		// (older clients) the existing file's extra frontmatter is kept, so
@@ -143,7 +121,12 @@ func (s *Server) handleSkillsSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "skill body is empty"})
 		return
 	}
-	dir, err := skillsDirFor(req.Scope, req.Repo)
+	layout, err := s.skillLayoutFor(req.Agent)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	dir, err := layout.skillsDir(req.Scope, req.Repo)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -169,7 +152,7 @@ func (s *Server) handleSkillsSave(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	log.Printf("server: skill %s saved (%s scope, %s)", name, req.Scope, skillDir)
+	log.Printf("server: skill %s saved (%s, %s scope, %s)", name, layout.Agent, req.Scope, skillDir)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": skillFile})
 }
 
@@ -179,7 +162,12 @@ func (s *Server) handleSkillsDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	dir, err := skillsDirFor(r.URL.Query().Get("scope"), r.URL.Query().Get("repo"))
+	layout, err := s.skillLayoutFor(r.URL.Query().Get("agent"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	dir, err := layout.skillsDir(r.URL.Query().Get("scope"), r.URL.Query().Get("repo"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -202,9 +190,14 @@ func (s *Server) handleSkillsDelete(w http.ResponseWriter, r *http.Request) {
 // anything else is rejected.
 func (s *Server) handleSkillsRead(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
-	candidates := []string{globalSkillsDir()}
+	layout, err := s.skillLayoutFor(r.URL.Query().Get("agent"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	candidates := []string{layout.Global}
 	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" && filepath.IsAbs(repo) {
-		candidates = append(candidates, projectSkillsDir(repo))
+		candidates = append(candidates, filepath.Join(repo, layout.Project))
 	}
 	ok := false
 	for _, dir := range candidates {

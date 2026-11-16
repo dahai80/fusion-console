@@ -26,6 +26,23 @@
       "license_file": "LICENSE.txt"
     }
   ],
+  "profiles": {
+    "claude": {
+      "title": "Coding & debugging",
+      "agents": "claude, fusion-code, atlascode (claude-stream-json family)",
+      "skills": ["systematic-debugging", "brainstorming", "writing-plans", "executing-plans", "verification-before-completion", "using-git-worktrees", "finishing-a-development-branch", "frontend-design", "webapp-testing", "mcp-builder"]
+    },
+    "codex": {
+      "title": "TDD & review",
+      "agents": "codex (codex-jsonl family)",
+      "skills": ["test-driven-development", "verification-before-completion", "requesting-code-review", "receiving-code-review", "gh-address-comments", "gh-fix-ci", "security-best-practices"]
+    },
+    "opencode": {
+      "title": "Lean general set",
+      "agents": "opencode (opencode-jsonl family)",
+      "skills": ["brainstorming", "writing-plans", "systematic-debugging", "verification-before-completion"]
+    }
+  },
   "skills": [
     {"name": "brainstorming", "source": "superpowers", "category": "planning"},
     {"name": "writing-plans", "source": "superpowers", "category": "planning"},

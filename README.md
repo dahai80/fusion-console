@@ -113,6 +113,15 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   (`internal/skillcatalog/`; refresh with `make skills-sync`). Catalog
   installs copy the whole skill directory and never overwrite local edits
   without confirmation.
+  Skills are managed **per agent**, because each CLI reads its own
+  directories: claude `~/.claude/skills`, fusion-code `~/.fusion-code/skills`,
+  atlascode `~/.atlas/skills`, codex `~/.agents/skills`, opencode
+  `~/.config/opencode/skills` (opencode also reads the claude and `.agents`
+  dirs); project skills go to the matching `<repo>/.<dir>/skills`. The
+  **Agent defaults** tab installs a different default set per agent family
+  (claude family: coding & debugging; codex: TDD & review; opencode: a lean
+  general set — `profiles` in `catalog.json`), only on request and without
+  touching existing skills.
 - **Multi-user (light)** — per-user bcrypt passwords, HttpOnly session cookies,
   login required even inside the tailnet.
 - **Knowledge Base (optional fusion-rag)** — nothing is downloaded until you

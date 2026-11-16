@@ -1,26 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderCheck, Library, PenLine, ShieldAlert, Sparkles, Upload } from "lucide-react";
-import { api, type CatalogSkill, type SkillDoc, type SkillEntry } from "./api";
+import { Bot, FolderCheck, Library, PenLine, ShieldAlert, Sparkles, Upload } from "lucide-react";
+import { api, type AgentSkills, type CatalogSkill, type SkillDoc, type SkillEntry } from "./api";
 import { Badge, Button, Card, Input, Select, Textarea } from "./components/ui";
 
 // Review notes shown above the editor for imported or AI-drafted skills:
 // where the content came from and what the server-side audit flagged.
 type SkillReview = { source?: string; warnings: string[]; missing: string[] };
 
-type SkillTab = "installed" | "catalog" | "new" | "draft" | "import";
+type SkillTab = "installed" | "catalog" | "defaults" | "new" | "draft" | "import";
 
 const TABS: { id: SkillTab; label: string; icon: typeof FolderCheck }[] = [
     { id: "installed", label: "Installed", icon: FolderCheck },
     { id: "catalog", label: "Catalog", icon: Library },
+    { id: "defaults", label: "Agent defaults", icon: Bot },
     { id: "new", label: "New Skill", icon: PenLine },
     { id: "draft", label: "AI Draft", icon: Sparkles },
     { id: "import", label: "Import from GitHub", icon: Upload },
 ];
 
-// SkillsPanel manages the SKILL.md directories headless workers load:
-// list/delete installed skills, edit or create them (optionally AI-drafted
-// from a hint or pasted reference text), and import vetted industry skills
-// from GitHub. Four tabs instead of one long scroll.
+// SkillsPanel manages the SKILL.md directories headless workers load, for
+// the agent picked at the top (each agent CLI reads its own directories):
+// list/delete installed skills, install from the bundled catalog, apply the
+// per-agent default profile, edit or create skills (optionally AI-drafted),
+// and import a SKILL.md from GitHub.
 export function SkillsPanel() {
     const [tab, setTab] = useState<SkillTab>("installed");
     const [skills, setSkills] = useState<SkillEntry[]>([]);
@@ -39,16 +41,24 @@ export function SkillsPanel() {
     const [draftText, setDraftText] = useState("");
     const [importSource, setImportSource] = useState("");
     const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
+    const [agent, setAgent] = useState("claude");
+    const [agents, setAgents] = useState<AgentSkills[]>([]);
+    const layout = agents.find((a) => a.agent === agent);
+
+    const loadAgents = useCallback(() => {
+        api.skillAgents().then((r) => setAgents(r.agents ?? [])).catch((e) => setErr((e as Error).message));
+    }, []);
+    useEffect(() => { loadAgents(); }, [loadAgents]);
 
     const load = useCallback(() => {
-        api.skills(repo || undefined).then((r) => setSkills(r.skills ?? [])).catch((e) => setErr((e as Error).message));
-    }, [repo]);
+        api.skills(repo || undefined, agent).then((r) => setSkills(r.skills ?? [])).catch((e) => setErr((e as Error).message));
+    }, [repo, agent]);
     useEffect(() => { load(); }, [load]);
 
     const projectRepo = scope === "project" && repo.trim() ? repo.trim() : undefined;
     const loadCatalog = useCallback(() => {
-        api.skillsCatalog(projectRepo).then((r) => setCatalog(r.skills ?? [])).catch((e) => setErr((e as Error).message));
-    }, [projectRepo]);
+        api.skillsCatalog(projectRepo, agent).then((r) => setCatalog(r.skills ?? [])).catch((e) => setErr((e as Error).message));
+    }, [projectRepo, agent]);
     useEffect(() => { if (tab === "catalog") loadCatalog(); }, [tab, loadCatalog]);
 
     // installFromCatalog copies the whole vendored skill directory. A skill
@@ -61,9 +71,10 @@ export function SkillsPanel() {
             : `Reinstall "${c.name}" from the catalog?`)) return;
         setBusy(true); setMsg(""); setErr("");
         try {
-            const r = await api.installCatalogSkill({ name: c.name, scope, repo: projectRepo, overwrite: !!status });
-            setMsg(`skill "${c.name}" installed to ${r.path}`);
+            const r = await api.installCatalogSkill({ name: c.name, scope, repo: projectRepo, agent, overwrite: !!status });
+            setMsg(`skill "${c.name}" installed for ${agent} to ${r.path}`);
             loadCatalog();
+            loadAgents();
             load();
         } catch (ex) {
             setErr((ex as Error).message);
@@ -89,8 +100,8 @@ export function SkillsPanel() {
     const save = async () => {
         setBusy(true); setMsg(""); setErr("");
         try {
-            const r = await api.saveSkill({ name, description, extra, body, scope, repo });
-            setMsg(`skill "${name}" saved to ${r.path}`);
+            const r = await api.saveSkill({ name, description, extra, body, scope, repo, agent });
+            setMsg(`skill "${name}" saved for ${agent} to ${r.path}`);
             setEditing(false);
             setReview(null);
             setTab("installed");
@@ -105,11 +116,31 @@ export function SkillsPanel() {
     const remove = async (s: SkillEntry) => {
         setMsg(""); setErr("");
         try {
-            await api.deleteSkill(s.name, s.scope, s.scope === "project" ? repo || undefined : undefined);
+            await api.deleteSkill(s.name, s.scope, s.scope === "project" ? repo || undefined : undefined, agent);
             setMsg(`skill "${s.name}" deleted`);
             load();
         } catch (ex) {
             setErr((ex as Error).message);
+        }
+    };
+
+    // installDefaults copies the agent family's default profile skills that
+    // are not installed yet. Existing (incl. locally modified) skills stay.
+    const installDefaults = async (a: AgentSkills) => {
+        const missing = a.skills.filter((sk) => !sk.status).map((sk) => sk.name);
+        if (!missing.length) return;
+        if (!window.confirm(`Install ${missing.length} default skill(s) for ${a.agent} into ${a.global}?\n\n${missing.join(", ")}`)) return;
+        setBusy(true); setMsg(""); setErr("");
+        try {
+            const r = await api.installAgentDefaults({ agent: a.agent });
+            const skipped = r.skipped.length ? ` · left alone: ${r.skipped.map((sk) => `${sk.name} (${sk.status})`).join(", ")}` : "";
+            setMsg(`${a.agent}: installed ${r.installed.length} default skill(s) into ${r.dir}${skipped}`);
+            loadAgents();
+            load();
+        } catch (ex) {
+            setErr((ex as Error).message);
+        } finally {
+            setBusy(false);
         }
     };
 
@@ -144,11 +175,20 @@ export function SkillsPanel() {
 
     return (
         <div className="space-y-4">
-            <p className="text-sm text-zinc-500">
-                Skills are <code>SKILL.md</code> directories agents load natively — global ones from
-                <code> ~/.claude/skills/</code>, project ones from <code>&lt;repo&gt;/.claude/skills/</code>.
-                Scope only applies to the Claude agent.
-            </p>
+            <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="text-zinc-500">Agent</span>
+                    <Select className="w-auto" value={agent} onChange={(e) => { setAgent(e.target.value); setMsg(""); setErr(""); }}>
+                        {(agents.length ? agents.map((a) => a.agent) : ["claude"]).map((n) => <option key={n} value={n}>{n}</option>)}
+                    </Select>
+                </div>
+                <p className="text-sm text-zinc-500">
+                    Skills are <code>SKILL.md</code> directories agents load natively, and each agent CLI has its own
+                    locations: <b>{agent}</b> loads global skills from <code>{layout?.global ?? "…"}</code> and project
+                    skills from <code>&lt;repo&gt;/{layout?.project ?? "…"}</code>.
+                    {layout?.also_reads?.length ? <> It also reads {layout.also_reads.map((d) => <code key={d} className="mr-1">{d}</code>)}.</> : null}
+                </p>
+            </div>
 
             <div className="flex flex-wrap gap-1 rounded-xl border border-zinc-200/80 bg-zinc-100/60 p-1 dark:border-zinc-800 dark:bg-zinc-900/60">
                 {TABS.map(({ id, label, icon: Icon }) => (
@@ -200,8 +240,8 @@ export function SkillsPanel() {
                     </p>
                     <div className="flex flex-wrap items-center gap-2">
                         <Select className="w-auto" value={scope} onChange={(e) => setScope(e.target.value as "global" | "project")}>
-                            <option value="global">install to global (~/.claude/skills)</option>
-                            <option value="project">install to project (&lt;repo&gt;/.claude/skills)</option>
+                            <option value="global">install to global ({layout?.global ?? "…"})</option>
+                            <option value="project">install to project (&lt;repo&gt;/{layout?.project ?? "…"})</option>
                         </Select>
                         {scope === "project" && (
                             <Input className="flex-1" placeholder="/absolute/path/to/repo" value={repo} onChange={(e) => setRepo(e.target.value)} />
@@ -243,9 +283,56 @@ export function SkillsPanel() {
                 </div>
             )}
 
+            {tab === "defaults" && (
+                <div className="space-y-3">
+                    <p className="text-xs text-zinc-500">
+                        Each agent family gets its own default skill set (<code>internal/skillcatalog/catalog.json</code> →
+                        <code> profiles</code>). Nothing is installed automatically: <i>Install missing</i> copies only the
+                        profile skills that are not there yet into that agent's global skills directory. Existing and
+                        locally modified skills are left alone.
+                    </p>
+                    {agents.map((a) => {
+                        const missing = a.skills.filter((sk) => !sk.status).length;
+                        return (
+                            <Card key={a.agent} className="space-y-2 p-3 text-sm">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="flex flex-wrap items-center gap-2 font-medium">
+                                        {a.agent} <Badge>{a.profile_title}</Badge>
+                                        {!a.enabled && <Badge tone="warn">disabled</Badge>}
+                                    </p>
+                                    <Button variant={missing ? "default" : "ghost"} disabled={busy || missing === 0} onClick={() => installDefaults(a)}>
+                                        {missing ? `Install missing (${missing})` : "All installed"}
+                                    </Button>
+                                </div>
+                                <p className="break-all text-xs text-zinc-400">
+                                    → <code>{a.global}</code>{" · "}
+                                    {a.ref.startsWith("http")
+                                        ? <a className="hover:text-indigo-500 hover:underline" href={a.ref} target="_blank" rel="noreferrer">path source</a>
+                                        : <span>{a.ref}</span>}
+                                </p>
+                                {a.also_reads?.length ? (
+                                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                                        {a.agent} also loads {a.also_reads.map((d) => <code key={d} className="mr-1">{d}</code>)} — skills installed for other agents are visible to it too.
+                                    </p>
+                                ) : null}
+                                <div className="flex flex-wrap gap-1">
+                                    {a.skills.map((sk) => (
+                                        <Badge key={sk.name} tone={sk.status === "installed" ? "ok" : sk.status === "modified" ? "warn" : "neutral"}>
+                                            {sk.name}{sk.status === "modified" ? " · modified" : ""}
+                                        </Badge>
+                                    ))}
+                                </div>
+                            </Card>
+                        );
+                    })}
+                    {agents.length === 0 && <p className="text-sm text-zinc-400">Loading agents…</p>}
+                </div>
+            )}
+
             {tab === "new" && (
                 <Card className="space-y-3 p-4">
                     <h3 className="font-medium">{name ? `Edit skill: ${name}` : "New skill"}</h3>
+                    <p className="text-xs text-zinc-500">Saves for <b>{agent}</b> ({scope}) — switch the agent at the top to save a copy for another agent.</p>
                     {review && (review.source || review.warnings.length > 0 || review.missing.length > 0) && (
                         <div className="space-y-1 rounded-lg border border-amber-300/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-300">
                             {review.source && <p className="break-all">source: <code>{review.source}</code></p>}
@@ -265,8 +352,8 @@ export function SkillsPanel() {
                         <Input placeholder="name (lowercase-dash)" value={name} onChange={(e) => setName(e.target.value)} />
                         <Input placeholder="description — when should the agent use it" value={description} onChange={(e) => setDescription(e.target.value)} />
                         <Select value={scope} onChange={(e) => setScope(e.target.value as "global" | "project")}>
-                            <option value="global">global (~/.claude/skills)</option>
-                            <option value="project">project (&lt;repo&gt;/.claude/skills)</option>
+                            <option value="global">global ({layout?.global ?? "…"})</option>
+                            <option value="project">project (&lt;repo&gt;/{layout?.project ?? "…"})</option>
                         </Select>
                         {scope === "project" && (
                             <Input placeholder="/absolute/path/to/repo" value={repo} onChange={(e) => setRepo(e.target.value)} />
@@ -313,7 +400,7 @@ export function SkillsPanel() {
     async function editSkill(s: SkillEntry) {
         setMsg(""); setErr("");
         try {
-            const r = await api.readSkill(s.path, s.scope === "project" ? repo || undefined : undefined);
+            const r = await api.readSkill(s.path, s.scope === "project" ? repo || undefined : undefined, agent);
             openEditor({ ...r.doc, name: r.doc.name || s.name }, { scope: s.scope });
         } catch (ex) {
             setErr((ex as Error).message);
