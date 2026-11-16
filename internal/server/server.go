@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dahai80/fusion-console/internal/agent"
 	"github.com/dahai80/fusion-console/internal/auth"
@@ -26,30 +27,46 @@ type Server struct {
 	store       *store.Store
 	models      *chat.ModelList
 	agents      map[string]agent.Adapter
-	agentRuns   sync.Mutex      // one agent subprocess per host at a time
-	approvals   sync.Map        // confirm-mode dispatch gates: id -> chan bool
-	harness     *harness.Client // fusion-harness sidecar (chat guards)
-	autoToken   string          // one-time auto-login token for --open; empty = disabled
-	ragInstall  ragInstallState // background fusion-rag install job (zero value = idle)
-	codeInstall ragInstallState // background fusion-code install job (same job-state shape)
-	runs        workerRuns      // live worker dispatch registry (busy/idle + current task)
-	team        teamDialer      // agent-studio team observer (poller + snapshot cache)
+	agentRuns   sync.Mutex               // one agent subprocess per host at a time
+	approvals   sync.Map                 // confirm-mode dispatch gates: id -> chan bool
+	harness     *harness.Client          // fusion-harness sidecar (chat guards)
+	autoToken   string                   // one-time auto-login token for --open; empty = disabled
+	ragInstall  ragInstallState          // background fusion-rag install job (zero value = idle)
+	codeInstall ragInstallState          // background fusion-code install job (same job-state shape)
+	runs        workerRuns               // live worker dispatch registry (busy/idle + current task)
+	team        teamDialer               // agent-studio team observer (poller + snapshot cache)
+	verMu       sync.Mutex               // guards verLast + verCache (CLI version fingerprint)
+	verLast     map[string]string        // agent name -> last-seen CLI version
+	verCache    map[string]verCacheEntry // command -> --version result (TTL)
 	mux         *http.ServeMux
+}
+
+// verCacheEntry is a cached `--version` probe result.
+type verCacheEntry struct {
+	version string
+	at      time.Time
 }
 
 // New builds the server and its route table.
 func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	s := &Server{
 		cfg: cfg, cfgDir: cfgDir,
-		auth:    auth.NewManager(),
-		store:   st,
-		models:  chat.NewModelList(),
-		agents:  map[string]agent.Adapter{},
-		harness: harness.New(),
+		auth:     auth.NewManager(),
+		store:    st,
+		models:   chat.NewModelList(),
+		agents:   map[string]agent.Adapter{},
+		harness:  harness.New(),
+		verLast:  map[string]string{},
+		verCache: map[string]verCacheEntry{},
 	}
-	for _, ad := range []agent.Adapter{
-		agent.ClaudeAdapter{}, agent.FusionCodeAdapter{}, agent.CodexAdapter{}, agent.OpencodeAdapter{},
-	} {
+	// Protocol-driven agent registry: one adapter per enabled agent settings
+	// entry, resolved by protocol family (legacy entries fall back to a
+	// name-based mapping inside agent.NewFor).
+	for _, a := range cfg.Agent {
+		if !a.Enabled {
+			continue
+		}
+		ad := agent.NewFor(a.Name, a.Protocol, a.Command)
 		s.agents[ad.Name()] = ad
 	}
 	s.mux = http.NewServeMux()

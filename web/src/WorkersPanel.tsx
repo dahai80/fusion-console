@@ -108,12 +108,26 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
                   onChange={(e) => setWorker(idx, { max_budget_usd: Number(e.target.value) })} />
               </label>
               <Select className="w-48" value={w.provider_id ?? ""}
-                onChange={(e) => setWorker(idx, { provider_id: e.target.value })}>
+                onChange={(e) => setWorker(idx, { provider_id: e.target.value, model: "" })}>
                 <option value="">provider: CLI default</option>
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>provider: {p.name || p.id}</option>
                 ))}
               </Select>
+              {(() => {
+                const prov = providers.find((p) => p.id === (w.provider_id ?? ""));
+                const models = prov?.models?.length ? prov.models : (prov?.model ? [prov.model] : []);
+                if (!prov || models.length === 0) return null;
+                return (
+                  <Select className="w-44" value={w.model ?? ""}
+                    onChange={(e) => setWorker(idx, { model: e.target.value })}>
+                    <option value="">model: provider default</option>
+                    {models.map((m) => (
+                      <option key={m} value={m}>model: {m}</option>
+                    ))}
+                  </Select>
+                );
+              })()}
               <button onClick={() => removeWorker(idx)} title="Remove worker"
                 className="ml-auto rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800">
                 remove

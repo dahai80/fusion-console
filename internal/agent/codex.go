@@ -5,18 +5,22 @@ import (
 	"log"
 )
 
-// CodexAdapter runs `codex exec --json` (OpenAI Codex CLI headless mode).
-type CodexAdapter struct{}
+// CodexCompatAdapter runs a codex-jsonl family CLI headless:
+// `<cmd> exec --json --skip-git-repo-check <task>`.
+type CodexCompatAdapter struct {
+	AgentName string
+	Command   string
+}
 
 // Name implements Adapter.
-func (CodexAdapter) Name() string { return "codex" }
+func (a CodexCompatAdapter) Name() string { return a.AgentName }
 
 // Detect implements Adapter.
-func (CodexAdapter) Detect() bool { return detect("codex") }
+func (a CodexCompatAdapter) Detect() bool { return detect(a.Command) }
 
 // Run implements Adapter.
-func (a CodexAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, error) {
-	command := orCommand(opts.Command, "codex")
+func (a CodexCompatAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, error) {
+	command := orCommand(opts.Command, a.Command)
 	args := []string{"exec", "--json", "--skip-git-repo-check", opts.Task}
 	if opts.Model != "" {
 		args = []string{"exec", "--json", "--skip-git-repo-check", "-m", opts.Model, opts.Task}
@@ -28,7 +32,7 @@ func (a CodexAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, erro
 // parseCodexJSON parses codex exec --json JSONL events:
 // thread.started, turn.started, item.started/updated/completed,
 // turn.completed (usage), turn.failed, error.
-func parseCodexJSON(raw map[string]any) []Event {
+func parseCodexJSON(raw map[string]any, st *parseState) []Event {
 	typ, _ := raw["type"].(string)
 	switch typ {
 	case "thread.started":

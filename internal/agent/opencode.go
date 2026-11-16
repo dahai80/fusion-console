@@ -5,20 +5,22 @@ import (
 	"log"
 )
 
-// OpencodeAdapter runs `opencode run` (opencode CLI headless mode). Recent
-// opencode versions emit JSONL part events; plain-text output falls back to
-// text deltas in process.go.
-type OpencodeAdapter struct{}
+// OpencodeCompatAdapter runs an opencode-jsonl family CLI headless:
+// `<cmd> run <task>`.
+type OpencodeCompatAdapter struct {
+	AgentName string
+	Command   string
+}
 
 // Name implements Adapter.
-func (OpencodeAdapter) Name() string { return "opencode" }
+func (a OpencodeCompatAdapter) Name() string { return a.AgentName }
 
 // Detect implements Adapter.
-func (OpencodeAdapter) Detect() bool { return detect("opencode") }
+func (a OpencodeCompatAdapter) Detect() bool { return detect(a.Command) }
 
 // Run implements Adapter.
-func (a OpencodeAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, error) {
-	command := orCommand(opts.Command, "opencode")
+func (a OpencodeCompatAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, error) {
+	command := orCommand(opts.Command, a.Command)
 	args := []string{"run", opts.Task}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
@@ -31,7 +33,7 @@ func (a OpencodeAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, e
 // {"type":"step_start"...}, {"type":"text","part":{...text...}},
 // {"type":"tool_use","part":{...tool, state...}}, {"type":"step_finish","part":{tokens...}}.
 // Unrecognized types are logged and skipped (fail visible via log).
-func parseOpencodeJSON(raw map[string]any) []Event {
+func parseOpencodeJSON(raw map[string]any, st *parseState) []Event {
 	typ, _ := raw["type"].(string)
 	part, _ := raw["part"].(map[string]any)
 	switch typ {
@@ -51,11 +53,14 @@ func parseOpencodeJSON(raw map[string]any) []Event {
 		return []Event{{Type: EventTool, ToolName: tool, ToolDetail: detail}}
 	case "step_finish":
 		tokens, _ := part["tokens"].(map[string]any)
+		cost := num(part["cost"])
+		in, out := intNum(tokens["input"]), intNum(tokens["output"])
+		st.addUsage(in, out, 0, 0)
 		return []Event{{
 			Type:      EventUsage,
-			TokensIn:  intNum(tokens["input"]),
-			TokensOut: intNum(tokens["output"]),
-			CostUSD:   num(part["cost"]),
+			TokensIn:  in,
+			TokensOut: out,
+			CostUSD:   cost,
 		}}
 	case "step_start":
 		return nil

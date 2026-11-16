@@ -1,0 +1,2 @@
+{"type":"assistant","session_id":"f77be1a1-eaa9-4232-8f7f-57b72f08fae9","message":{"role":"assistant","content":[{"type":"text","text":"OK"}]},"uuid":"d81e7956-b3da-4266-941c-b77093aee14d"}
+{"type":"result","subtype":"success","session_id":"f77be1a1-eaa9-4232-8f7f-57b72f08fae9","is_error":false,"num_turns":1,"result":"OK","usage":{"input_tokens":22481,"output_tokens":3,"cache_read_input_tokens":21888,"cache_creation_input_tokens":0},"uuid":"3bad1e9c-eef8-4d91-a553-bae62701af3c"}

@@ -1,7 +1,7 @@
-// Coding Agent menu: generalized optional installer for the three headless
-// coding agent CLIs — fusion-code (source build via bun), claude code and
-// codex (npm global installs). Nothing downloads until the user clicks
-// install; claude/codex detection is just LookPath.
+// Coding Agent menu: generalized optional installer for the headless coding
+// agent CLIs — fusion-code (source build via bun), claude code, codex and
+// atlascode (npm global installs). Nothing downloads until the user clicks
+// install; claude/codex/atlascode detection is just LookPath.
 package server
 
 import (
@@ -15,10 +15,21 @@ import (
 type codeAgentID string
 
 const (
-	codeAgentFusion codeAgentID = "fusion-code"
-	codeAgentClaude codeAgentID = "claude"
-	codeAgentCodex  codeAgentID = "codex"
+	codeAgentFusion    codeAgentID = "fusion-code"
+	codeAgentClaude    codeAgentID = "claude"
+	codeAgentCodex     codeAgentID = "codex"
+	codeAgentAtlascode codeAgentID = "atlascode"
 )
+
+// knownGoodNpmVersions pins console-installed CLIs to versions verified with
+// the current release's parsers (atlascode ≥0.1.120 emits usage on the
+// result event). The table moves with console releases; a user-managed CLI
+// is never downgraded — pinning applies only when the user clicks install.
+var knownGoodNpmVersions = map[codeAgentID]string{
+	codeAgentClaude:    "2.1.325",
+	codeAgentCodex:     "0.167.0",
+	codeAgentAtlascode: "0.1.120",
+}
 
 type codeAgentStatus struct {
 	ID        string `json:"id"`
@@ -29,14 +40,15 @@ type codeAgentStatus struct {
 	Running bool `json:"running"`
 }
 
-// codeAgents reports install state for all three agents. claude/codex count
-// as installed when their CLI is on PATH (however it got there); fusion-code
-// when the console installed it.
+// codeAgents reports install state for the four agents. claude/codex/
+// atlascode count as installed when their CLI is on PATH (however it got
+// there); fusion-code when the console installed it.
 func (s *Server) codeAgents() []codeAgentStatus {
 	agents := []codeAgentStatus{
 		{ID: string(codeAgentFusion), Name: "fusion-code", Installed: s.cfg.Code.Installed, Running: s.cfg.Code.Installed && s.codeHealthy(time.Second)},
 		{ID: string(codeAgentClaude), Name: "Claude Code"},
 		{ID: string(codeAgentCodex), Name: "Codex CLI"},
+		{ID: string(codeAgentAtlascode), Name: "AtlasCode"},
 	}
 	for i := range agents {
 		if agents[i].ID == string(codeAgentFusion) {
@@ -64,17 +76,20 @@ func (s *Server) codeAgents() []codeAgentStatus {
 	return agents
 }
 
-// installCodeAgent starts the background install for one agent. claude/codex
-// go through npm; fusion-code runs the bun source build.
+// installCodeAgent starts the background install for one agent. claude/codex/
+// atlascode go through npm at pinned known-good versions; fusion-code runs
+// the bun source build.
 func (s *Server) installCodeAgent(ctx context.Context, agent codeAgentID, st *ragInstallState) error {
 	switch agent {
 	case codeAgentFusion:
 		go s.installCode(ctx, st)
 		return nil
 	case codeAgentClaude:
-		return s.startNpmInstall(ctx, st, "claude", "@anthropic-ai/claude-code")
+		return s.startNpmInstall(ctx, st, "claude", "@anthropic-ai/claude-code@"+knownGoodNpmVersions[codeAgentClaude])
 	case codeAgentCodex:
-		return s.startNpmInstall(ctx, st, "codex", "@openai/codex")
+		return s.startNpmInstall(ctx, st, "codex", "@openai/codex@"+knownGoodNpmVersions[codeAgentCodex])
+	case codeAgentAtlascode:
+		return s.startNpmInstall(ctx, st, "atlascode", "@atlasharness/atlascode@"+knownGoodNpmVersions[codeAgentAtlascode])
 	default:
 		return fmt.Errorf("unknown agent %q", agent)
 	}
