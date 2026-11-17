@@ -178,3 +178,17 @@ func TestAuthHintLoopbackOnly(t *testing.T) {
 		t.Error("remote request must not reveal factory password state")
 	}
 }
+
+func TestNormalizeRepoMatchesURLAndCheckoutPath(t *testing.T) {
+	// A GitHub URL and the local checkout of the same repo must compare
+	// equal — the brain dispatches with the checkout path it sees.
+	if normalizeRepo("https://github.com/dahai80/fusion-web-shell") != normalizeRepo("/Users/dahai/fusion/fusion-web-shell") {
+		t.Fatal("URL and checkout path of the same repo should match")
+	}
+	if normalizeRepo("https://github.com/dahai80/fusion-web-shell.git/") != normalizeRepo("https://github.com/dahai80/fusion-web-shell") {
+		t.Fatal(".git suffix and trailing slash should not matter")
+	}
+	if normalizeRepo("https://github.com/dahai80/fusion-health") == normalizeRepo("/Users/dahai/fusion/fusion-web-shell") {
+		t.Fatal("different repos must not match")
+	}
+}

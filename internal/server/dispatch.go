@@ -402,9 +402,13 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 		// routes the task to the owning worker instead.
 		if bound := strings.TrimSpace(wk.Repo); bound != "" && wk.Isolation != "standalone" {
 			if asked := strings.TrimSpace(args.Repo); asked != "" && normalizeRepo(asked) != normalizeRepo(bound) {
+				name := wk.Name
+				if name == "" {
+					name = args.Agent
+				}
 				return "", fmt.Errorf(
 					"worker %s is bound to repo %s and cannot work on %s — dispatch the task to the worker that owns %s, or file an issue in that repo instead",
-					args.Agent, bound, asked, asked)
+					name, bound, asked, asked)
 			}
 		}
 		switch wk.Isolation {

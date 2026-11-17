@@ -752,13 +752,21 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 	return env, model
 }
 
-// normalizeRepo makes repo comparisons tolerant: trims whitespace and the
-// trailing slash / .git suffix so a URL and its checkout path still differ,
-// but the same URL with/without .git matches.
+// normalizeRepo reduces a repo reference to a comparable identity token:
+// trims whitespace, trailing slash and .git suffix, then keeps only the
+// last path segment. A GitHub URL ("https://github.com/o/fusion-web-shell")
+// and a local checkout path ("/Users/x/fusion/fusion-web-shell") both
+// reduce to "fusion-web-shell", so a brain dispatch that points at the
+// checkout directory matches the worker's bound repo URL. Different repos
+// with the same basename still collide — acceptable at fusion scale where
+// workers are named after their checkouts.
 func normalizeRepo(repo string) string {
 	r := strings.TrimSpace(repo)
 	r = strings.TrimSuffix(r, "/")
 	r = strings.TrimSuffix(r, ".git")
+	if i := strings.LastIndexAny(r, "/\\"); i >= 0 {
+		r = r[i+1:]
+	}
 	return strings.ToLower(r)
 }
 
