@@ -192,3 +192,33 @@ func TestNormalizeRepoMatchesURLAndCheckoutPath(t *testing.T) {
 		t.Fatal("different repos must not match")
 	}
 }
+
+func TestProviderEnvFallbackNotice(t *testing.T) {
+	t.Setenv("FUSION_CONSOLE_APIKEY_KEYOAI", "sk-test-openai")
+	s := New(&config.Config{Server: config.ServerConfig{DataDir: t.TempDir()}}, t.TempDir(), nil)
+	s.cfg.Provider = []config.Provider{
+		{ID: "p-off", Name: "off", Type: "openai_compat", BaseURL: "https://x.example", APIKeyID: "keyoai", Enabled: false},
+		{ID: "p-nokey", Name: "nokey", Type: "openai_compat", BaseURL: "https://x.example", APIKeyID: "missing-key", Enabled: true},
+		{ID: "p-oai", Name: "oai", Type: "openai_compat", BaseURL: "https://oai.example/v1", Model: "gpt-test", APIKeyID: "keyoai", Enabled: true},
+	}
+	s.cfg.Orchestrator.Workers = []config.WorkerConfig{
+		{Agent: "claude", Enabled: true, ProviderID: "p-off"},
+		{Agent: "codex", Enabled: true, ProviderID: "p-nokey"},
+		{Agent: "opencode", Enabled: true, ProviderID: "p-oai"},
+	}
+
+	env, model, notice := s.providerEnv("claude", s.workerConfig("claude"))
+	if env != nil || model != "" || notice == "" || !strings.Contains(notice, "p-off") {
+		t.Fatalf("disabled provider: env=%v model=%q notice=%q", env, model, notice)
+	}
+
+	env, model, notice = s.providerEnv("codex", s.workerConfig("codex"))
+	if env != nil || model != "" || notice == "" || !strings.Contains(notice, "nokey") {
+		t.Fatalf("missing key: env=%v model=%q notice=%q", env, model, notice)
+	}
+
+	env, model, notice = s.providerEnv("opencode", s.workerConfig("opencode"))
+	if env == nil || notice != "" {
+		t.Fatalf("clean binding must have no notice: env=%v notice=%q", env, notice)
+	}
+}

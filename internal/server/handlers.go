@@ -118,6 +118,39 @@ func (s *Server) providerByID(id string) (*config.Provider, bool) {
 	return nil, false
 }
 
+// handleSetConversationModel persists the per-conversation provider/model
+// binding. Empty provider_id clears the binding so the conversation falls
+// back to the default gateway provider.
+func (s *Server) handleSetConversationModel(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad conversation id"})
+		return
+	}
+	var req struct {
+		ProviderID string `json:"provider_id"`
+		Model      string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	req.ProviderID = strings.TrimSpace(req.ProviderID)
+	req.Model = strings.TrimSpace(req.Model)
+	if req.ProviderID != "" {
+		if _, ok := s.providerByID(req.ProviderID); !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled provider " + req.ProviderID})
+			return
+		}
+	}
+	if err := s.store.SetConversationModel(s.auth.User(r), id, req.ProviderID, req.Model); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	log.Printf("server: conversation %d bound to provider=%q model=%q by %s", id, req.ProviderID, req.Model, s.auth.User(r))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func buildProvider(p *config.Provider) (chat.Provider, error) {
 	switch p.Type {
 	case config.ProviderGateway:
@@ -142,9 +175,37 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
+	// Provider resolution: explicit request override > per-conversation
+	// binding > first enabled gateway provider. provider.Model itself is
+	// never written here (single-owner rule: the Models page owns the
+	// provider default).
+	user0 := s.auth.User(r)
+	var convProv, convModel string
+	var fallbackNotice string
 	prov, ok := s.providerByID(req.ProviderID)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled provider " + req.ProviderID})
+	if ok {
+		// Request provider wins; the conversation's stored model still
+		// applies when it was bound to this same provider (design v2).
+		if conv, cerr := s.store.Conversation(user0, req.ConversationID); cerr == nil && conv.ProviderID == prov.ID {
+			convProv, convModel = conv.ProviderID, conv.Model
+		}
+	} else if conv, cerr := s.store.Conversation(user0, req.ConversationID); cerr == nil && conv.ProviderID != "" {
+		log.Printf("server: chat conv=%d request provider %q unusable, trying conversation binding %s", req.ConversationID, req.ProviderID, conv.ProviderID)
+		if p, pok := s.providerByID(conv.ProviderID); pok {
+			prov = p
+			convProv, convModel = conv.ProviderID, conv.Model
+		} else {
+			fallbackNotice = "conversation bound to provider " + conv.ProviderID + " which is missing or disabled — using the default gateway provider"
+			log.Printf("server: chat conv=%d conversation provider binding %s unusable, falling back", req.ConversationID, conv.ProviderID)
+		}
+	}
+	if prov == nil {
+		if gp, gpok := s.firstGatewayProvider(); gpok {
+			prov = gp
+		}
+	}
+	if prov == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no usable provider — pass provider_id or enable a provider on the Models page"})
 		return
 	}
 	provider, err := buildProvider(prov)
@@ -156,7 +217,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("server: chat api key unavailable (provider %s, key id %s): %v", prov.ID, prov.APIKeyID, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "API key unavailable for provider " + prov.Name + " — open the Gateway page and click Create API key, then retry. (" + err.Error() + ")",
+			"error": "API key unavailable for provider " + prov.Name + " — open the Models page and re-save its API key, then retry. (" + err.Error() + ")",
 		})
 		return
 	}
@@ -165,10 +226,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// stored choice > global chat default > provider default. The resolved
 	// choice is persisted on the conversation so it carries across sessions.
 	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		if convProv, convModel, cerr := s.store.ConversationModel(req.ConversationID); cerr == nil && convModel != "" && (convProv == "" || convProv == prov.ID) {
-			model = convModel
-		}
+	if model == "" && convModel != "" && (convProv == "" || convProv == prov.ID) {
+		model = strings.TrimSpace(convModel)
 	}
 	if model == "" && (s.cfg.Chat.DefaultProviderID == "" || s.cfg.Chat.DefaultProviderID == prov.ID) {
 		model = strings.TrimSpace(s.cfg.Chat.DefaultModel)
@@ -181,7 +240,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			"error": "provider " + prov.Name + " has no model — pick one in the Models page"})
 		return
 	}
-	if err := s.store.SetConversationModel(req.ConversationID, prov.ID, model); err != nil {
+	if err := s.store.SetConversationModel(user0, req.ConversationID, prov.ID, model); err != nil {
 		log.Printf("server: persist conversation model failed (non-fatal): %v", err)
 	}
 
@@ -233,6 +292,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := s.auth.User(r)
+	if fallbackNotice != "" {
+		send(map[string]any{"type": "notice", "text": fallbackNotice})
+	}
 	log.Printf("server: chat conv=%d provider=%s model=%s user=%s orchestrate=%v", req.ConversationID, prov.ID, model, user, req.Orchestrate)
 
 	// Orchestrated turn: chat is the main brain and may dispatch agents via
@@ -398,9 +460,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One agent subprocess at a time — office host stays predictable.
-	s.agentRuns.Lock()
-	defer s.agentRuns.Unlock()
+	// No agentRuns lock on the interactive path: background dispatches hold
+	// it for their whole run, and a manual agent run must not queue behind
+	// them. The lock only serializes background workers with each other.
 
 	flusher := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -421,10 +483,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		send(map[string]any{"type": "notice", "text": note})
 	}
 
-	pEnv, forcedModel, bindNote := s.providerEnv(cli, wk)
-	if bindNote != "" {
-		// Design v2 §4.1B: binding fallbacks are visible, not just server logs.
-		send(map[string]any{"type": "notice", "text": bindNote})
+	pEnv, forcedModel, providerNotice := s.providerEnv(cli, wk)
+	if providerNotice != "" {
+		send(map[string]any{"type": "notice", "text": providerNotice})
 	}
 	budget := settings.MaxBudgetUSD
 	if wk != nil && wk.MaxBudgetUSD > 0 {
@@ -437,7 +498,8 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		taskText = brief + "\n" + taskText
 	}
 	opts := agent.RunOpts{
-		Task: taskText, Workdir: workdir,
+		Timeout: s.dispatchTimeout(),
+		Task:    taskText, Workdir: workdir,
 		Model:           forcedModel,
 		PermissionMode:  settings.PermissionMode,
 		MaxBudgetUSD:    budget,

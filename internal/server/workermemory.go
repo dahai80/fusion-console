@@ -5,10 +5,10 @@
 //     the worker to read NOTES.md in its workspace at start and append
 //     lessons before finishing. Persistence comes from the workspace itself.
 //
-//   - "fusion-memory": additionally recalls relevant past experience from
-//     the fusion-memory hub (fm-server HTTP, 127.0.0.1:11435) before the run
-//     and commits the task/result afterwards. Best effort: any fm-server
-//     failure degrades to the notes convention, never blocks a dispatch.
+//   - "fusion-memory": recalls relevant past experience from the
+//     fusion-memory hub (fm-server HTTP, 127.0.0.1:11435) before the run and
+//     commits the task/result afterwards. Best effort: any fm-server failure
+//     degrades to the raw task, never blocks a dispatch. No NOTES.md.
 //
 //   - "off": raw task only.
 package server
@@ -167,18 +167,18 @@ func (s *Server) commitWorkerMemory(ctx context.Context, workerID, task, result 
 }
 
 // prefixWorkerTask composes the final task text per the given memory mode.
-// Always returns the notes instruction except in "off" mode — the
-// workspace convention stays on even when the hub is used, because hub
-// recall covers semantics while NOTES.md keeps the workspace-local state.
+// "fusion-memory" uses the hub only — the notes convention is NOT prepended,
+// so workers stop creating/appending NOTES.md. The notes instruction applies
+// only in "notes" mode.
 func (s *Server) prefixWorkerTask(ctx context.Context, workerID, task, mode string) string {
 	switch mode {
 	case "off":
 		return task
 	case "fusion-memory":
 		if mem := s.recallWorkerMemory(ctx, workerID, task); mem != "" {
-			return "[memory — relevant past experience from the memory hub]\n" + mem + "\n\n" + notesInstruction + "\n\n" + task
+			return "[memory — relevant past experience from the memory hub]\n" + mem + "\n\n" + task
 		}
-		return notesInstruction + "\n\n" + task
+		return task
 	default:
 		return notesInstruction + "\n\n" + task
 	}

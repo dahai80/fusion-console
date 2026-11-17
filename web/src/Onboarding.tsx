@@ -12,7 +12,7 @@ import {
   Terminal,
   Workflow,
 } from "lucide-react";
-import { api, type AgentInfo } from "./api";
+import { api, type AgentInfo, type Provider } from "./api";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
 import { Badge, Button, Card, Input, Select } from "./components/ui";
@@ -82,7 +82,7 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
       </p>
       <ul className="space-y-2 text-sm">
         {[
-          { icon: Cloud, t: "LLM provider", d: "cloud OpenAI/Anthropic-compatible endpoint, or the local fusion-gateway" },
+          { icon: Cloud, t: "LLM provider", d: "any enabled provider — local fusion-gateway or a direct OpenAI/Anthropic-compatible endpoint, managed on the Models page" },
           { icon: Network, t: "fusion-gateway", d: "bundled at packaging time; started together with the console by startup.sh" },
           { icon: Brain, t: "Brain", d: "one coding-agent CLI acting as the architect session" },
           { icon: Bot, t: "Workers", d: "per-agent isolation (worktree or standalone repo), permission mode, budget cap" },
@@ -370,29 +370,33 @@ function WorkersStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
 
 function VerifyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
   const [gw, setGw] = useState<Awaited<ReturnType<typeof api.gatewayStatus>> | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [pid, setPid] = useState("");
   const [sample, setSample] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
     api.gatewayStatus().then(setGw).catch(() => {});
+    // No hardcoded provider preference: every enabled provider (gateway or
+    // direct) is selectable, defaulting to the first one.
+    api.providers().then((r) => {
+      const list = (r.providers ?? []).filter((x) => x.enabled);
+      setProviders(list);
+      setPid((cur) => cur || list[0]?.id || "");
+    }).catch(() => {});
   }, []);
   const test = async () => {
     setBusy(true); setMsg(""); setErr(""); setSample("");
     try {
-      const pr = await api.providers();
-      // Prefer the gateway provider — its key self-heals. A zombie direct
-      // provider (stale keychain entry) must not fail onboarding.
-      const p = (pr.providers ?? []).find((x) => x.enabled && x.type === "gateway")
-        ?? (pr.providers ?? []).find((x) => x.enabled);
-      if (!p) {
+      if (!pid) {
         setErr("no enabled provider — finish the Providers step first");
         return;
       }
-      const r = await api.testCall(p.id);
+      const r = await api.testCall(pid);
       if (r.ok) {
         setSample(r.sample ?? "");
-        setMsg(`provider ${p.name || p.id} answered in ${r.latency_ms ?? "?"} ms`);
+        setMsg(`provider ${providers.find((x) => x.id === pid)?.name || pid} answered in ${r.latency_ms ?? "?"} ms`);
       } else {
         setErr(r.error ?? "test call failed");
       }
@@ -420,8 +424,15 @@ function VerifyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
           <span className="text-zinc-400">o</span> Workers with budget caps and provider bindings
         </li>
       </ul>
+      <label className="block text-xs text-zinc-500">provider to test (any enabled provider)
+        <Select value={pid} onChange={(e) => setPid(e.target.value)} className="w-64">
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>{p.name || p.id} ({p.type})</option>
+          ))}
+        </Select>
+      </label>
       <div className="flex gap-2">
-        <Button onClick={test} disabled={busy}>{busy ? "Calling..." : "Test LLM call"}</Button>
+        <Button onClick={test} disabled={busy || !pid}>{busy ? "Calling..." : "Test LLM call"}</Button>
         <Button variant="ghost" onClick={onNext}>Skip to done <ArrowRight size={14} /></Button>
       </div>
       {sample && <pre className="max-h-32 overflow-auto rounded-lg bg-zinc-50 p-2 text-xs dark:bg-zinc-900">{sample}</pre>}
@@ -448,7 +459,7 @@ function DoneStep({ onDone }: { onDone: () => void }) {
         Tip: flip the `orchestrate` toggle in chat to let the brain dispatch the workers you just
         configured (confirm mode asks you per dispatch).
       </p>
-      <Button onClick={onDone}>Open chat <ArrowRight size={14} /></Button>
+      <Button onClick={onDone}>Open Models page <ArrowRight size={14} /></Button>
     </Card>
   );
 }

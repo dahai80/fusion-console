@@ -41,6 +41,7 @@ Tools:
 - run_agent: give one agent a concrete, self-contained task. The agent works in its own workspace and returns a result. For tasks expected to take more than a couple of minutes (issue fixes, refactors, test suites) pass background=true — you get a run id immediately, the worker keeps running after your turn ends, and the outcome is posted into this conversation automatically. Reference a finished background run by its id when the user asks about progress.
 - read_artifact: read a file the agent produced, relative to the agents workspace root.
 - read_attachment: read a chat attachment segment by stored name (byte range with next_offset continuation). When the user attaches a document, read it through this tool segment by segment — never request the whole file at once.
+- create_team: set up a full team mid-conversation (members, queued tasks, optional lead loop). Then converse within the team: team_send delivers a chat message into the team mailbox, team_inbox reads replies back. The sender must be an existing member name — create it with create_team_member first (e.g. a "console" operator member).
 
 Rules:
 - Answer simple questions directly; delegate only real coding/execution work.
@@ -202,6 +203,42 @@ func orchestratorTools() []chat.ToolDecl {
 			Name:        "team_status",
 			Description: "Get the current team snapshot from agent-studio: task counts by status, member roster, connection health. Read-only.",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+		{
+			Name:        "create_team",
+			Description: "Create a full team on the agent-studio daemon from chat: definition (name + members), queued tasks, optional lead-loop start. Use this when the user asks to set up or build a team mid-conversation; afterwards use team_send/team_inbox to converse within the team.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"team":{"type":"object","description":"team definition","properties":{` +
+				`"name":{"type":"string","description":"team name"},` +
+				`"members":{"type":"array","description":"at least one member","items":{"type":"object","properties":{` +
+				`"name":{"type":"string"},"role":{"type":"string"},"skills":{"type":"array","items":{"type":"string"}},` +
+				`"tool_allowlist":{"type":"array","items":{"type":"string"}},"permission_mode":{"type":"string"},` +
+				`"budget_tokens":{"type":"integer"},"max_concurrency":{"type":"integer"}},"required":["name"]}},` +
+				`"playbook":{"type":"boolean"},"max_depth":{"type":"integer"},"lead_budget_tokens":{"type":"integer"}}},` +
+				`"tasks":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"detail":{"type":"string"}},"required":["title"]}},` +
+				`"lead_start":{"type":"boolean","description":"start the lead loop right after creation"},` +
+				`"lead_goal":{"type":"string","description":"lead loop goal; defaults to the first task title"}` +
+				`},"required":["team"]}`),
+		},
+		{
+			Name:        "team_send",
+			Description: "Send a chat message into a team's mailbox on the agent-studio daemon (to the lead or a member). 'from' and 'to' must be existing team member names — register the sender with create_team_member first if the team has no console/operator member. Delivery is mailbox-async; read replies with team_inbox.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"team":{"type":"string","description":"team name; omit for the configured default team"},` +
+				`"from":{"type":"string","description":"sender — must be an existing team member name"},` +
+				`"to":{"type":"string","description":"recipient — must be an existing team member name"},` +
+				`"body":{"type":"string"},` +
+				`"reply_to":{"type":"string","description":"msg_id this message replies to"},` +
+				`"mentions":{"type":"array","items":{"type":"string"},"description":"member names to mention"}` +
+				`},"required":["from","to","body"]}`),
+		},
+		{
+			Name:        "team_inbox",
+			Description: "Read a team member's mailbox (non-draining) from the agent-studio daemon — use it to pick up replies sent back to the console-side member.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"team":{"type":"string","description":"team name; omit for the configured default team"},` +
+				`"member":{"type":"string","description":"member whose inbox to read"}` +
+				`},"required":["member"]}`),
 		},
 	}
 }
@@ -415,6 +452,98 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		}
 		return fmt.Sprintf("team %s: %d members (%s); tasks: %v; alerts: %d",
 			s.cfg.AgentStudio.Team, len(snap.Roster), strings.Join(names, ", "), byStatus, len(snap.Alerts)), nil
+
+	case "create_team":
+		if !s.cfg.AgentStudio.Enabled {
+			return "", fmt.Errorf("team view (agent-studio integration) is not enabled in settings")
+		}
+		var cargs teamCreateReq
+		if err := json.Unmarshal([]byte(call.Arguments), &cargs); err != nil {
+			return "", fmt.Errorf("tool %s: bad arguments: %v", call.Name, err)
+		}
+		res, _, err := s.teamCreateCore(cargs)
+		if err != nil {
+			return "", err
+		}
+		log.Printf("orchestrator: create_team team=%s user=%s tasks=%d lead_started=%v", res.Team, user, len(res.Tasks), res.LeadStarted)
+		var b strings.Builder
+		fmt.Fprintf(&b, "team %s created (namespace_key=%s)", res.Team, res.NamespaceKey)
+		for _, t := range res.Tasks {
+			if t.Error != "" {
+				fmt.Fprintf(&b, "\ntask %q rejected: %s", t.Title, t.Error)
+			} else {
+				fmt.Fprintf(&b, "\ntask %q queued (id=%s)", t.Title, t.TaskID)
+			}
+		}
+		if res.LeadError != "" {
+			fmt.Fprintf(&b, "\nlead loop failed to start: %s", res.LeadError)
+		} else if res.LeadStarted {
+			b.WriteString("\nlead loop started")
+		}
+		return b.String(), nil
+
+	case "team_send":
+		if !s.cfg.AgentStudio.Enabled {
+			return "", fmt.Errorf("team view (agent-studio integration) is not enabled in settings")
+		}
+		var sargs struct {
+			Team     string   `json:"team"`
+			From     string   `json:"from"`
+			To       string   `json:"to"`
+			Body     string   `json:"body"`
+			ReplyTo  string   `json:"reply_to"`
+			Mentions []string `json:"mentions"`
+		}
+		if err := json.Unmarshal([]byte(call.Arguments), &sargs); err != nil {
+			return "", fmt.Errorf("tool %s: bad arguments: %v", call.Name, err)
+		}
+		team := sargs.Team
+		if team == "" {
+			team = s.cfg.AgentStudio.Team
+		}
+		msgID, to, err := s.teamSend(team, sargs.From, sargs.To, sargs.Body, "text", sargs.ReplyTo, sargs.Mentions)
+		if err != nil {
+			return "", fmt.Errorf("team send: %v", err)
+		}
+		log.Printf("orchestrator: team_send team=%s from=%s to=%s user=%s", team, sargs.From, to, user)
+		return fmt.Sprintf("delivered to %s on team %s (msg_id=%s) — read replies with team_inbox", to, team, msgID), nil
+
+	case "team_inbox":
+		if !s.cfg.AgentStudio.Enabled {
+			return "", fmt.Errorf("team view (agent-studio integration) is not enabled in settings")
+		}
+		var iargs struct {
+			Team   string `json:"team"`
+			Member string `json:"member"`
+		}
+		if err := json.Unmarshal([]byte(call.Arguments), &iargs); err != nil {
+			return "", fmt.Errorf("tool %s: bad arguments: %v", call.Name, err)
+		}
+		team := iargs.Team
+		if team == "" {
+			team = s.cfg.AgentStudio.Team
+		}
+		msgs, err := s.teamInbox(team, iargs.Member)
+		if err != nil {
+			return "", fmt.Errorf("team inbox: %v", err)
+		}
+		if len(msgs) == 0 {
+			return fmt.Sprintf("inbox for %s on team %s is empty", iargs.Member, team), nil
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "%d message(s) for %s on team %s:", len(msgs), iargs.Member, team)
+		for _, m := range msgs {
+			id, _ := m["msg_id"].(string)
+			from, _ := m["from"].(string)
+			body, _ := m["body"].(string)
+			replyTo, _ := m["reply_to"].(string)
+			line := fmt.Sprintf("\n- [%s] %s: %s", id, from, body)
+			if replyTo != "" {
+				line += fmt.Sprintf(" (reply to %s)", replyTo)
+			}
+			b.WriteString(line)
+		}
+		return b.String(), nil
 
 	case "kb_search", "kb_ask":
 		var kbArgs map[string]any
@@ -677,12 +806,13 @@ func (s *Server) resolveWorkerByRepo(repoPath string) *config.WorkerConfig {
 
 // providerEnv resolves a worker's forced provider (agent settings override,
 // else the wizard worker config) into subprocess env vars plus an optional
-// model override. Anthropic-compatible providers speak the ANTHROPIC_* env
+// model override. The third return is a user-facing notice describing any
+// fallback to the CLI's own default (empty when the configured provider
+// applies cleanly) — surfaced to the chat stream so a silently ignored model
+// binding is visible to the user, not only in server logs.
+// Anthropic-compatible providers speak the ANTHROPIC_* env
 // family; OpenAI-compatible and gateway providers speak the OPENAI_* family.
 // Empty result = the CLI uses its own default login.
-// Third return: a human-readable fallback reason (design v2 §4.1B). Empty
-// when the binding resolved; non-empty means the CLI will use its own
-// default and the user should know why.
 func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]string, string, string) {
 	pid := ""
 	agentModel := ""
@@ -717,12 +847,12 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 	}
 	if prov == nil || !prov.Enabled {
 		log.Printf("orchestrator: worker %s: provider %s not found or disabled, using CLI default", cli, pid)
-		return nil, "", fmt.Sprintf("provider %s is missing or disabled — %s will use its own default login", pid, cli)
+		return nil, "", "configured provider " + pid + " not found or disabled for " + cli + " — falling back to the CLI default login/model"
 	}
 	key, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil || key == "" {
 		log.Printf("orchestrator: worker %s: provider %s has no stored key, using CLI default", cli, pid)
-		return nil, "", fmt.Sprintf("provider %s has no stored API key — %s will use its own default login; store the key on the Models page", pid, cli)
+		return nil, "", "provider " + prov.Name + " has no stored API key for " + cli + " — falling back to the CLI default login/model"
 	}
 	// atlascode ignores OPENAI_* env when its settings.json resolves a
 	// provider, so forcing goes through a settings.json merge instead
@@ -732,7 +862,7 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 	if cmdBase == "atlascode" || cmdBase == "atlas" {
 		if prov.Type != "openai_compat" && prov.Type != "gateway" {
 			log.Printf("orchestrator: worker %s: atlascode needs an openai_compat provider, %s is %q", cli, pid, prov.Type)
-			return nil, "", fmt.Sprintf("atlascode needs an OpenAI-compatible source but %s is %q — %s will use its own default login", pid, prov.Type, cli)
+			return nil, "", "provider " + prov.Name + " is " + string(prov.Type) + " but atlascode needs openai_compat — falling back to the CLI default login/model"
 		}
 		modelID := agentModel
 		if modelID == "" {
@@ -741,7 +871,7 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		ref, err := writeAtlasProvider(prov, modelID)
 		if err != nil {
 			log.Printf("orchestrator: worker %s: atlas settings write failed: %v", cli, err)
-			return nil, "", fmt.Sprintf("atlascode settings merge failed: %v — %s will use its own default login", err, cli)
+			return nil, "", "atlascode settings write failed (" + err.Error() + ") — falling back to the CLI default login/model"
 		}
 		log.Printf("orchestrator: worker %s forced to provider %s via atlas settings (%s)", cli, pid, ref)
 		return map[string]string{"PROVIDER_ID": pid}, ref, ""
@@ -768,7 +898,7 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		env["OPENAI_API_KEY"] = key
 	default:
 		log.Printf("orchestrator: worker %s: provider %s type %q not injectable, using CLI default", cli, pid, prov.Type)
-		return nil, "", fmt.Sprintf("provider %s type %q is not injectable — %s will use its own default login", pid, prov.Type, cli)
+		return nil, "", "provider " + prov.Name + " type " + string(prov.Type) + " is not injectable for " + cli + " — falling back to the CLI default login/model"
 	}
 	log.Printf("orchestrator: worker %s forced to provider %s (%s) model=%q", cli, pid, prov.Type, model)
 	// Per-worker model override wins over the provider default.
@@ -940,15 +1070,17 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 		task = "Workspace conventions:\n" + pre + "\n" + task
 	}
 	opts := agent.RunOpts{
-		Task: task, Workdir: workdir,
+		Timeout: s.dispatchTimeout(),
+		Task:    task, Workdir: workdir,
 		PermissionMode: settings.PermissionMode,
 		MaxBudgetUSD:   settings.MaxBudgetUSD,
 		Command:        settings.Command,
 		ExtraArgs:      []string{"--mcp-config", mcpFile, "--allowedTools", strings.TrimSuffix(allowed, ",")},
 	}
 	log.Printf("orchestrator: agent-brain turn conv=%d workdir=%s user=%s", convID, workdir, user)
-	s.agentRuns.Lock()
-	defer s.agentRuns.Unlock()
+	// No agentRuns lock here: background dispatches hold it for the whole
+	// run (up to the dispatch timeout), and the interactive brain must stay
+	// responsive while a worker is out. One extra claude process is fine.
 	evCh, err := ad.Run(ctx, opts)
 	if err != nil {
 		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": err.Error()})

@@ -328,7 +328,7 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
           <Card className="space-y-4 p-4">
             <div className="flex flex-wrap items-center gap-2">
               <Select
-                className="w-64"
+                className="w-full max-w-64"
                 value=""
                 onChange={(e) => { if (e.target.value) addMember(e.target.value); }}
               >
@@ -342,9 +342,9 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
             {members.map((m, i) => (
               <div key={i} className="space-y-2 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-700/80">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Input className="w-44" value={m.name} onChange={(e) => patchMember(i, { name: e.target.value })} placeholder="name" />
-                  <Input className="w-44" value={m.role} onChange={(e) => patchMember(i, { role: e.target.value })} placeholder="role" />
-                  <Select className="w-36" value={m.permission_mode} onChange={(e) => patchMember(i, { permission_mode: e.target.value })}>
+                  <Input className="w-full sm:w-44" value={m.name} onChange={(e) => patchMember(i, { name: e.target.value })} placeholder="name" />
+                  <Input className="w-full sm:w-44" value={m.role} onChange={(e) => patchMember(i, { role: e.target.value })} placeholder="role" />
+                  <Select className="w-full sm:w-36" value={m.permission_mode} onChange={(e) => patchMember(i, { permission_mode: e.target.value })}>
                     {PERMISSION_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
                   </Select>
                   <Button variant="ghost" className="ml-auto text-red-500 dark:text-red-400"
@@ -354,16 +354,16 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="text-xs text-zinc-500 dark:text-zinc-400">budget_tokens</label>
-                  <Input className="w-32" type="number" value={m.budget_tokens}
+                  <Input className="w-full sm:w-32" type="number" value={m.budget_tokens}
                     onChange={(e) => patchMember(i, { budget_tokens: Number(e.target.value) })} />
                   <label className="text-xs text-zinc-500 dark:text-zinc-400">max_concurrency</label>
-                  <Input className="w-24" type="number" value={m.max_concurrency}
+                  <Input className="w-full sm:w-24" type="number" value={m.max_concurrency}
                     onChange={(e) => patchMember(i, { max_concurrency: Number(e.target.value) })} />
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Input className="min-w-48 flex-1" value={m.skills} onChange={(e) => patchMember(i, { skills: e.target.value })}
+                  <Input className="min-w-0 flex-1" value={m.skills} onChange={(e) => patchMember(i, { skills: e.target.value })}
                     placeholder="skills, comma-separated" />
-                  <Input className="min-w-48 flex-1" value={m.tool_allowlist} onChange={(e) => patchMember(i, { tool_allowlist: e.target.value })}
+                  <Input className="min-w-0 flex-1" value={m.tool_allowlist} onChange={(e) => patchMember(i, { tool_allowlist: e.target.value })}
                     placeholder="tool allowlist, comma-separated" />
                 </div>
                 {memberErrors[i] && <p className="text-xs text-red-500">{memberErrors[i]}</p>}
@@ -377,7 +377,7 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
           <Card className="space-y-4 p-4">
             <div className="flex items-center gap-3">
               <label className="text-sm font-medium">lead_budget_tokens</label>
-              <Input className="w-40" type="number" value={leadBudget} onChange={(e) => setLeadBudget(Number(e.target.value))} />
+              <Input className="w-full sm:w-40" type="number" value={leadBudget} onChange={(e) => setLeadBudget(Number(e.target.value))} />
               <span className="text-xs text-zinc-400">caps every member budget (Deadline.child semantics)</span>
             </div>
             <div className="space-y-3">

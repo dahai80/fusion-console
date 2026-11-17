@@ -150,7 +150,11 @@ func TestConversationModelColumnsAndRoundTrip(t *testing.T) {
 	if pid, model, err = s.ConversationModel(id); err != nil || pid != "" || model != "" {
 		t.Fatalf("fresh conversation model = %q/%q err=%v", pid, model, err)
 	}
-	if err := s.SetConversationModel(id, "iff-local", "fabric-small"); err != nil {
+	// User-scoped binding (upstream hardening): wrong user must not match.
+	if err := s.SetConversationModel("other", id, "iff-local", "fabric-small"); err == nil {
+		t.Fatal("cross-user model set allowed")
+	}
+	if err := s.SetConversationModel("u", id, "iff-local", "fabric-small"); err != nil {
 		t.Fatal(err)
 	}
 	if pid, model, err = s.ConversationModel(id); err != nil || pid != "iff-local" || model != "fabric-small" {
@@ -184,5 +188,60 @@ func TestDispatchRunPersistence(t *testing.T) {
 	}
 	if err := s.AckDispatchRuns(1); err != nil {
 		t.Fatalf("ack: %v", err)
+	}
+}
+
+func TestConversationModelMigrationIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	id, err := s.CreateConversation("admin", "bound", "chat", "", "")
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := s.SetConversationModel("admin", id, "p-direct", "glm-5"); err != nil {
+		t.Fatalf("SetConversationModel: %v", err)
+	}
+	if err := s.SetConversationModel("admin", id, "p-direct", "glm-5"); err != nil {
+		t.Fatalf("SetConversationModel repeat: %v", err)
+	}
+	s.Close()
+
+	// Restart on the same file: migration must be a no-op, binding survives.
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	conv, err := s2.Conversation("admin", id)
+	if err != nil {
+		t.Fatalf("Conversation: %v", err)
+	}
+	if conv.ProviderID != "p-direct" || conv.Model != "glm-5" {
+		t.Fatalf("binding not persisted: %+v", conv)
+	}
+	convs, err := s2.ListConversations("admin")
+	if err != nil || len(convs) != 1 || convs[0].ProviderID != "p-direct" || convs[0].Model != "glm-5" {
+		t.Fatalf("list missing binding: %+v err=%v", convs, err)
+	}
+}
+
+func TestConversationModelOwnership(t *testing.T) {
+	s := openTestStore(t)
+	id, _ := s.CreateConversation("admin", "mine", "chat", "", "")
+	if err := s.SetConversationModel("other", id, "p", "m"); err == nil {
+		t.Fatal("other user may set binding")
+	}
+	if err := s.SetConversationModel("admin", 99999, "p", "m"); err == nil {
+		t.Fatal("unknown conversation accepted")
+	}
+	if err := s.SetConversationModel("admin", id, "", ""); err != nil {
+		t.Fatalf("clearing binding failed: %v", err)
+	}
+	conv, err := s.Conversation("admin", id)
+	if err != nil || conv.ProviderID != "" || conv.Model != "" {
+		t.Fatalf("binding not cleared: %+v err=%v", conv, err)
 	}
 }

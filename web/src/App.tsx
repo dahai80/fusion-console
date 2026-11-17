@@ -4,6 +4,8 @@ import {
   CheckCircle,
   Clock,
   Copy,
+  Menu,
+  PanelRight,
   Cpu,
   Brain,
   ChevronDown,
@@ -110,13 +112,14 @@ function Shell() {
       <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} onWizard={() => setPage("onboard")} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
-          <Onboarding onDone={() => setPage("chat")} />
+          <Onboarding onDone={() => setPage("models")} />
         )}
         {page === "dashboard" && <Dashboard />}
         {page === "chat" && <ChatPage onPage={setPage} />}
         {page === "models" && <ModelsPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
+        {page === "models" && <ModelsPage />}
         {page === "rag" && <RagPage />}
 {page === "code" && <CodePage />}
         {page === "team" && <TeamPage />}
@@ -138,26 +141,28 @@ function TopBar({
   const tab = (id: Page, label: string, Icon: typeof Bot) => (
     <button
       onClick={() => setPage(id)}
-      className={`inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
+      className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
         page === id
           ? "bg-indigo-600 text-white shadow-sm"
           : "text-zinc-500 hover:bg-zinc-200/60 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
       }`}
     >
       <Icon size={16} />
-      {label}
+      {/* H5: icons only below sm — seven labeled tabs overflow a phone width */}
+      <span className="hidden sm:inline">{label}</span>
     </button>
   );
   return (
     <header className="flex items-center justify-between border-b border-zinc-200/80 dark:border-zinc-800 bg-white/60 dark:bg-zinc-900/60 px-4 py-2 backdrop-blur">
-      <div className="flex items-center gap-4">
-        <span className="font-semibold tracking-tight">fusion-console</span>
-        <nav className="flex gap-1">
+      <div className="flex min-w-0 items-center gap-4">
+        <span className="hidden shrink-0 font-semibold tracking-tight sm:inline">fusion-console</span>
+        <nav className="flex gap-1 overflow-x-auto">
           {tab("chat", "Chat", MessageSquare)}
           {tab("models", "Models", Cpu)}
           {tab("agents", "Agents", Bot)}
           {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("gateway", "Gateway", Network)}
+          {tab("models", "Models", Cpu)}
           {tab("rag", "Knowledge Base", Database)}
 {tab("code", "Coding Agent", Code2)}
           {tab("team", "Team", Users)}
@@ -329,6 +334,11 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
   const [err, setErr] = useState("");
   const [unread, setUnread] = useState<Record<string, number>>({});
+  // H5 (mobile) drawers: the conversation rail and the dispatch rail are
+  // hidden below md/lg — on phones they open as overlay drawers instead.
+  const [convDrawer, setConvDrawer] = useState(false);
+  const [dispatchDrawer, setDispatchDrawer] = useState(false);
+  const [dispatchActive, setDispatchActive] = useState(0);
 const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -419,6 +429,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const openConv = async (c: Conversation) => {
     setActive(c);
     setErr("");
+    setConvDrawer(false);
     const r = await api.messages(c.ID);
     setEntries((r.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta })));
     if (unread[c.ID] > 0) {
@@ -434,12 +445,20 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     await api.messages(r.id).catch(() => {});
   };
 
-  // Per-conversation model switch (design v2). The selection is only local
-  // state here; the backend persists it on the conversation when a message
-  // is sent, so it survives across sessions.
-  const changeModel = (providerID: string, model: string) => {
+  // Per-conversation model switch (design v2): the picker persists the
+  // binding explicitly (PUT /conversations/{id}/model) so the choice is
+  // authoritative immediately, and the backend re-persists on send.
+  const changeModel = async (providerID: string, model: string) => {
     setSelProv(providerID);
     setSelModel(model);
+    if (active) {
+      try {
+        await api.setConversationModel(active.ID, providerID, model);
+        await refreshConvs();
+      } catch (ex) {
+        setErr((ex as Error).message);
+      }
+    }
   };
 
   // Effective selection: conversation override > user switch this session >
@@ -557,6 +576,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           const copy = e.slice();
           const last = copy[copy.length - 1];
           if (type === "delta") last.content += (ev.text as string) ?? "";
+          else if (type === "notice") last.content += `\n\n> ℹ️ ${ev.text}\n`;
           else if (type === "approval") {
             setApproval({ id: (ev.id as string) ?? "", detail: (ev.detail as string) ?? "" });
             last.content += `\n\n> ⏸ awaiting your approval: ${ev.detail ?? ""}\n\n`;
@@ -637,7 +657,12 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
 
   return (
     <div className="flex h-full">
-      <aside className="hidden md:flex w-64 flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40">
+      {convDrawer && (
+        <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setConvDrawer(false)} />
+      )}
+      <aside
+        className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-64 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-white/40`}
+      >
         <div className="p-3">
           <Button variant="outline" className="w-full" onClick={newChat}>
             <Plus size={14} /> New chat
@@ -687,6 +712,13 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       <div className="flex flex-1 flex-col min-w-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
           <button
+            onClick={() => setConvDrawer(true)}
+            title="Conversations"
+            className="lg:hidden flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+          >
+            <Menu size={16} />
+          </button>
+          <button
             onClick={() => setOrchestrate((v) => !v)}
             title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
             className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors ${
@@ -720,6 +752,18 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
               ))}
             </Select>
           )}
+          <button
+            onClick={() => setDispatchDrawer(true)}
+            title="Dispatches"
+            className="md:hidden ml-auto relative flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+          >
+            <PanelRight size={16} />
+            {dispatchActive > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
+                {dispatchActive}
+              </span>
+            )}
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -846,7 +890,12 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           </div>
         </div>
       </div>
-      <DispatchPanel onOpen={openConv} />
+      <DispatchPanel
+          onRunningCount={setDispatchActive}
+        onOpen={(c) => { setDispatchDrawer(false); openConv(c); }}
+        drawerOpen={dispatchDrawer}
+        onDrawerClose={() => setDispatchDrawer(false)}
+      />
     </div>
   );
 }
@@ -854,7 +903,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
 // DispatchPanel is the right rail of the chat page: every background run
 // (run_agent background=true) grouped into running / queued / finished.
 // Clicking a finished row opens its conversation.
-function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
+function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { onOpen: (c: Conversation) => void; drawerOpen?: boolean; onDrawerClose?: () => void; onRunningCount?: (n: number) => void }) {
   const [runs, setRuns] = useState<DispatchRun[]>([]);
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [busyWorkers, setBusyWorkers] = useState<WorkerStatus[]>([]);
@@ -880,6 +929,11 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
   const running = runs.filter((r) => r.status === "running");
   const queued = runs.filter((r) => r.status === "queued");
   const finished = runs.filter((r) => r.status === "done" || r.status === "error").slice(0, 8);
+  // Report active-run count so the mobile toggle button can badge it — the
+  // panel itself is a drawer below md and its cards are not visible there.
+  useEffect(() => {
+    onRunningCount?.(running.length + queued.length);
+  }, [running.length, queued.length, onRunningCount]);
   const openRun = (r: DispatchRun) => {
     const c = convs.find((x) => x.ID === r.conversation_id);
     if (c) onOpen(c);
@@ -975,7 +1029,13 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
     </div>
   );
   return (
-    <aside className="hidden lg:flex w-72 shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40 p-3">
+    <>
+      {drawerOpen && (
+        <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onDrawerClose} />
+      )}
+      <aside
+        className={`${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white md:static md:flex md:w-64 lg:w-72 md:shadow-none md:bg-white/40 dark:bg-zinc-900 dark:md:bg-zinc-900/40 p-3`}
+      >
       <div className="flex items-center justify-between px-1 pb-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>
         <div className="flex items-center gap-1.5">
@@ -1067,6 +1127,7 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
         </div>
       )}
     </aside>
+    </>
   );
 }
 

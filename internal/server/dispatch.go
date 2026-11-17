@@ -352,7 +352,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 
 		// The brain turn's context dies with its SSE stream; background runs
 		// must outlive it, capped at the same 30 minutes as foreground runs.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), s.dispatchTimeout())
 		defer cancel()
 		final, err := s.finishDispatch(ctx, convID, user, "run_agent", args, wk, cli, settings, budget, nil)
 
@@ -380,6 +380,15 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		}
 	}()
 	return fmt.Sprintf("dispatched as background run #%d (worker %s). It runs after any current agent subprocess and reports back into this conversation when finished; progress is visible in the dispatch panel and via dispatch_status.", run.ID, workerName), nil
+}
+
+// dispatchTimeout returns the configured per-run cap for dispatched agent
+// subprocesses (foreground and background). Default 30 minutes.
+func (s *Server) dispatchTimeout() time.Duration {
+	if m := s.cfg.Orchestrator.DispatchTimeoutMinutes; m > 0 {
+		return time.Duration(m) * time.Minute
+	}
+	return 30 * time.Minute
 }
 
 // summarizeDispatch renders the completion message persisted into the chat.
@@ -481,12 +490,10 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 	}
 	log.Printf("orchestrator: dispatch worker=%s agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
 		args.Agent, cli, isolationOf(wk), workdir, budget, user)
-	pEnv, forcedModel, bindNote := s.providerEnv(cli, wk)
-	if bindNote != "" && send != nil {
-		// Design v2 §4.1B: binding fallbacks surface in the chat stream,
-		// not only server logs.
+	pEnv, forcedModel, providerNotice := s.providerEnv(cli, wk)
+	if providerNotice != "" && send != nil {
 		send(map[string]any{"type": "tool", "tool": callName, "status": "progress",
-			"detail": "ℹ️ " + bindNote})
+			"detail": fmt.Sprintf("%s provider notice: %s", args.Agent, providerNotice)})
 	}
 	taskText := s.prefixWorkerTask(ctx, args.Agent, args.Task, s.workerMemoryModeFor(wk))
 	if brief := s.workerWorkspaceBrief(args.Agent, wk, workdir); brief != "" {
@@ -497,7 +504,7 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 		return "", fmt.Errorf("unknown agent %q", cli)
 	}
 	opts := agent.RunOpts{
-		Task: taskText, Workdir: workdir,
+		Task: taskText, Workdir: workdir, Timeout: s.dispatchTimeout(),
 		Model:           forcedModel,
 		PermissionMode:  settings.PermissionMode,
 		MaxBudgetUSD:    budget,

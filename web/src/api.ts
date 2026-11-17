@@ -103,10 +103,18 @@ export const api = {
     req<{ ok: boolean }>(`/api/conversations/${id}`, { method: "DELETE" }),
   renameConversation: (id: number, title: string) =>
     req<{ ok: boolean }>(`/api/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  setConversationModel: (id: number, providerId: string, model: string) =>
+    req<{ ok: boolean }>(`/api/conversations/${id}/model`, {
+      method: "PUT",
+      body: JSON.stringify({ provider_id: providerId, model }),
+    }),
   agents: () => req<{ agents: AgentInfo[] }>("/api/agents"),
   providers: () => req<{ providers: Provider[] }>("/api/settings/providers"),
   saveProvider: (p: Provider) =>
-    req<{ ok: boolean }>("/api/settings/providers", { method: "POST", body: JSON.stringify(p) }),
+    req<{ ok: boolean; warning?: string; base_url?: string }>("/api/settings/providers", {
+      method: "POST",
+      body: JSON.stringify(p),
+    }),
   deleteProvider: (id: string) =>
     req<{ ok: boolean }>(`/api/settings/providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
   storeApiKey: (keyId: string, secret: string) =>

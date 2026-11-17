@@ -32,8 +32,8 @@ type Conversation struct {
 	Kind       string // "chat" or "agent"
 	AgentName  string
 	Workdir    string
-	ProviderID string // chat model source chosen for this conversation (design v2)
-	Model      string // chat model chosen for this conversation
+	ProviderID string // per-conversation provider binding; empty = default
+	Model      string // per-conversation model; empty = provider default
 	CreatedAt  time.Time
 }
 
@@ -122,16 +122,47 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("store: migrate: %w", err)
 		}
 	}
-	// Column migrations: CREATE-only statements above cannot extend existing
-	// tables, so per-conversation model columns (design v2) go through an
-	// idempotent addColumn (PRAGMA check + ALTER).
-	for _, c := range []struct{ table, column, ddl string }{
-		{"conversations", "provider_id", `ALTER TABLE conversations ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''`},
-		{"conversations", "model", `ALTER TABLE conversations ADD COLUMN model TEXT NOT NULL DEFAULT ''`},
-	} {
-		if err := addColumn(s.db, c.table, c.column, c.ddl); err != nil {
-			return fmt.Errorf("store: migrate: %w", err)
+	return s.migrateConversationModelColumns()
+}
+
+// migrateConversationModelColumns adds the per-conversation provider/model
+// columns to an existing database. Check-then-alter against PRAGMA
+// table_info, so rerunning on every startup is a no-op — safe on restart
+// and on databases created before the columns existed.
+func (s *Store) migrateConversationModelColumns() error {
+	rows, err := s.db.Query(`PRAGMA table_info(conversations)`)
+	if err != nil {
+		return fmt.Errorf("store: migrate: table_info conversations: %w", err)
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("store: migrate: scan table_info: %w", err)
 		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: migrate: table_info: %w", err)
+	}
+	for _, col := range []struct {
+		name string
+		ddl  string
+	}{
+		{"provider_id", `ALTER TABLE conversations ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''`},
+		{"model", `ALTER TABLE conversations ADD COLUMN model TEXT NOT NULL DEFAULT ''`},
+	} {
+		if existing[col.name] {
+			continue
+		}
+		if _, err := s.db.Exec(col.ddl); err != nil {
+			return fmt.Errorf("store: migrate: add conversations.%s: %w", col.name, err)
+		}
+		log.Printf("store: migrated conversations.%s column", col.name)
 	}
 	return nil
 }
@@ -178,18 +209,6 @@ func (s *Store) CreateConversation(user, title, kind, agentName, workdir string)
 	return res.LastInsertId()
 }
 
-// SetConversationModel persists the chat model source chosen for a
-// conversation (design v2: per-conversation selection, carried across
-// sessions). Empty providerID clears the override.
-func (s *Store) SetConversationModel(convID int64, providerID, model string) error {
-	_, err := s.db.Exec(`UPDATE conversations SET provider_id = ?, model = ? WHERE id = ?`,
-		providerID, model, convID)
-	if err != nil {
-		return fmt.Errorf("store: set conversation model: %w", err)
-	}
-	return nil
-}
-
 // ConversationModel returns the conversation's chosen model source.
 func (s *Store) ConversationModel(convID int64) (providerID, model string, err error) {
 	err = s.db.QueryRow(`SELECT provider_id, model FROM conversations WHERE id = ?`, convID).
@@ -222,7 +241,7 @@ func (s *Store) ConversationProviderUsers(providerID string) ([]int64, error) {
 // ListConversations returns conversations for a user, newest first.
 func (s *Store) ListConversations(user string) ([]Conversation, error) {
 	rows, err := s.db.Query(
-		`SELECT id, user, title, kind, agent_name, workdir, created_at, provider_id, model
+		`SELECT id, user, title, kind, agent_name, workdir, provider_id, model, created_at
 		 FROM conversations WHERE user = ? ORDER BY id DESC LIMIT 200`, user)
 	if err != nil {
 		return nil, fmt.Errorf("store: list conversations: %w", err)
@@ -232,13 +251,46 @@ func (s *Store) ListConversations(user string) ([]Conversation, error) {
 	for rows.Next() {
 		var c Conversation
 		var created string
-		if err := rows.Scan(&c.ID, &c.User, &c.Title, &c.Kind, &c.AgentName, &c.Workdir, &created, &c.ProviderID, &c.Model); err != nil {
+		if err := rows.Scan(&c.ID, &c.User, &c.Title, &c.Kind, &c.AgentName, &c.Workdir, &c.ProviderID, &c.Model, &created); err != nil {
 			return nil, fmt.Errorf("store: scan conversation: %w", err)
 		}
 		c.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// Conversation returns one conversation owned by user.
+func (s *Store) Conversation(user string, id int64) (*Conversation, error) {
+	var c Conversation
+	var created string
+	err := s.db.QueryRow(
+		`SELECT id, user, title, kind, agent_name, workdir, provider_id, model, created_at
+		 FROM conversations WHERE id = ? AND user = ?`, id, user).
+		Scan(&c.ID, &c.User, &c.Title, &c.Kind, &c.AgentName, &c.Workdir, &c.ProviderID, &c.Model, &created)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("conversation %d not found for user", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get conversation: %w", err)
+	}
+	c.CreatedAt, _ = time.Parse(time.RFC3339, created)
+	return &c, nil
+}
+
+// SetConversationModel persists the per-conversation provider/model binding.
+// Empty values clear the binding (fall back to the provider default).
+func (s *Store) SetConversationModel(user string, id int64, providerID, model string) error {
+	res, err := s.db.Exec(
+		`UPDATE conversations SET provider_id = ?, model = ? WHERE id = ? AND user = ?`,
+		providerID, model, id, user)
+	if err != nil {
+		return fmt.Errorf("store: set conversation model: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("conversation %d not found for user", id)
+	}
+	return nil
 }
 
 // AppendMessage inserts a message row.
