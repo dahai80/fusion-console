@@ -9,6 +9,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -80,20 +81,31 @@ func (s *Server) handleTeamCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
-	in.Team.Name = strings.TrimSpace(in.Team.Name)
-	if in.Team.Name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "team name required"})
+	res, status, err := s.teamCreateCore(in)
+	if err != nil {
+		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// teamCreateCore is the create pipeline shared by the wizard's HTTP proxy and
+// the chat-side create_team brain tool: teams.register, then the queued
+// teams.add_task calls, then an optional teams.lead_start. The error return
+// carries the HTTP status the handler should serve (400 bad request, 502
+// daemon error); per-task and lead errors ride in the result body.
+func (s *Server) teamCreateCore(in teamCreateReq) (*teamCreateRes, int, error) {
+	in.Team.Name = strings.TrimSpace(in.Team.Name)
+	if in.Team.Name == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf("team name required")
+	}
 	if len(in.Team.Members) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "team needs at least one member"})
-		return
+		return nil, http.StatusBadRequest, fmt.Errorf("team needs at least one member")
 	}
 	jwt, err := s.teamEnsureJWT()
 	if err != nil {
 		log.Printf("server: team create auth: %v", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
+		return nil, http.StatusBadGateway, err
 	}
 
 	// Step 1: teams.register — the kernel validates the definition and owns
@@ -108,14 +120,12 @@ func (s *Server) handleTeamCreate(w http.ResponseWriter, r *http.Request) {
 	regRes, err := teamRPC(studioSocketPath(), jwt, "teams.register", map[string]any{"definition": def})
 	if err != nil {
 		log.Printf("server: team create register %s: %v", def.Name, err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
+		return nil, http.StatusBadGateway, err
 	}
 	if regRes["status"] == "error" {
 		msg, _ := regRes["message"].(string)
 		log.Printf("server: team create register %s rejected: %s", def.Name, msg)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": msg})
-		return
+		return nil, http.StatusBadGateway, fmt.Errorf("%s", msg)
 	}
 	nsKey, _ := regRes["namespace_key"].(string)
 	log.Printf("server: team created name=%s members=%d namespace_key=%s", def.Name, len(def.Members), nsKey)
@@ -168,7 +178,7 @@ func (s *Server) handleTeamCreate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	return &out, http.StatusOK, nil
 }
 
 // teamListTeams proxies teams.list — the wizard's step-1 namespace warning
