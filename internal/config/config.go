@@ -353,7 +353,7 @@ func (c *Config) Save(dir string) error {
 func DefaultAgents() []AgentSettings {
 	return []AgentSettings{
 		{Name: "claude", Command: "claude", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
-		{Name: "fusion-code", Command: "fusion", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
+		{Name: "fusion-code", Command: "fusion-code", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
 		{Name: "codex", Command: "codex", PermissionMode: "dontAsk", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
 		{Name: "opencode", Command: "opencode", PermissionMode: "dontAsk", Enabled: true, MaxBudgetUSD: 5, Builtin: true},
 		{Name: "atlascode", Command: "atlascode", PermissionMode: "acceptEdits", Enabled: true, MaxBudgetUSD: 5, MaxBudgetTokens: 2_000_000, Builtin: true},

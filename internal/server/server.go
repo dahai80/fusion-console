@@ -108,6 +108,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/conversations/{id}/messages", s.auth.Require(s.handleListMessages))
 	m.HandleFunc("DELETE /api/conversations/{id}", s.auth.Require(s.handleDeleteConversation))
 	m.HandleFunc("PATCH /api/conversations/{id}", s.auth.Require(s.handleRenameConversation))
+	m.HandleFunc("PUT /api/conversations/{id}/model", s.auth.Require(s.handleSetConversationModel))
 	m.HandleFunc("POST /api/chat", s.auth.Require(s.handleChat))
 	m.HandleFunc("POST /api/agent/run", s.auth.Require(s.handleAgentRun))
 	m.HandleFunc("POST /api/attachments", s.auth.Require(s.handleAttachmentUpload))

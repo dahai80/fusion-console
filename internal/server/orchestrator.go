@@ -677,10 +677,14 @@ func (s *Server) resolveWorkerByRepo(repoPath string) *config.WorkerConfig {
 
 // providerEnv resolves a worker's forced provider (agent settings override,
 // else the wizard worker config) into subprocess env vars plus an optional
-// model override. Anthropic-compatible providers speak the ANTHROPIC_* env
+// model override. The third return is a user-facing notice describing any
+// fallback to the CLI's own default (empty when the configured provider
+// applies cleanly) — surfaced to the chat stream so a silently ignored model
+// binding is visible to the user, not only in server logs.
+// Anthropic-compatible providers speak the ANTHROPIC_* env
 // family; OpenAI-compatible and gateway providers speak the OPENAI_* family.
 // Empty result = the CLI uses its own default login.
-func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]string, string) {
+func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]string, string, string) {
 	pid := ""
 	agentModel := ""
 	for _, a := range s.cfg.Agent {
@@ -702,9 +706,9 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		// No forced provider, but a per-worker model can still apply on top
 		// of the CLI's own login.
 		if wk != nil && strings.TrimSpace(wk.Model) != "" {
-			return nil, strings.TrimSpace(wk.Model)
+			return nil, strings.TrimSpace(wk.Model), ""
 		}
-		return nil, ""
+		return nil, "", ""
 	}
 	var prov *config.Provider
 	for i := range s.cfg.Provider {
@@ -714,12 +718,12 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 	}
 	if prov == nil || !prov.Enabled {
 		log.Printf("orchestrator: worker %s: provider %s not found or disabled, using CLI default", cli, pid)
-		return nil, ""
+		return nil, "", "configured provider " + pid + " not found or disabled for " + cli + " — falling back to the CLI default login/model"
 	}
 	key, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil || key == "" {
 		log.Printf("orchestrator: worker %s: provider %s has no stored key, using CLI default", cli, pid)
-		return nil, ""
+		return nil, "", "provider " + prov.Name + " has no stored API key for " + cli + " — falling back to the CLI default login/model"
 	}
 	// atlascode ignores OPENAI_* env when its settings.json resolves a
 	// provider, so forcing goes through a settings.json merge instead
@@ -729,7 +733,7 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 	if cmdBase == "atlascode" || cmdBase == "atlas" {
 		if prov.Type != "openai_compat" && prov.Type != "gateway" {
 			log.Printf("orchestrator: worker %s: atlascode needs an openai_compat provider, %s is %q", cli, pid, prov.Type)
-			return nil, ""
+			return nil, "", "provider " + prov.Name + " is " + string(prov.Type) + " but atlascode needs openai_compat — falling back to the CLI default login/model"
 		}
 		modelID := agentModel
 		if modelID == "" {
@@ -738,10 +742,10 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		ref, err := writeAtlasProvider(prov, modelID)
 		if err != nil {
 			log.Printf("orchestrator: worker %s: atlas settings write failed: %v", cli, err)
-			return nil, ""
+			return nil, "", "atlascode settings write failed (" + err.Error() + ") — falling back to the CLI default login/model"
 		}
 		log.Printf("orchestrator: worker %s forced to provider %s via atlas settings (%s)", cli, pid, ref)
-		return map[string]string{"PROVIDER_ID": pid}, ref
+		return map[string]string{"PROVIDER_ID": pid}, ref, ""
 	}
 	env := map[string]string{"PROVIDER_ID": pid}
 	// Model precedence: per-agent override > provider default (pool head).
@@ -759,13 +763,13 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 			env["ANTHROPIC_MODEL"] = model
 		}
 		log.Printf("orchestrator: worker %s forced to provider %s (anthropic_compat) model=%q via env", cli, pid, model)
-		return env, ""
+		return env, "", ""
 	case "openai_compat", "gateway":
 		env["OPENAI_BASE_URL"] = prov.BaseURL
 		env["OPENAI_API_KEY"] = key
 	default:
 		log.Printf("orchestrator: worker %s: provider %s type %q not injectable, using CLI default", cli, pid, prov.Type)
-		return nil, ""
+		return nil, "", "provider " + prov.Name + " type " + string(prov.Type) + " is not injectable for " + cli + " — falling back to the CLI default login/model"
 	}
 	log.Printf("orchestrator: worker %s forced to provider %s (%s) model=%q", cli, pid, prov.Type, model)
 	// Per-worker model override wins over the provider default.
@@ -775,7 +779,7 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 			env["ANTHROPIC_MODEL"] = model
 		}
 	}
-	return env, model
+	return env, model, ""
 }
 
 // normalizeRepo reduces a repo reference to a comparable identity token:

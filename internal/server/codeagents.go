@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -52,6 +53,26 @@ func (s *Server) codeAgents() []codeAgentStatus {
 	}
 	for i := range agents {
 		if agents[i].ID == string(codeAgentFusion) {
+			// The CLI may have arrived outside the console (brew, install.sh)
+			// — a fusion-code binary on PATH is still a usable dispatch agent.
+			if !agents[i].Installed {
+				if p, err := exec.LookPath("fusion-code"); err == nil {
+					agents[i].Installed = true
+					if v, verr := exec.Command(p, "--version").CombinedOutput(); verr == nil && len(v) > 0 {
+						line := string(v)
+						for j := 0; j < len(line); j++ {
+							if line[j] == '\n' || line[j] == '\r' {
+								line = line[:j]
+								break
+							}
+						}
+						if len(line) > 80 {
+							line = line[:80]
+						}
+						agents[i].Detail = line
+					}
+				}
+			}
 			continue
 		}
 		out, err := exec.LookPath(agents[i].ID)
@@ -77,13 +98,13 @@ func (s *Server) codeAgents() []codeAgentStatus {
 }
 
 // installCodeAgent starts the background install for one agent. claude/codex/
-// atlascode go through npm at pinned known-good versions; fusion-code runs
-// the bun source build.
+// atlascode go through npm at pinned known-good versions; fusion-code prefers
+// its prebuilt distribution channels (Homebrew, then the install.sh script)
+// and keeps the bun source build as the last fallback.
 func (s *Server) installCodeAgent(ctx context.Context, agent codeAgentID, st *ragInstallState) error {
 	switch agent {
 	case codeAgentFusion:
-		go s.installCode(ctx, st)
-		return nil
+		return s.startFusionInstall(ctx, st)
 	case codeAgentClaude:
 		return s.startNpmInstall(ctx, st, "claude", "@anthropic-ai/claude-code@"+knownGoodNpmVersions[codeAgentClaude])
 	case codeAgentCodex:
@@ -93,6 +114,58 @@ func (s *Server) installCodeAgent(ctx context.Context, agent codeAgentID, st *ra
 	default:
 		return fmt.Errorf("unknown agent %q", agent)
 	}
+}
+
+// startFusionInstall installs fusion-code through its distribution channels:
+// Homebrew first (sha256-pinned release binaries), then the install.sh script
+// from GitHub Releases, and the bun source build only when neither tool is
+// available. The channel is picked up front so the background job never
+// switches mid-run.
+func (s *Server) startFusionInstall(ctx context.Context, st *ragInstallState) error {
+	if _, err := exec.LookPath("brew"); err == nil {
+		go func() {
+			st.setPhase("installing")
+			st.logf("brew install dahai80/fusion-mlx/fusion-code")
+			if err := runStream(ctx, st, s.cfg.Code.InstallDir, "brew", "install", "dahai80/fusion-mlx/fusion-code"); err != nil {
+				s.ragInstallFail(st, fmt.Errorf("brew install fusion-code: %v", err))
+				return
+			}
+			s.finishFusionInstall(st)
+		}()
+		return nil
+	}
+	if _, err := exec.LookPath("curl"); err == nil {
+		dir := s.cfg.Code.InstallDir
+		go func() {
+			st.setPhase("downloading")
+			st.logf("install.sh from GitHub Releases (installs the fusion-code CLI)")
+			script := fmt.Sprintf(
+				"curl -fsSL https://raw.githubusercontent.com/dahai80/fusion-code/main/install.sh | FUSION_CODE_INSTALL_DIR=%q sh",
+				filepath.Join(dir, "bin"),
+			)
+			if err := runStream(ctx, st, dir, "sh", "-c", script); err != nil {
+				s.ragInstallFail(st, fmt.Errorf("install.sh: %v", err))
+				return
+			}
+			s.finishFusionInstall(st)
+		}()
+		return nil
+	}
+	s.installCode(ctx, st)
+	return nil
+}
+
+// finishFusionInstall flips the menu into the configured state — same
+// persistence contract as the source build path.
+func (s *Server) finishFusionInstall(st *ragInstallState) {
+	s.cfg.Code.Installed = true
+	s.cfg.Code.Enabled = true
+	if err := s.cfg.Save(s.cfgDir); err != nil {
+		s.ragInstallFail(st, fmt.Errorf("save config: %v", err))
+		return
+	}
+	st.logf("installed and enabled — ready to start")
+	st.setPhase("done")
 }
 
 // startNpmInstall validates npm presence, marks the job downloading, and

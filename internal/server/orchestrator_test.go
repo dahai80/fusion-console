@@ -91,7 +91,7 @@ func TestProviderEnv(t *testing.T) {
 		{Agent: "fusion-code", Enabled: true},
 	}
 
-	env, model := s.providerEnv("claude", s.workerConfig("claude"))
+	env, model, _ := s.providerEnv("claude", s.workerConfig("claude"))
 	if env == nil || env["ANTHROPIC_BASE_URL"] != "https://anth.example" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-test-anthropic" || env["ANTHROPIC_MODEL"] != "claude-sonnet-5-5" {
 		t.Fatalf("anthropic env wrong: %v", env)
 	}
@@ -99,21 +99,21 @@ func TestProviderEnv(t *testing.T) {
 		t.Fatalf("anthropic path must not force --model, got %q", model)
 	}
 
-	env, model = s.providerEnv("codex", s.workerConfig("codex"))
+	env, model, _ = s.providerEnv("codex", s.workerConfig("codex"))
 	if env == nil || env["OPENAI_BASE_URL"] != "https://oai.example/v1" || env["OPENAI_API_KEY"] != "sk-test-openai" || model != "gpt-test" {
 		t.Fatalf("openai env wrong: %v model=%q", env, model)
 	}
 
-	if env, _ := s.providerEnv("opencode", s.workerConfig("opencode")); env != nil {
+	if env, _, _ := s.providerEnv("opencode", s.workerConfig("opencode")); env != nil {
 		t.Fatalf("disabled provider must fall back to CLI default: %v", env)
 	}
-	if env, model := s.providerEnv("fusion-code", s.workerConfig("fusion-code")); env != nil || model != "" {
+	if env, model, _ := s.providerEnv("fusion-code", s.workerConfig("fusion-code")); env != nil || model != "" {
 		t.Fatalf("no provider configured must be empty: %v %q", env, model)
 	}
 
 	// Agent-settings override beats the wizard worker config.
 	s.cfg.Agent = []config.AgentSettings{{Name: "claude", ProviderID: "p-oai"}}
-	env, model = s.providerEnv("claude", s.workerConfig("claude"))
+	env, model, _ = s.providerEnv("claude", s.workerConfig("claude"))
 	if env == nil || env["OPENAI_BASE_URL"] == "" || model != "gpt-test" {
 		t.Fatalf("agent settings override not honored: %v %q", env, model)
 	}
@@ -190,5 +190,35 @@ func TestNormalizeRepoMatchesURLAndCheckoutPath(t *testing.T) {
 	}
 	if normalizeRepo("https://github.com/dahai80/fusion-health") == normalizeRepo("/Users/dahai/fusion/fusion-web-shell") {
 		t.Fatal("different repos must not match")
+	}
+}
+
+func TestProviderEnvFallbackNotice(t *testing.T) {
+	t.Setenv("FUSION_CONSOLE_APIKEY_KEYOAI", "sk-test-openai")
+	s := New(&config.Config{Server: config.ServerConfig{DataDir: t.TempDir()}}, t.TempDir(), nil)
+	s.cfg.Provider = []config.Provider{
+		{ID: "p-off", Name: "off", Type: "openai_compat", BaseURL: "https://x.example", APIKeyID: "keyoai", Enabled: false},
+		{ID: "p-nokey", Name: "nokey", Type: "openai_compat", BaseURL: "https://x.example", APIKeyID: "missing-key", Enabled: true},
+		{ID: "p-oai", Name: "oai", Type: "openai_compat", BaseURL: "https://oai.example/v1", Model: "gpt-test", APIKeyID: "keyoai", Enabled: true},
+	}
+	s.cfg.Orchestrator.Workers = []config.WorkerConfig{
+		{Agent: "claude", Enabled: true, ProviderID: "p-off"},
+		{Agent: "codex", Enabled: true, ProviderID: "p-nokey"},
+		{Agent: "opencode", Enabled: true, ProviderID: "p-oai"},
+	}
+
+	env, model, notice := s.providerEnv("claude", s.workerConfig("claude"))
+	if env != nil || model != "" || notice == "" || !strings.Contains(notice, "p-off") {
+		t.Fatalf("disabled provider: env=%v model=%q notice=%q", env, model, notice)
+	}
+
+	env, model, notice = s.providerEnv("codex", s.workerConfig("codex"))
+	if env != nil || model != "" || notice == "" || !strings.Contains(notice, "nokey") {
+		t.Fatalf("missing key: env=%v model=%q notice=%q", env, model, notice)
+	}
+
+	env, model, notice = s.providerEnv("opencode", s.workerConfig("opencode"))
+	if env == nil || notice != "" {
+		t.Fatalf("clean binding must have no notice: env=%v notice=%q", env, notice)
 	}
 }

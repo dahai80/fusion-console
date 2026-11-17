@@ -86,7 +86,7 @@ func TestProviderEnvAtlascodeUsesSettingsWriter(t *testing.T) {
 		{Name: "atlascode", Command: "atlascode", Enabled: true, ProviderID: "iff-local", MaxBudgetTokens: 2_000_000},
 	}
 
-	env, model := s.providerEnv("atlascode", nil)
+	env, model, _ := s.providerEnv("atlascode", nil)
 	if env == nil || env["PROVIDER_ID"] != "iff-local" {
 		t.Fatalf("atlascode env wrong: %v", env)
 	}
