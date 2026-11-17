@@ -186,7 +186,7 @@ export const api = {
   teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
   teamCreate: (body: TeamCreateReq) =>
     req<TeamCreateRes>("/api/team/create", { method: "POST", body: JSON.stringify(body) }),
-  teamOp: (body: { op: string; task_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean }) =>
+  teamOp: (body: { op: string; task_id?: string; entry_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean }) =>
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
   codeInstall: (agent: string) =>
@@ -212,7 +212,7 @@ export type TeamSnapshot = {
   lifecycle?: string;
 };
 
-// teams.lead_status result (lead loop on the daemon, issue #14).
+// teams.lead_status result (lead loop on the daemon, issue #17).
 export type LeadStatus = {
   running: boolean;
   lead_id?: string;

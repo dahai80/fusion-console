@@ -3,7 +3,7 @@
 // teams.pause / teams.resume / teams.disband plus the lead loop
 // teams.lead_start / lead_stop / lead_status (issue #17; upstream RPCs landed
 // in fusion-agent-studio). The playbook panel (issue #14) rides the same
-// proxy once teams.playbook_render/trace are wired.
+// proxy via teams.playbook_render / teams.playbook_trace.
 package server
 
 import (
@@ -17,6 +17,7 @@ import (
 type teamOpReq struct {
 	Op             string   `json:"op"`
 	TaskID         string   `json:"task_id"`
+	EntryID        string   `json:"entry_id"`
 	MaxConcurrent  *int     `json:"max_concurrent"`
 	MaxDepth       *int     `json:"max_depth"`
 	AgentID        string   `json:"agent_id"`
@@ -82,6 +83,16 @@ func teamOpMethod(req teamOpReq, defTeam string) (string, map[string]any, error)
 		return "teams.lead_stop", map[string]any{"team": team}, nil
 	case "lead_status":
 		return "teams.lead_status", map[string]any{"team": team}, nil
+	case "playbook_render":
+		// Read-only playbook surface (issue #14, upstream agent-studio#733).
+		// The daemon reports "playbook disabled" / "no playbook store" via the
+		// {"status":"error"} shape — surfaced as 502 by handleTeamOp.
+		return "teams.playbook_render", map[string]any{"team": team}, nil
+	case "playbook_trace":
+		if req.EntryID == "" {
+			return "", nil, errTeamOp("entry_id required")
+		}
+		return "teams.playbook_trace", map[string]any{"team": team, "entry_id": req.EntryID}, nil
 	default:
 		return "", nil, errTeamOp("unknown op: " + req.Op)
 	}

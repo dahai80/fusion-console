@@ -71,6 +71,17 @@ func TestTeamOpMethodMapping(t *testing.T) {
 			wantMethod: "teams.lead_status", wantParams: map[string]any{"team": "alpha"},
 		},
 		{
+			name: "playbook_render", req: teamOpReq{Op: "playbook_render"}, defTeam: "alpha",
+			wantMethod: "teams.playbook_render", wantParams: map[string]any{"team": "alpha"},
+		},
+		{
+			name: "playbook_trace", req: teamOpReq{Op: "playbook_trace", Team: "beta", EntryID: "e1"},
+			wantMethod: "teams.playbook_trace", wantParams: map[string]any{"team": "beta", "entry_id": "e1"},
+		},
+		{
+			name: "playbook_trace missing entry", req: teamOpReq{Op: "playbook_trace"}, wantErr: "entry_id required",
+		},
+		{
 			name: "cancel missing task", req: teamOpReq{Op: "cancel"}, wantErr: "task_id required",
 		},
 		{
