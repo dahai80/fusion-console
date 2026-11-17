@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Ban, Pause, Play, RefreshCw, RotateCcw, Square, Users } from "lucide-react";
+import { AlertTriangle, Ban, Eye, Pause, Play, Plus, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
 import { api, type LeadStatus, type TeamSnapshot } from "./api";
+import TeamWizard from "./TeamWizard";
 import { Button, Card } from "./components/ui";
 
 // Team view (T4b, issue #6): pure observer over the agent-studio daemon.
@@ -31,18 +32,23 @@ export default function TeamPage() {
   const [memberId, setMemberId] = useState("");
   const [lead, setLead] = useState<LeadStatus | null>(null);
   const [goal, setGoal] = useState("");
+  // Focus team: the wizard's success deep-link lands here filtered to the
+  // new team (?team= in the URL keeps the view linkable). Empty = the
+  // configured default team from the cached poller snapshot.
+  const [focusTeam, setFocusTeam] = useState(() => new URLSearchParams(window.location.search).get("team") || "");
+  const [wizard, setWizard] = useState(false);
   const load = () => {
     setErr("");
-    api.teamView().then(setSnap).catch((e) => setErr((e as Error).message));
+    api.teamView(focusTeam || undefined).then(setSnap).catch((e) => setErr((e as Error).message));
     // Lead loop status rides the same poll; an unregistered team (or daemon
     // without the RPC) just means "no lead" — never a visible error here.
     api.teamOp({ op: "lead_status" }).then((r) => setLead(r as LeadStatus)).catch(() => setLead(null));
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, [focusTeam]);
   useEffect(() => {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
-  }, []);
+  }, [focusTeam]);
   // Pick-list source: the daemon's real agents — tasks dispatched to a roster
   // id that is not a real agent fail with "agent not found".
   useEffect(() => {
@@ -75,6 +81,16 @@ export default function TeamPage() {
   };
 
   const lifecycle = (snap?.lifecycle || "").toUpperCase();
+
+  // Deep-linkable focus: ?team=<name> in the URL mirrors the state so a
+  // fresh load (or a shared link) observes the same non-default team.
+  const applyFocus = (team: string) => {
+    setFocusTeam(team);
+    const url = new URL(window.location.href);
+    if (team) url.searchParams.set("team", team);
+    else url.searchParams.delete("team");
+    window.history.replaceState(null, "", url.toString());
+  };
   const disband = () => {
     const members = snap?.roster?.length ?? 0;
     const open = tasks.filter((t) => !["done", "completed", "finished", "success", "cancelled"].includes(String(t.status || "").toLowerCase())).length;

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 )
 
 // teamOpReq is the POST /api/team/op body.
@@ -93,7 +94,15 @@ func (e teamOpError) Error() string { return string(e) }
 func errTeamOp(msg string) error { return teamOpError(msg) }
 
 // handleTeamView serves GET /api/team/view — the latest observer snapshot.
+// An optional ?team=<name> observes a different team on demand (synchronous
+// poll, no caching) — the wizard's success deep-link lands here filtered to
+// the newly created team (issue #16).
 func (s *Server) handleTeamView(w http.ResponseWriter, r *http.Request) {
+	team := strings.TrimSpace(r.URL.Query().Get("team"))
+	if team != "" && team != s.cfg.AgentStudio.Team {
+		writeJSON(w, http.StatusOK, s.pollTeam(team))
+		return
+	}
 	writeJSON(w, http.StatusOK, s.teamView())
 }
 

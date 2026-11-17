@@ -135,7 +135,7 @@ func (s *Server) startTeamPoller() {
 	log.Printf("server: team observer started (socket=%s team=%s)", studioSocketPath(), s.cfg.AgentStudio.Team)
 	go func() {
 		for {
-			snap := s.pollTeam()
+			snap := s.pollTeam(s.cfg.AgentStudio.Team)
 			s.team.mu.Lock()
 			s.team.snap = snap
 			s.team.mu.Unlock()
@@ -146,8 +146,10 @@ func (s *Server) startTeamPoller() {
 
 // pollTeam runs one full observation cycle: auth, then task board + roster +
 // health + limits. Failed/illegal transitions and brief rejections land in
-// Alerts so the UI can surface them instead of going silent.
-func (s *Server) pollTeam() *teamSnapshot {
+// Alerts so the UI can surface them instead of going silent. team is the
+// observed team name — the wizard deep-link passes a non-default team here
+// (issue #16).
+func (s *Server) pollTeam(team string) *teamSnapshot {
 	snap := &teamSnapshot{
 		FetchedAt: time.Now().UTC(),
 		Tasks:     []map[string]any{},
@@ -160,7 +162,6 @@ func (s *Server) pollTeam() *teamSnapshot {
 		snap.Error = err.Error()
 		return snap
 	}
-	team := s.cfg.AgentStudio.Team
 
 	if res, err := teamRPC(studioSocketPath(), jwt, "task.list", map[string]any{"team": team, "limit": 100}); err != nil {
 		snap.Error = err.Error()

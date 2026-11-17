@@ -180,8 +180,12 @@ export const api = {
   failuresList: () => req<{ failures: FailureRow[] }>("/api/failures"),
   failuresAdd: (body: { agent?: string; category: string; note: string }) =>
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
-  teamView: () => req<TeamSnapshot>("/api/team/view"),
+  teamView: (team?: string) =>
+    req<TeamSnapshot>(`/api/team/view${team ? `?team=${encodeURIComponent(team)}` : ""}`),
   teamAgents: () => req<{ agents: Record<string, any>[] }>("/api/team/agents"),
+  teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
+  teamCreate: (body: TeamCreateReq) =>
+    req<TeamCreateRes>("/api/team/create", { method: "POST", body: JSON.stringify(body) }),
   teamOp: (body: { op: string; task_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean }) =>
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
@@ -216,6 +220,51 @@ export type LeadStatus = {
   n_stalls?: number;
   replan_count?: number;
   last_verdict?: string;
+};
+
+// Team creation wizard payload (issue #16). Field names mirror the kernel
+// TeamDefinition/TeamMember exactly — the review step shows this verbatim.
+export type TeamCreateMember = {
+  name: string;
+  role: string;
+  skills: string[];
+  tool_allowlist: string[];
+  permission_mode: string;
+  budget_tokens: number;
+  max_concurrency: number;
+};
+
+export type TeamCreateReq = {
+  team: {
+    name: string;
+    namespace_key: string;
+    members: TeamCreateMember[];
+    lead_budget_tokens: number;
+    playbook: boolean;
+    max_depth: number;
+    metadata: Record<string, unknown>;
+  };
+  tasks: { title: string; detail: string }[];
+  lead_start: boolean;
+  lead_goal: string;
+};
+
+// One queued task's outcome — a rejected task is an entry with an error,
+// never a dropped row (partial success stays visible).
+export type TeamCreateTaskResult = {
+  index: number;
+  title: string;
+  task_id?: string;
+  error?: string;
+};
+
+export type TeamCreateRes = {
+  status: string;
+  team: string;
+  namespace_key: string;
+  tasks: TeamCreateTaskResult[];
+  lead_started: boolean;
+  lead_error?: string;
 };
 
 export type FailureRow = {
