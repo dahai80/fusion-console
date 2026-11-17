@@ -69,7 +69,7 @@ model_provider = "macfabric"
 [model_providers.macfabric]
 name = "macfabric"
 base_url = %q
-wire_api = "chat"
+wire_api = "responses"
 env_key = "OPENAI_API_KEY"
 `, strings.TrimRight(env["OPENAI_BASE_URL"], "/"))
 	if werr := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfg), 0o600); werr != nil {

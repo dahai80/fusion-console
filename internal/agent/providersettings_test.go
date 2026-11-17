@@ -72,7 +72,7 @@ func TestCodexHomeOverride(t *testing.T) {
 	for _, want := range []string{
 		`base_url = "http://127.0.0.1:8999/v1"`,
 		`env_key = "OPENAI_API_KEY"`,
-		`wire_api = "chat"`,
+		`wire_api = "responses"`,
 		`model_provider = "macfabric"`,
 	} {
 		if !strings.Contains(cfg, want) {
