@@ -100,6 +100,12 @@ func (s *Server) orchestratorPrompt() string {
 		b.WriteString("\nWorking conventions and background knowledge (from the configured context files):\n")
 		b.WriteString(ctx)
 	}
+	// Caveman default (issue #30): the chat brain (planner loop) and the
+	// agent brain (which embeds this prompt in its task) both start with the
+	// caveman activation rule when the toggle is on.
+	if act := s.cavemanPrompt(); act != "" {
+		b.WriteString("\n\n" + act + "\n")
+	}
 	return b.String()
 }
 

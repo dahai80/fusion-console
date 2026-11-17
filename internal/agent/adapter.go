@@ -105,6 +105,10 @@ type RunOpts struct {
 	Command         string            // optional executable override from settings
 	Env             map[string]string // extra env vars for the subprocess (provider forcing)
 	ExtraArgs       []string          // trailing CLI args (e.g. --mcp-config for the agent brain)
+	// AppendSystemPrompt rides --append-system-prompt on claude-family CLIs
+	// (caveman activation, issue #30). Other CLI families ignore it; their
+	// injection rides the task text instead.
+	AppendSystemPrompt string
 	// Timeout caps one agent run. 0 = the 30-minute default; the server
 	// passes the configured dispatch timeout so long briefs survive.
 	Timeout time.Duration

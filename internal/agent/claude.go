@@ -26,17 +26,7 @@ func (a ClaudeCompatAdapter) Detect() bool { return detect(a.Command) }
 // Run implements Adapter.
 func (a ClaudeCompatAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event, error) {
 	command := orCommand(opts.Command, a.Command)
-	args := []string{
-		"-p", opts.Task,
-		"--output-format", "stream-json",
-		"--verbose",
-	}
-	if opts.PermissionMode != "" {
-		args = append(args, "--permission-mode", opts.PermissionMode)
-	}
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
+	args := claudeArgs(a.Name(), opts)
 	// Provider override: the user's ~/.claude/settings.json env block outranks
 	// the process env, so forced ANTHROPIC_* bindings must ride a --settings
 	// file (higher precedence, per-invocation) instead of the env alone.
@@ -49,6 +39,28 @@ func (a ClaudeCompatAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Even
 	args = append(args, opts.ExtraArgs...)
 	_, stream, err := launch(ctx, opts, command, args, false, parseClaudeJSON)
 	return stream, err
+}
+
+// claudeArgs builds the headless CLI argument list for one run. Split from
+// Run so arg composition (permission mode, provider override, appended
+// system prompt) is unit-testable without spawning a process.
+func claudeArgs(agentName string, opts RunOpts) []string {
+	args := []string{
+		"-p", opts.Task,
+		"--output-format", "stream-json",
+		"--verbose",
+	}
+	if opts.PermissionMode != "" {
+		args = append(args, "--permission-mode", opts.PermissionMode)
+	}
+	if opts.Model != "" {
+		args = append(args, "--model", opts.Model)
+	}
+	if opts.AppendSystemPrompt != "" {
+		log.Printf("agent: %s: appending system prompt (%d bytes)", agentName, len(opts.AppendSystemPrompt))
+		args = append(args, "--append-system-prompt", opts.AppendSystemPrompt)
+	}
+	return args
 }
 
 // parseClaudeJSON parses claude-stream-json lines:

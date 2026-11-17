@@ -201,12 +201,25 @@ type OrchestratorConfig struct {
 	// DispatchTimeoutMinutes caps one dispatched agent run (foreground and
 	// background). 0 = 30 minutes; raise it for long multi-step briefs.
 	DispatchTimeoutMinutes int `json:"dispatch_timeout_minutes"`
+	// CavemanDefault injects the caveman skill activation ruleset into every
+	// brain session and dispatched worker (issue #30). Pointer so an absent
+	// key defaults to on while an explicit false stays off.
+	CavemanDefault *bool  `json:"caveman_default"`
+	CavemanLevel   string `json:"caveman_level"` // lite | full (default) | ultra | wenyan-*
+}
+
+// CavemanEnabled reports whether caveman activation is on: true unless the
+// config explicitly sets caveman_default to false.
+func (o *OrchestratorConfig) CavemanEnabled() bool {
+	return o.CavemanDefault == nil || *o.CavemanDefault
 }
 
 // DefaultOrchestrator returns safe wizard defaults.
 func DefaultOrchestrator() OrchestratorConfig {
-	return OrchestratorConfig{Mode: "confirm", BrainAgent: "claude", Repos: []string{}, Workers: []WorkerConfig{}, WorkerMemory: "notes"}
+	return OrchestratorConfig{Mode: "confirm", BrainAgent: "claude", Repos: []string{}, Workers: []WorkerConfig{}, WorkerMemory: "notes", CavemanDefault: boolPtr(true), CavemanLevel: "full"}
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 // ServerConfig is the [server] section.
 type ServerConfig struct {
