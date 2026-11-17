@@ -11,7 +11,7 @@ import (
 
 // TestTeamOpMethodMapping verifies the wire format of every op the console
 // proxies to the daemon: method name, required params, team fallback, and
-// required-field validation (issue #14).
+// required-field validation (issue #17: pause/resume/disband + lead ops).
 func TestTeamOpMethodMapping(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -69,6 +69,17 @@ func TestTeamOpMethodMapping(t *testing.T) {
 		{
 			name: "lead_status", req: teamOpReq{Op: "lead_status"}, defTeam: "alpha",
 			wantMethod: "teams.lead_status", wantParams: map[string]any{"team": "alpha"},
+		},
+		{
+			name: "playbook_render", req: teamOpReq{Op: "playbook_render"}, defTeam: "alpha",
+			wantMethod: "teams.playbook_render", wantParams: map[string]any{"team": "alpha"},
+		},
+		{
+			name: "playbook_trace", req: teamOpReq{Op: "playbook_trace", Team: "beta", EntryID: "e1"},
+			wantMethod: "teams.playbook_trace", wantParams: map[string]any{"team": "beta", "entry_id": "e1"},
+		},
+		{
+			name: "playbook_trace missing entry", req: teamOpReq{Op: "playbook_trace"}, wantErr: "entry_id required",
 		},
 		{
 			name: "cancel missing task", req: teamOpReq{Op: "cancel"}, wantErr: "task_id required",

@@ -1,21 +1,23 @@
 // Team view HTTP surface: the snapshot read side plus the operations the
 // daemon exposes — task cancel/rerun, team.set_limits, and the lifecycle ops
 // teams.pause / teams.resume / teams.disband plus the lead loop
-// teams.lead_start / lead_stop / lead_status (issue #14; upstream RPCs landed
-// in fusion-agent-studio). The playbook panel stays hidden until
-// fusion-agent-studio#733 (teams.playbook_render/trace) ships.
+// teams.lead_start / lead_stop / lead_status (issue #17; upstream RPCs landed
+// in fusion-agent-studio). The playbook panel (issue #14) rides the same
+// proxy via teams.playbook_render / teams.playbook_trace.
 package server
 
 import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 )
 
 // teamOpReq is the POST /api/team/op body.
 type teamOpReq struct {
 	Op             string   `json:"op"`
 	TaskID         string   `json:"task_id"`
+	EntryID        string   `json:"entry_id"`
 	MaxConcurrent  *int     `json:"max_concurrent"`
 	MaxDepth       *int     `json:"max_depth"`
 	AgentID        string   `json:"agent_id"`
@@ -81,6 +83,16 @@ func teamOpMethod(req teamOpReq, defTeam string) (string, map[string]any, error)
 		return "teams.lead_stop", map[string]any{"team": team}, nil
 	case "lead_status":
 		return "teams.lead_status", map[string]any{"team": team}, nil
+	case "playbook_render":
+		// Read-only playbook surface (issue #14, upstream agent-studio#733).
+		// The daemon reports "playbook disabled" / "no playbook store" via the
+		// {"status":"error"} shape — surfaced as 502 by handleTeamOp.
+		return "teams.playbook_render", map[string]any{"team": team}, nil
+	case "playbook_trace":
+		if req.EntryID == "" {
+			return "", nil, errTeamOp("entry_id required")
+		}
+		return "teams.playbook_trace", map[string]any{"team": team, "entry_id": req.EntryID}, nil
 	default:
 		return "", nil, errTeamOp("unknown op: " + req.Op)
 	}
@@ -93,7 +105,15 @@ func (e teamOpError) Error() string { return string(e) }
 func errTeamOp(msg string) error { return teamOpError(msg) }
 
 // handleTeamView serves GET /api/team/view — the latest observer snapshot.
+// An optional ?team=<name> observes a different team on demand (synchronous
+// poll, no caching) — the wizard's success deep-link lands here filtered to
+// the newly created team (issue #16).
 func (s *Server) handleTeamView(w http.ResponseWriter, r *http.Request) {
+	team := strings.TrimSpace(r.URL.Query().Get("team"))
+	if team != "" && team != s.cfg.AgentStudio.Team {
+		writeJSON(w, http.StatusOK, s.pollTeam(team))
+		return
+	}
 	writeJSON(w, http.StatusOK, s.teamView())
 }
 
