@@ -248,6 +248,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
+	// A human message restarts the auto-continue chain: the brain may keep
+	// working on its own after background runs finish, but only for a bounded
+	// number of hops since the last human turn.
+	s.autoMu.Lock()
+	s.autoDepth[req.ConversationID] = 0
+	s.autoMu.Unlock()
 	msgs, err := s.store.ListMessages(req.ConversationID)
 	if err != nil {
 		serverError(w, err, http.StatusInternalServerError)

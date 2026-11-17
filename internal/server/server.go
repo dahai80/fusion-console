@@ -35,6 +35,8 @@ type Server struct {
 	codeInstall ragInstallState          // background fusion-code install job (same job-state shape)
 	runs        workerRuns               // live worker dispatch registry (busy/idle + current task)
 	bg          dispatchRegistry         // background dispatch runs (queued/running/done)
+	autoMu      sync.Mutex               // guards autoDepth (auto-continue chain depth per conversation)
+	autoDepth   map[int64]int            // conversation id -> consecutive auto-continues since last human message
 	dispatchTok string                   // loopback secret for MCP background-dispatch handoff
 	mcpMode     bool                     // true when serving the MCP stdio sidecar (ephemeral process)
 	team        teamDialer               // agent-studio team observer (poller + snapshot cache)
@@ -65,6 +67,7 @@ func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 		harness:     harness.New(),
 		verLast:     map[string]string{},
 		verCache:    map[string]verCacheEntry{},
+		autoDepth:   map[int64]int{},
 		dispatchTok: dispatchToken(cfgDir),
 	}
 	// Protocol-driven agent registry: one adapter per enabled agent settings
