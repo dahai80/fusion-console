@@ -8,14 +8,17 @@
 
 ## 编排：聊天指挥 Agent
 
-开启编排（设置 → Orchestration，或配置向导）后，当前聊天就是**大脑**：模型获得 3 个原生工具 — `list_agents`、`run_agent`、`read_artifact` — 自行决定何时把任务派给 headless agent、收回结果、读产出验证、向你汇报（每轮最多 8 次规划迭代）。不需要单独配置"大脑 agent" — 大脑就是你聊天用的那个模型。
+开启编排（设置 → Orchestration，或配置向导）后，当前聊天就是**大脑**：模型获得 3 个原生工具 — `list_agents`、`run_agent`、`read_artifact` — 自行决定何时把任务派给 headless agent、收回结果、读产出验证、向你汇报（每轮最多 8 次规划迭代）。不需要单独配置"大脑 agent" — 大脑就是你聊天用的那个模型。大脑工作目录（`read_artifact` 读取沙箱 + worktree 父目录）可在 Workers 标签页配置，默认 `~/.fusion-console/agents`。大脑还可绑定代码源：GitHub URL（每次派发前同步到大脑工作目录：clone / fast-forward pull，本地改动绝不覆盖）或本地仓库路径（直接作为大脑工作区）。
 
-每个工人 agent 在自己的目录里工作，两种隔离模式：
+大脑也可切换为 **claude code**（Brain 卡片 → brain: claude code）：每次编排轮次在脑工作目录启动 claude 会话，通过 MCP（`fusion-console mcp` 子命令）获得与聊天规划器相同的派活工具，成本记为 `brain:claude`。向大脑传授工作规范：`brain_context_files`（Workers 标签页，每行一个路径）会注入规划器 prompt（总量上限 12 KB）— 指向工作规范文档和 repo 清单即可；claude code 大脑还会自动读取工作目录里的 `CLAUDE.md`，新装机器把规范文件复制进大脑工作目录即可生效。worker 与 repo 绑定：控制台会拒绝派发给未绑定该 repo 的 worker，跨 repo 的工作应改为在该 repo 提单。
 
-- **standalone（默认）**：每个 agent 一个固定专属工作目录，跨任务共享
-- **worktree**：每次派发对指定仓库新建 detached `git worktree`（白名单强校验），任务在临时目录里完成
+每个工人 agent 在自己的目录里工作，三种代码源模式：
 
-护栏常开：worker 可单独禁用、per-worker 预算上限、同一时刻只跑一个 agent 子进程、每次派发都过 fusion-harness 工具准入链（sidecar 不可用时 fail-closed）。`confirm` 模式下每次 `run_agent` 派发都会在浏览器等你审批；`auto` 模式直接派发；`off` 关闭编排工具。每个 worker 还可以绑定指定 provider（向导 Workers 步）：console 从钥匙串取密钥注入 `ANTHROPIC_*` 或 `OPENAI_*` 环境变量，覆盖 CLI 自带登录；不选则保持 CLI 默认。
+- **standalone**：每个 agent 一个固定专属工作目录，跨任务共享
+- **worktree**：每次派发对指定本地仓库新建 detached `git worktree`（白名单强校验），任务在临时目录里完成
+- **github**：worker 绑定一个 GitHub 仓库 URL — 首次派发 clone 到工作目录，之后每次派发 fetch 并 fast-forward 到最新提交；工作区有未提交改动或本地领先提交时告警跳过，绝不覆盖本地状态
+
+护栏常开：worker 可单独禁用、per-worker 预算上限、同一时刻只跑一个 agent 子进程、每次派发都过 fusion-harness 工具准入链（sidecar 不可用时 fail-closed）。`confirm` 模式下每次 `run_agent` 派发都会在浏览器等你审批；`auto` 模式直接派发；`off` 关闭编排工具。每个 worker 还可以绑定指定 provider + 模型覆盖（向导 Workers 步）：console 从钥匙串取密钥注入 `ANTHROPIC_*` 或 `OPENAI_*` 环境变量，覆盖 CLI 自带登录；不选则保持 CLI 默认。worker 记忆默认为零依赖的 `notes` 约定（工作区 NOTES.md），可按 worker 切换为 fusion-memory hub 或关闭。
 
 ## 功能
 

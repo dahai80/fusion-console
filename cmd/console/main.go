@@ -25,6 +25,14 @@ import (
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
+
+	// "fusion-console mcp" runs the MCP stdio brain server (agent-brain
+	// mode): a claude CLI session talks dispatch tools over JSON-RPC stdio.
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		runMCP()
+		return
+	}
+
 	log.SetOutput(os.Stdout)
 
 	openBrowser := flag.Bool("open", true, "open the default browser with one-time auto-login after start (use -open=false on headless hosts)")
@@ -238,4 +246,27 @@ func ensureFirstAdmin(cfg *config.Config, dir string) error {
 	log.Printf("console: FIRST RUN: created user 'admin' with %s password", source)
 	log.Printf("console: change it after first login (see README)")
 	return nil
+}
+
+// runMCP backs the "mcp" subcommand: load config + store, build the server
+// (same guards as HTTP mode), then serve the MCP stdio brain protocol until
+// stdin closes. Logs go to stderr — stdout is the RPC channel.
+func runMCP() {
+	log.SetOutput(os.Stderr)
+	dir := config.DefaultDir()
+	cfg, err := config.Load(dir)
+	if err != nil {
+		log.Fatalf("console: %v", err)
+	}
+	st, err := store.Open(filepath.Join(cfg.Server.DataDir, "console.db"))
+	if err != nil {
+		log.Fatalf("console: %v", err)
+	}
+	defer st.Close()
+	if len(cfg.Agent) == 0 {
+		cfg.Agent = config.DefaultAgents()
+	}
+	srv := server.New(cfg, dir, st)
+	log.Printf("mcp: brain server ready (tools: list_agents, run_agent, read_artifact, team_status, create_team_member)")
+	server.ServeMCPBrain(srv)
 }
