@@ -606,6 +606,26 @@ func (s *Server) handleSaveProvider(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider id required"})
 		return
 	}
+	// Validate + normalize before persisting: a bad base URL or a typo'd
+	// default model must fail here with an inline error, not on first chat.
+	base, err := normalizeProviderURL(&prov)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	prov.BaseURL = base
+	warning := ""
+	if apiKey, kerr := config.GetAPIKey(providerKeyID(&prov)); kerr == nil {
+		warning, err = verifyDefaultModel(r.Context(), &prov, s.models, apiKey)
+		if err != nil {
+			log.Printf("server: provider %s save rejected: %v", prov.ID, err)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		warning = fmt.Sprintf("model not verified — API key %q not in keychain", providerKeyID(&prov))
+		log.Printf("server: provider %s saved without model verification: %v", prov.ID, kerr)
+	}
 	replaced := false
 	for i := range s.cfg.Provider {
 		if s.cfg.Provider[i].ID == prov.ID {
@@ -621,7 +641,7 @@ func (s *Server) handleSaveProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("server: provider %s saved", prov.ID)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "warning": warning, "base_url": prov.BaseURL})
 }
 
 // handleDeleteProvider removes one console provider entry (config.json).
@@ -791,6 +811,14 @@ func (s *Server) handleTestCall(w http.ResponseWriter, r *http.Request) {
 func modelBaseURL(p *config.Provider) string {
 	switch p.Type {
 	case config.ProviderGateway:
+		// Use the provider's own base URL (normalized to the /v1 root);
+		// only fall back to the local default when it is unset.
+		if u := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/"); u != "" {
+			if !strings.HasSuffix(u, "/v1") {
+				return u + "/v1"
+			}
+			return u
+		}
 		return "http://127.0.0.1:11432/v1"
 	case config.ProviderAnthropic:
 		base := strings.TrimRight(p.BaseURL, "/")
