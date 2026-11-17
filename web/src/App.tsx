@@ -642,6 +642,10 @@ function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
+                // IME safety: while the input method is composing (e.g.
+                // typing English inside a Chinese IME), Enter confirms the
+                // composition — it must never send the message.
+                if (e.nativeEvent.isComposing) return;
                 if (mentionOptions.length > 0 && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) {
                   e.preventDefault();
                   insertMention(mentionOptions[0].name);
@@ -699,7 +703,7 @@ function AgentsPage() {
           <p className="text-sm text-zinc-500">
             Headless adapters only — each run is one task in the chosen workdir. Agents missing from PATH are grayed out.
           </p>
-          {agents.map((a) => (
+          {agents.filter((a) => !a.is_worker).map((a) => (
             <Card key={a.name} className={`flex items-center justify-between p-4 ${!a.detected ? "opacity-50" : ""}`}>
               <div>
                 <p className="font-medium flex items-center gap-2">

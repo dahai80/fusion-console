@@ -22,6 +22,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/dahai80/fusion-console/internal/config"
 )
 
 // notesInstruction is prepended to every worker task under the notes and
@@ -35,6 +37,18 @@ func (s *Server) workerMemoryMode() string {
 		return "notes"
 	}
 	return m
+}
+
+// workerMemoryModeFor resolves the effective memory mode for one dispatch:
+// the worker's own override when set, else the global orchestrator default.
+func (s *Server) workerMemoryModeFor(wk *config.WorkerConfig) string {
+	if wk != nil {
+		switch wk.Memory {
+		case "notes", "fusion-memory", "off":
+			return wk.Memory
+		}
+	}
+	return s.workerMemoryMode()
 }
 
 // memoryServerURL resolves the fusion-memory hub endpoint (env override for
@@ -152,12 +166,12 @@ func (s *Server) commitWorkerMemory(ctx context.Context, workerID, task, result 
 	log.Printf("server: worker memory committed worker=%s", workerID)
 }
 
-// prefixWorkerTask composes the final task text per the configured memory
-// mode. Always returns the notes instruction except in "off" mode — the
+// prefixWorkerTask composes the final task text per the given memory mode.
+// Always returns the notes instruction except in "off" mode — the
 // workspace convention stays on even when the hub is used, because hub
 // recall covers semantics while NOTES.md keeps the workspace-local state.
-func (s *Server) prefixWorkerTask(ctx context.Context, workerID, task string) string {
-	switch s.workerMemoryMode() {
+func (s *Server) prefixWorkerTask(ctx context.Context, workerID, task, mode string) string {
+	switch mode {
 	case "off":
 		return task
 	case "fusion-memory":

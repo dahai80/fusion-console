@@ -17,23 +17,47 @@ your chat becomes the **brain**: it gets native tool calls — `list_agents`,
 `run_agent`, `read_artifact` — and decides on its own when to dispatch a task
 to a headless agent, collect the result, verify artifacts, and report back
 (bounded at 8 planner iterations per turn). There is no separate "brain agent"
-to configure — the brain is the model you are chatting with.
+to configure — the brain is the model you are chatting with. Alternatively set
+the brain to **claude code**: each orchestrated turn then runs a `claude` CLI
+session in the brain work dir with the same dispatch tools exposed over MCP
+(`fusion-console mcp` subcommand); cost rows are booked as `brain:claude`.
+Its work
+directory (artifact sandbox for `read_artifact` and the worktree parent) is
+configurable in the Workers tab; the default is `~/.fusion-console/agents`.
+The brain can also be bound to a code source: a GitHub URL (cloned into the
+brain work dir and fast-forward-pulled before every dispatch, local changes
+never overwritten) or a local repo path (used as the brain workspace as-is).
 
-Each worker agent runs in its own directory, in one of two isolation modes:
+Teaching the brain your conventions: `brain_context_files` (Workers tab,
+one path per line) are injected into the planner prompt, capped at 12 KB —
+point them at a working-conventions doc and a repo inventory. A claude code
+brain additionally reads `CLAUDE.md` from its work dir, so on a fresh install
+copying your conventions file into the brain work dir is enough. Workers are
+repo-bound: the console rejects dispatches that target a repository the
+worker is not bound to; cross-repo work should be filed as an issue in that
+repo instead.
 
-- **standalone** (default) — a fixed dedicated workspace per agent, shared
-  across tasks
+Each worker agent runs in its own directory, in one of three source modes:
+
+- **standalone** — a fixed dedicated workspace per agent, shared across tasks
 - **worktree** — each dispatch creates a fresh detached `git worktree` of a
-  target repo (whitelist-enforced) and works there
+  local repo (whitelist-enforced) and works there
+- **github** — the worker is bound to a GitHub repository URL: the first
+  dispatch clones it into the work dir, later dispatches fetch and
+  fast-forward to the latest commit; a dirty tree or local commits are
+  reported as a warning and never overwritten
 
 Guardrails are always on: workers can be disabled individually, per-worker
 budget caps, one agent subprocess at a time, every dispatch passes the
 fusion-harness tool-admission chain (fail-closed when the sidecar is down).
 In `confirm` mode every `run_agent` dispatch waits for your approval in the
 browser; `auto` mode dispatches immediately; `off` disables the tools.
-Each worker can also be pinned to a configured provider (wizard Workers step):
-the console injects `ANTHROPIC_*` or `OPENAI_*` env vars from the keychain
-key, overriding the CLI's own login; leave it unset to keep the CLI default.
+Each worker can also be pinned to a configured provider plus a model override
+(wizard Workers step): the console injects `ANTHROPIC_*` or `OPENAI_*` env
+vars from the keychain key, overriding the CLI's own login; leave it unset to
+keep the CLI default. Worker memory defaults to the zero-dependency `notes`
+convention (NOTES.md in the workspace) and can be switched per worker to the
+fusion-memory hub or off.
 
 ## Quickstart (3 commands)
 

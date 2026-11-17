@@ -256,13 +256,15 @@ export type WorkerSettings = {
   name?: string;
   agent: string;
   enabled: boolean;
-  isolation: "worktree" | "standalone";
+  isolation: "github" | "worktree" | "standalone";
   permission_mode: string;
   max_budget_usd: number;
   provider_id: string;
   model?: string;
   work_dir: string;
   repo?: string;
+  repo_branch?: string;
+  memory?: string;
 };
 
 export type UsageRange = "today" | "week" | "month" | "all";
@@ -347,6 +349,11 @@ export type Orchestrator = {
   workers: WorkerSettings[];
   configured: boolean;
   worker_memory?: "notes" | "fusion-memory" | "off";
+  brain_work_dir?: string;
+  brain_repo?: string;
+  brain_repo_branch?: string;
+  brain_mode?: "chat" | "agent";
+  brain_context_files?: string[];
 };
 
 // streamPOST performs a POST that yields SSE "data:" JSON events.

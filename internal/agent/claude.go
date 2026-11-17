@@ -37,6 +37,7 @@ func (a ClaudeCompatAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Even
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
+	args = append(args, opts.ExtraArgs...)
 	_, stream, err := launch(ctx, opts, command, args, false, parseClaudeJSON)
 	return stream, err
 }
