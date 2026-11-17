@@ -380,6 +380,29 @@ web/                  React + Tailwind SPA source
 deploy/               launchd / systemd / schtasks + Tailscale guide
 ```
 
+## FAQ
+
+### Worker does not start: the work dir looks fine but the agent gets a literal `～/...` directory
+
+Typing a work dir like `~/fusion/fusion-site` with a Chinese IME often turns
+the ASCII `~` into a full-width `～` (and `~foo` without the slash never
+expands either). The console only expands a leading ASCII `~/`, so the agent
+receives a literal directory named `～/...` relative to the server cwd and
+appears to "lose" its workspace. **Always paste work dirs as absolute paths**
+(`/Users/<you>/fusion/fusion-site`, `C:\work\fusion-site`) — or at least an
+ASCII `~/...` — and check the Workers tab row if a worker keeps starting in
+the wrong place.
+
+### Worker stalls or "does nothing": `permission_mode` is too restrictive for headless runs
+
+Workers run headless — nobody is at the terminal to answer prompts. The
+default `acceptEdits` only auto-approves file edits; anything else that needs
+confirmation (shell commands, network tools, depending on the CLI) blocks the
+run until the budget kills it. For unattended workers set
+**`permission_mode: bypassPermissions`** (Workers tab → worker detail). Keep
+the per-worker budget cap as the real safety boundary, and prefer `confirm`
+orchestration mode when you want to approve dispatches yourself.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).

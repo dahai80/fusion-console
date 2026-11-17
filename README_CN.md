@@ -237,6 +237,26 @@ web/                  React + Tailwind SPA 源码
 deploy/               launchd / systemd / schtasks + Tailscale 指南
 ```
 
+## 常见问题（FAQ）
+
+### Worker 启动后目录不对：work_dir 填了全角 `～/...`
+
+用中文输入法输入 `~/fusion/fusion-site` 时，ASCII `~` 经常被自动变成全角
+`～`（另外 `~foo` 这种不带斜杠的写法也不会展开）。控制台只展开行首的 ASCII
+`~/`，所以 agent 收到的是字面量目录 `～/...`（相对服务端 cwd），看起来就像
+"丢了工作目录"。**work_dir 请直接粘贴绝对路径**
+（`/Users/<you>/fusion/fusion-site`、`C:\work\fusion-site`），至少也要用
+ASCII `~/...`；worker 反复跑错位置时先去 Workers 页检查这一行。
+
+### Worker 卡住或"什么都不做"：`permission_mode` 对无人值守运行太严格
+
+Worker 是无人值守运行的，没人守在终端旁确认。默认 `acceptEdits` 只自动放行
+文件编辑，其他需要确认的操作（shell 命令、网络工具等，取决于具体 CLI）会把
+整个 run 卡住，直到预算熔断。无人值守的 worker 请在
+Workers 页 → worker 详情里把 **`permission_mode` 设为 `bypassPermissions`**，
+并把每个 worker 的预算上限当作真正的安全边界；想人工审批派活时，编排模式
+保持 `confirm`。
+
 ## 许可
 
 Apache License 2.0 — 见 [LICENSE](LICENSE)。
