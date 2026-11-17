@@ -16,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   KeyRound,
+  Loader2,
   Network,
   Pencil,
   Trash2,
@@ -303,6 +304,7 @@ function ChatPage() {
   const [brainModel, setBrainModel] = useState("");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [input, setInput] = useState("");
+  const [orchestrate, setOrchestrate] = useState(true);
   const [busy, setBusy] = useState(false);
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
   const [err, setErr] = useState("");
@@ -427,7 +429,7 @@ function ChatPage() {
       }
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: text, orchestrate: true }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: text, orchestrate }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -557,6 +559,17 @@ function ChatPage() {
 
       <div className="flex flex-1 flex-col min-w-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
+          <button
+            onClick={() => setOrchestrate((v) => !v)}
+            title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
+            className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors ${
+              orchestrate
+                ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-500"
+                : "border-zinc-200/80 text-zinc-400 hover:text-zinc-600 dark:border-zinc-800 dark:hover:text-zinc-300"
+            }`}
+          >
+            <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
+          </button>
           <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="The brain model: fusion-gateway routes chat to this model (fed by /v1/models)">
             <Brain size={14} className="text-indigo-500" /> brain
           </label>
@@ -609,6 +622,11 @@ function ChatPage() {
               </div>
             </div>
           ))}
+          {busy && (
+            <div className="flex items-center gap-2 px-4 py-2 text-xs text-zinc-400">
+              <Loader2 size={14} className="animate-spin text-indigo-500" /> working…
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
 
