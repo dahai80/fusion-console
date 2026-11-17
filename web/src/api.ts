@@ -167,7 +167,7 @@ export const api = {
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
   teamView: () => req<TeamSnapshot>("/api/team/view"),
   teamAgents: () => req<{ agents: Record<string, any>[] }>("/api/team/agents"),
-  teamOp: (body: { op: string; task_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[] }) =>
+  teamOp: (body: { op: string; task_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean }) =>
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
   codeInstall: (agent: string) =>
@@ -190,6 +190,17 @@ export type TeamSnapshot = {
   limits?: Record<string, any>;
   brief_warnings: Record<string, { item: string; fix: string }[]>;
   alerts: string[];
+  lifecycle?: string;
+};
+
+// teams.lead_status result (lead loop on the daemon, issue #14).
+export type LeadStatus = {
+  running: boolean;
+  lead_id?: string;
+  round?: number;
+  n_stalls?: number;
+  replan_count?: number;
+  last_verdict?: string;
 };
 
 export type FailureRow = {

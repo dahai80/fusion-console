@@ -30,6 +30,7 @@ type teamSnapshot struct {
 	Limits    map[string]any            `json:"limits"`
 	Brief     map[string][]briefWarning `json:"brief_warnings"` // task_id -> warnings
 	Alerts    []string                  `json:"alerts"`
+	Lifecycle string                    `json:"lifecycle,omitempty"` // ACTIVE / PAUSED / ... from teams.status
 }
 
 // teamDialer holds the mutable client state (JWT cache + snapshot).
@@ -189,6 +190,14 @@ func (s *Server) pollTeam() *teamSnapshot {
 	}
 	if res, err := teamRPC(studioSocketPath(), jwt, "team.get_limits", map[string]any{}); err == nil {
 		snap.Limits = res
+	}
+	// Team lifecycle (ACTIVE/PAUSED/...) drives the pause/resume/disband
+	// controls. The daemon answers {"status":"error"} for an unregistered
+	// team — that just means no lifecycle yet, not an observer failure.
+	if res, err := teamRPC(studioSocketPath(), jwt, "teams.status", map[string]any{"team": team}); err == nil {
+		if res["status"] == "ok" {
+			snap.Lifecycle, _ = res["lifecycle"].(string)
+		}
 	}
 
 	// Brief quality panel: reuse the #4 checker on every task's description —
