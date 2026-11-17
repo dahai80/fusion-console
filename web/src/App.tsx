@@ -322,6 +322,7 @@ function ChatPage() {
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
   const [err, setErr] = useState("");
   const [unread, setUnread] = useState<Record<string, number>>({});
+const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const resolveApproval = async (ok: boolean) => {
@@ -375,6 +376,16 @@ function ChatPage() {
         const r = await api.dispatches();
         if (stop) return;
         setUnread(r.unread_by_conv ?? {});
+        const hasActiveBg = (r.dispatches ?? []).some((d) => d.status === "running" || d.status === "queued");
+        if (!hasActiveBg) {
+          try {
+            const ws = await api.workersStatus();
+            if (stop) return;
+            setWorkingWorkers((ws.workers ?? []).filter((w) => w.busy).map((w) => w.name));
+          } catch { /* ignore */ }
+        } else {
+          setWorkingWorkers([]);
+        }
         if (active && !busy) {
           const mr = await api.messages(active.ID);
           const fresh = (mr.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta }));
@@ -727,6 +738,12 @@ function ChatPage() {
           {busy && (
             <div className="flex items-center gap-2 px-4 py-2 text-xs text-zinc-400">
               <Loader2 size={14} className="animate-spin text-indigo-500" /> working…
+            </div>
+          )}
+          {!busy && workingWorkers.length > 0 && (
+            <div className="flex items-center gap-2 px-4 py-2 text-xs text-zinc-400">
+              <Loader2 size={14} className="animate-spin text-indigo-500" />
+              {workingWorkers.length} agent{workingWorkers.length > 1 ? "s" : ""} working in background: {workingWorkers.join(", ")}
             </div>
           )}
           <div ref={bottomRef} />
