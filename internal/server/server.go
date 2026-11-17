@@ -109,6 +109,7 @@ func (s *Server) routes() {
 	m.HandleFunc("PATCH /api/conversations/{id}", s.auth.Require(s.handleRenameConversation))
 	m.HandleFunc("POST /api/chat", s.auth.Require(s.handleChat))
 	m.HandleFunc("POST /api/agent/run", s.auth.Require(s.handleAgentRun))
+	m.HandleFunc("POST /api/attachments", s.auth.Require(s.handleAttachmentUpload))
 	m.HandleFunc("GET /api/agents", s.auth.Require(s.handleAgents))
 
 	m.HandleFunc("GET /api/settings/providers", s.auth.Require(s.handleListProviders))

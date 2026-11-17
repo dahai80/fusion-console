@@ -43,8 +43,10 @@ export type Message = {
 };
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  // FormData bodies must keep the browser-generated multipart Content-Type.
+  const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
+    headers: isForm ? {} : { "Content-Type": "application/json" },
     credentials: "same-origin",
     ...init,
   });
@@ -159,6 +161,11 @@ export const api = {
   ragSetEnabled: (enabled: boolean) =>
     req<{ enabled: boolean }>("/api/rag/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
   workersStatus: () => req<{ workers: WorkerStatus[] }>("/api/workers/status"),
+  uploadAttachment: (file: File) =>
+    req<{ name: string; size: number; stored: string; text?: string }>("/api/attachments", {
+      method: "POST",
+      body: (() => { const f = new FormData(); f.append("file", file); return f; })(),
+    }),
   dispatches: () => req<{ dispatches: DispatchRun[]; unread_by_conv: Record<string, number> }>("/api/dispatches"),
   ackDispatches: (conversationId: number) =>
     req<{ ok: boolean }>("/api/dispatches/ack", { method: "POST", body: JSON.stringify({ conversation_id: conversationId }) }),

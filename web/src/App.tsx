@@ -20,7 +20,9 @@ import {
   RefreshCw,
   KeyRound,
   Loader2,
+  Mic,
   Network,
+  Paperclip,
   Pencil,
   Trash2,
   Download,
@@ -31,7 +33,7 @@ Code2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider } from "./api";
+import { api, streamPOST, type AgentInfo, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -307,6 +309,11 @@ function ChatPage() {
   const [brainModel, setBrainModel] = useState("");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<{ name: string; size: number; stored: string; text?: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [listening, setListening] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const recogRef = useRef<any>(null);
   const [orchestrate, setOrchestrate] = useState(true);
   const [busy, setBusy] = useState(false);
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
@@ -428,9 +435,68 @@ function ChatPage() {
     }
   };
 
+  const pickFiles = () => fileInputRef.current?.click();
+  const onFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const f of Array.from(files)) {
+        const r = await api.uploadAttachment(f);
+        setAttachments((a) => [...a, r]);
+      }
+    } catch (e) {
+      console.error("attachment upload failed", e);
+      setErr((e as Error).message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  // Voice dictation via the browser Web Speech API (Chrome/Edge, on-device).
+  // A local fusion-speech daemon is the fallback path later — the button
+  // disables itself with a hint when the browser has no recognizer.
+  const voiceSupported = typeof window !== "undefined" &&
+    !!((window as any).webkitSpeechRecognition || (window as any).SpeechRecognition);
+  const toggleVoice = () => {
+    const SR = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    if (!SR) return;
+    if (listening) {
+      recogRef.current?.stop();
+      return;
+    }
+    const rec = new SR();
+    rec.lang = navigator.language || "zh-CN";
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.onresult = (ev: any) => {
+      let t = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) t += ev.results[i][0].transcript;
+      setInput((cur) => (cur ? cur + t : t));
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = (ev: any) => {
+      console.error("speech recognition error", ev?.error);
+      setListening(false);
+    };
+    recogRef.current = rec;
+    setListening(true);
+    rec.start();
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
+    // Attachments inline into the prompt: text previews become fenced blocks,
+    // binaries are referenced by name (the model asks for details if needed).
+    let full = text;
+    if (attachments.length > 0) {
+      const parts = attachments.map((a) =>
+        a.text != null
+          ? `\n\n--- attached: ${a.name} ---\n\`\`\`\n${a.text}\n\`\`\``
+          : `\n\n(attached file: ${a.name}, ${Math.max(1, Math.round(a.size / 1024))} KB — binary, not inlined)`);
+      full = text + parts.join("");
+    }
     // @agent mention hands the message off explicitly; anything else is a
     // plain brain chat turn (orchestration lets the brain dispatch workers).
     const mm = text.match(/@([a-zA-Z0-9_-]+)/);
@@ -446,6 +512,7 @@ function ChatPage() {
     setBusy(true);
     setErr("");
     setInput("");
+    setAttachments([]);
     try {
       let conv = active;
       if (!conv) {
@@ -454,9 +521,9 @@ function ChatPage() {
         setActive(conv);
         await refreshConvs();
       }
-      setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
+      setEntries((e) => [...e, { role: "user", content: full }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: text, orchestrate }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: full, orchestrate }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -686,7 +753,23 @@ function ChatPage() {
               ))}
             </div>
           )}
+          {attachments.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {attachments.map((a, i) => (
+                <span key={a.stored + i} className="flex items-center gap-1 rounded-lg bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                  <Paperclip size={10} /> {a.name}
+                  <button className="ml-0.5 text-zinc-400 hover:text-red-500"
+                    onClick={() => setAttachments((arr) => arr.filter((_, j) => j !== i))}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="flex gap-2">
+            <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => onFiles(e.target.files)} />
+            <Button variant="outline" className="self-end px-2.5" onClick={pickFiles} disabled={uploading || busy}
+              title="Attach files (text files are inlined into the message)">
+              {uploading ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}
+            </Button>
             <Textarea
               rows={2}
               value={input}
@@ -703,12 +786,17 @@ function ChatPage() {
                 }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               }}
-              placeholder="Message…  (@ to hand off to an agent)"
+              placeholder={listening ? "listening…" : "Message…  (@ to hand off to an agent)"}
             />
             <div className="flex flex-col gap-2">
               <Button onClick={send} disabled={busy || !input.trim()}
                 title={mentionedAgent ? `Run with ${mentionedAgent.name}` : "Send as chat"}>
                 {mentionedAgent ? <Bot size={16} /> : <Send size={16} />}
+              </Button>
+              <Button variant="outline" className="px-2.5" onClick={toggleVoice}
+                disabled={!voiceSupported || busy}
+                title={voiceSupported ? (listening ? "Stop dictation" : "Voice input (browser speech)") : "Voice input needs Chrome/Edge (fusion-speech integration pending)"}>
+                <Mic size={16} className={listening ? "animate-pulse text-red-500" : ""} />
               </Button>
             </div>
           </div>
@@ -725,6 +813,7 @@ function ChatPage() {
 function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
   const [runs, setRuns] = useState<DispatchRun[]>([]);
   const [convs, setConvs] = useState<Conversation[]>([]);
+  const [busyWorkers, setBusyWorkers] = useState<WorkerStatus[]>([]);
   useEffect(() => {
     const load = async () => {
       try {
@@ -734,6 +823,10 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
       try {
         const r = await api.conversations();
         setConvs(r.conversations ?? []);
+      } catch { /* ignore */ }
+      try {
+        const r = await api.workersStatus();
+        setBusyWorkers((r.workers ?? []).filter((w) => w.busy));
       } catch { /* ignore */ }
     };
     load();
@@ -794,10 +887,27 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
         </span>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto">
+        {/* Agent status strip: every worker with a live agent process, even
+            one recovered after a console restart (registry lost, process not). */}
+        {busyWorkers.length > 0 && (
+          <div className="space-y-1.5">
+            {busyWorkers.map((w) => (
+              <div key={w.name} className="flex items-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/5 px-2.5 py-2">
+                <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
+                <span className="truncate text-xs font-medium">{w.name}</span>
+                <span className="ml-auto shrink-0 text-[11px] text-indigo-600 dark:text-indigo-400">
+                  {typeof w.elapsed_s === "number" ? `${w.elapsed_s}s` : "working"}
+                </span>
+                {w.task && <p className="w-full truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={w.task}>{w.task}</p>}
+                {w.detail && <p className="w-full truncate text-[11px] text-zinc-400" title={w.detail}>{w.detail}</p>}
+              </div>
+            ))}
+          </div>
+        )}
         {running.map(row)}
         {queued.map(row)}
         {finished.map(row)}
-        {runs.length === 0 && (
+        {runs.length === 0 && busyWorkers.length === 0 && (
           <p className="px-1 pt-4 text-center text-xs text-zinc-400">
             No background runs yet. The brain dispatches with background=true for long tasks.
           </p>

@@ -852,6 +852,20 @@ func (s *Server) handleWorkersStatus(w http.ResponseWriter, r *http.Request) {
 		for k, v := range s.runs.snapshot(id) {
 			row[k] = v
 		}
+		// Registry miss is not proof of idle: agent subprocesses survive a
+		// console restart, so check for a live agent process sitting in the
+		// worker's work dir and report busy when one is found.
+		if busy, _ := row["busy"].(bool); !busy && w.Enabled {
+			workDir := s.cfg.ResolveWorkerDir(w)
+			orphans := discoverOrphans()
+			if pid, ok := orphans[workDir]; ok {
+				row["busy"] = true
+				row["task"] = "in-flight task (registry lost on restart)"
+				if d := fmtOrphanDetail(pid); d != "" {
+					row["detail"] = d
+				}
+			}
+		}
 		if sp, ok := spend["agent:"+id]; ok {
 			for k, v := range sp {
 				row[k] = v
