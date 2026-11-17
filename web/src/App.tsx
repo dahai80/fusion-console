@@ -3,6 +3,7 @@ import {
   Bot,
   CheckCircle,
   Clock,
+  Copy,
   Cpu,
   Brain,
   ChevronDown,
@@ -840,9 +841,36 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
     const c = convs.find((x) => x.ID === r.conversation_id);
     if (c) onOpen(c);
   };
+  // copyRun puts the full card content on the clipboard for bug reports —
+  // one click, no manual text selection across truncated lines.
+  const copyRun = async (r: DispatchRun | WorkerStatus, kind: "run" | "worker") => {
+    const lines = kind === "run"
+      ? [`run #${(r as DispatchRun).id} (${(r as DispatchRun).status})`, `worker: ${(r as DispatchRun).worker} (${(r as DispatchRun).agent})`,
+         `task: ${(r as DispatchRun).task}`, `elapsed: ${(r as DispatchRun).elapsed_s}s · cost: $${(r as DispatchRun).cost_usd.toFixed(4)}`,
+         (r as DispatchRun).detail ? `detail: ${(r as DispatchRun).detail}` : "",
+         (r as DispatchRun).error ? `error: ${(r as DispatchRun).error}` : "",
+         (r as DispatchRun).result ? `result: ${(r as DispatchRun).result}` : ""]
+      : [`worker: ${(r as WorkerStatus).name}`, `task: ${(r as WorkerStatus).task || ""}`,
+         `detail: ${(r as WorkerStatus).detail || ""}`, `elapsed: ${(r as WorkerStatus).elapsed_s ?? "?"}s`];
+    try {
+      await navigator.clipboard.writeText(lines.filter(Boolean).join("\n"));
+      setCopied(kind === "run" ? `run:${(r as DispatchRun).id}` : `worker:${(r as WorkerStatus).name}`);
+      setTimeout(() => setCopied(""), 1200);
+    } catch (e) {
+      console.error("copy failed", e);
+    }
+  };
+  const [copied, setCopied] = useState("");
+  const copyBtn = (key: string, onClick: () => void) => (
+    <button onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-600 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
+      title="Copy card details">
+      {copied === key ? <CheckCircle size={12} className="text-emerald-500" /> : <Copy size={12} />}
+    </button>
+  );
   const row = (r: DispatchRun) => (
-    <button key={r.id} onClick={() => openRun(r)} disabled={r.conversation_id === 0}
-      className={`w-full rounded-xl border p-2.5 text-left transition-colors ${
+    <div key={r.id} onClick={() => openRun(r)}
+      className={`w-full rounded-xl border p-2.5 text-left transition-colors select-text ${
         r.status === "running"
           ? "border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10"
           : r.status === "done"
@@ -868,15 +896,19 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
             : r.status === "done" ? `done · $${r.cost_usd.toFixed(2)}`
             : "error"}
         </span>
+        {copyBtn(`run:${r.id}`, () => copyRun(r, "run"))}
       </div>
-      <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
+      <p className="mt-1 break-words text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
       {(r.status === "running" || r.status === "queued") && r.detail && (
-        <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
+        <p className="mt-0.5 break-words text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
       )}
       {r.status === "error" && r.error && (
         <p className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-red-500/5 p-1.5 text-[11px] leading-4 text-red-500">{r.error}</p>
       )}
-    </button>
+      {r.status === "done" && r.result && (
+        <p className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-emerald-500/5 p-1.5 text-[11px] leading-4 text-zinc-600 dark:text-zinc-300">{r.result}</p>
+      )}
+    </div>
   );
   return (
     <aside className="hidden lg:flex w-72 shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40 p-3">
@@ -892,14 +924,17 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
         {busyWorkers.length > 0 && (
           <div className="space-y-1.5">
             {busyWorkers.map((w) => (
-              <div key={w.name} className="flex items-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/5 px-2.5 py-2">
-                <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
-                <span className="truncate text-xs font-medium">{w.name}</span>
-                <span className="ml-auto shrink-0 text-[11px] text-indigo-600 dark:text-indigo-400">
-                  {typeof w.elapsed_s === "number" ? `${w.elapsed_s}s` : "working"}
-                </span>
-                {w.task && <p className="w-full truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={w.task}>{w.task}</p>}
-                {w.detail && <p className="w-full truncate text-[11px] text-zinc-400" title={w.detail}>{w.detail}</p>}
+              <div key={w.name} className="select-text rounded-xl border border-indigo-500/30 bg-indigo-500/5 px-2.5 py-2">
+                <div className="flex items-center gap-2">
+                  <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
+                  <span className="truncate text-xs font-medium">{w.name}</span>
+                  <span className="ml-auto shrink-0 text-[11px] text-indigo-600 dark:text-indigo-400">
+                    {typeof w.elapsed_s === "number" ? `${w.elapsed_s}s` : "working"}
+                  </span>
+                  {copyBtn(`worker:${w.name}`, () => copyRun(w, "worker"))}
+                </div>
+                {w.task && <p className="mt-0.5 break-words text-[11px] text-zinc-500 dark:text-zinc-400" title={w.task}>{w.task}</p>}
+                {w.detail && <p className="break-words text-[11px] text-zinc-400" title={w.detail}>{w.detail}</p>}
               </div>
             ))}
           </div>
