@@ -37,6 +37,15 @@ func (a ClaudeCompatAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Even
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
+	// Provider override: the user's ~/.claude/settings.json env block outranks
+	// the process env, so forced ANTHROPIC_* bindings must ride a --settings
+	// file (higher precedence, per-invocation) instead of the env alone.
+	if settingsPath, cleanup, err := claudeSettingsOverride(opts.Env); err != nil {
+		return nil, err
+	} else if settingsPath != "" {
+		args = append(args, "--settings", settingsPath)
+		cleanupOnContext(ctx, cleanup)
+	}
 	args = append(args, opts.ExtraArgs...)
 	_, stream, err := launch(ctx, opts, command, args, false, parseClaudeJSON)
 	return stream, err
