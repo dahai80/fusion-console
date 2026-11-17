@@ -136,7 +136,7 @@ func startGateway(ctx context.Context) (string, error) {
 	cmd := exec.Command(bin, "-config", cfgPath)
 	cmd.Stdout = logF
 	cmd.Stderr = logF
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // detach: console restarts don't kill it
+	cmd.SysProcAttr = detachProcAttr() // detach: console restarts don't kill it
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("gateway start: %w", err)
 	}
