@@ -75,6 +75,61 @@ runtime logic.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+### 4.1 Registration form logic, templates and CLI-binding hints
+
+Code-verified gaps this section closes: `handleSaveProvider` validates only
+non-empty ID (no URL format, no /v1 handling, no model-existence check — the
+broken `iff/small` default and atlascode's silent 404 both slipped through
+this way); CLI binding failures degrade silently to server logs ("provider
+not found, using CLI default") so users never learn why an agent ignores
+their model.
+
+**A. Manual-fill form (custom sources — the path with no prefill safety net):**
+
+1. Stepped form: endpoint type → base URL → key → model pool → verify → save.
+2. Type-aware templates:
+   - OpenAI-compatible: placeholder `https://api.example.com/v1`, hint "most
+     OpenAI-compatible services end with /v1".
+   - Anthropic-compatible: placeholder `https://api.anthropic.com`, hint
+     "no /v1 — the Anthropic wire protocol appends /v1/messages itself".
+   - Provider id auto-slugged from name, duplicate ids rejected.
+3. URL normalization + validation (client and server):
+   - must be http(s), trailing slash trimmed;
+   - openai type missing `/v1` → non-blocking warning (some gateways don't
+     use it — the testcall decides);
+   - anthropic type with `/v1` → warning to remove it.
+4. Key field never echoes material — shows "stored in keychain / not stored";
+   key_id follows the existing `providerKeyID` convention, invisible to the
+   user.
+5. Model pool: "fetch from endpoint" (existing /api/settings/models), manual
+   add/remove, pool head = default model (reordered by drag).
+6. Save requires a passing testcall (skippable with a warning). Failure maps
+   to actionable text: 401/403 → key invalid; 404 → path wrong, check /v1;
+   timeout/refused → unreachable, check address/service (gateway presets say
+   "start it first").
+7. Edit view lists current consumers (chat default, agents, workers bound to
+   this source); delete warns when run history exists and cleans the
+   keychain entry.
+
+**B. CLI-binding templates and visibility (the forcing chain made honest):**
+
+1. The Agents page shows, per CLI, exactly what provider binding does:
+   - claude/fusion-code (anthropic type): `ANTHROPIC_BASE_URL` +
+     `ANTHROPIC_MODEL` env, no `--model` flag (historical contract);
+   - codex/opencode (openai type): env injection;
+   - atlascode: settings.json merge-write with full `provider/model` refs and
+     the /v1 base-URL quirk stated explicitly (verified 2026-11-16).
+2. Type mismatches are caught at bind time in the UI (atlascode requires an
+   OpenAI-compatible source), not discovered as a silent runtime fallback.
+3. Runtime binding failures become visible: when a dispatch falls back
+   (source missing/disabled/no key/type mismatch), the run emits an
+   EventNotice with the reason — reusing the PR #9 notice channel — instead
+   of only a server log line.
+4. Template/hint text is anchored by tests: the existing
+   `atlasconfig_test.go` / `TestProviderEnv` coverage extends to assert the
+   documented env/flag behavior matches what the code injects, so hints
+   cannot rot silently.
+
 ## 5. Risks and their handling (from the coupling review)
 
 **High:**
