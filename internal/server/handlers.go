@@ -438,9 +438,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One agent subprocess at a time — office host stays predictable.
-	s.agentRuns.Lock()
-	defer s.agentRuns.Unlock()
+	// No agentRuns lock on the interactive path: background dispatches hold
+	// it for their whole run, and a manual agent run must not queue behind
+	// them. The lock only serializes background workers with each other.
 
 	flusher := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")

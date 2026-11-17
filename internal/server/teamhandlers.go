@@ -8,6 +8,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -188,4 +189,72 @@ func (s *Server) handleTeamOp(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("server: team op %s executed (team=%s task=%s)", in.Op, in.Team, in.TaskID)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// teamSend proxies teams.send for the chat-side brain tool: one TeamMessage
+// into the team mailbox. Sender and recipient must be existing team members
+// (kernel-validated) — register one with create_team_member first if needed.
+// Non-draining: this only delivers; read replies back with teamInbox.
+func (s *Server) teamSend(team, from, to, body, msgType, replyTo string, mentions []string) (string, string, error) {
+	if from == "" || to == "" {
+		return "", "", fmt.Errorf("team send needs both from and to (existing member names)")
+	}
+	if body == "" {
+		return "", "", fmt.Errorf("team send body is required")
+	}
+	jwt, err := s.teamEnsureJWT()
+	if err != nil {
+		return "", "", err
+	}
+	if msgType == "" {
+		msgType = "text"
+	}
+	params := map[string]any{"team": team, "type": msgType, "from": from, "to": to, "body": body}
+	if replyTo != "" {
+		params["reply_to"] = replyTo
+	}
+	if len(mentions) > 0 {
+		params["mentions"] = mentions
+	}
+	res, err := teamRPC(studioSocketPath(), jwt, "teams.send", params)
+	if err != nil {
+		return "", "", err
+	}
+	if res["status"] == "error" {
+		msg, _ := res["message"].(string)
+		return "", "", fmt.Errorf("%s", msg)
+	}
+	msgID, _ := res["msg_id"].(string)
+	return msgID, to, nil
+}
+
+// teamInbox proxies teams.inbox — the non-draining message list for one
+// member (messages stay until the kernel-side consumer claims them).
+func (s *Server) teamInbox(team, member string) ([]map[string]any, error) {
+	if member == "" {
+		return nil, fmt.Errorf("team inbox needs a member name")
+	}
+	jwt, err := s.teamEnsureJWT()
+	if err != nil {
+		return nil, err
+	}
+	res, err := teamRPC(studioSocketPath(), jwt, "teams.inbox", map[string]any{"team": team, "member": member})
+	if err != nil {
+		return nil, err
+	}
+	if res["status"] == "error" {
+		msg, _ := res["message"].(string)
+		return nil, fmt.Errorf("%s", msg)
+	}
+	raw, ok := res["messages"].([]any)
+	if !ok {
+		return []map[string]any{}, nil
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, m := range raw {
+		if mm, ok := m.(map[string]any); ok {
+			out = append(out, mm)
+		}
+	}
+	return out, nil
 }
