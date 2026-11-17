@@ -127,13 +127,13 @@ export function CodePage() {
             <>
               <p className="text-sm text-zinc-600 dark:text-zinc-300">
                 {isFusion
-                  ? "fusion-code is the local headless coding agent (TypeScript/Bun). Install builds the CLI and its web console; the menu then manages service start/stop and the same-origin proxied web GUI."
+                  ? "fusion-code is the local headless coding agent. Install puts the prebuilt fusion-code CLI on PATH (Homebrew first, install.sh fallback, source build last); dispatch it from the Agents page (@-mention or run form)."
                   : `${selRow.name} is a headless coding agent CLI. Install puts it on PATH via npm; dispatch it from the Agents page (@-mention or run form).`}
               </p>
               <p className="text-xs text-zinc-400">
                 Not downloaded by default.{" "}
                 {isFusion
-                  ? "Install fetches the source from GitHub and builds with bun (bun required)."
+                  ? "Install uses Homebrew when available (sha256-pinned release binaries), else the install.sh script — no bun needed."
                   : "Install runs npm install -g (npm required)."}
               </p>
               <Button onClick={() => action(() => api.codeInstall(sel), "install")} disabled={busy !== ""}>

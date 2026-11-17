@@ -4,6 +4,8 @@ import {
   CheckCircle,
   Clock,
   Copy,
+  Menu,
+  PanelRight,
   Cpu,
   Brain,
   ChevronDown,
@@ -38,6 +40,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, type AgentInfo, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
+import ModelsPage from "./ModelsPage";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
 import Dashboard from "./Dashboard";
@@ -47,7 +50,7 @@ import { CodePage } from "./CodePage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "code" | "team" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "models" | "rag" | "code" | "team" | "onboard";
 
 export default function App() {
   return (
@@ -109,12 +112,13 @@ function Shell() {
       <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} onWizard={() => setPage("onboard")} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
-          <Onboarding onDone={() => setPage("chat")} />
+          <Onboarding onDone={() => setPage("models")} />
         )}
         {page === "dashboard" && <Dashboard />}
         {page === "chat" && <ChatPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
+        {page === "models" && <ModelsPage />}
         {page === "rag" && <RagPage />}
 {page === "code" && <CodePage />}
         {page === "team" && <TeamPage />}
@@ -136,25 +140,27 @@ function TopBar({
   const tab = (id: Page, label: string, Icon: typeof Bot) => (
     <button
       onClick={() => setPage(id)}
-      className={`inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
+      className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
         page === id
           ? "bg-indigo-600 text-white shadow-sm"
           : "text-zinc-500 hover:bg-zinc-200/60 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
       }`}
     >
       <Icon size={16} />
-      {label}
+      {/* H5: icons only below sm — seven labeled tabs overflow a phone width */}
+      <span className="hidden sm:inline">{label}</span>
     </button>
   );
   return (
     <header className="flex items-center justify-between border-b border-zinc-200/80 dark:border-zinc-800 bg-white/60 dark:bg-zinc-900/60 px-4 py-2 backdrop-blur">
-      <div className="flex items-center gap-4">
-        <span className="font-semibold tracking-tight">fusion-console</span>
-        <nav className="flex gap-1">
+      <div className="flex min-w-0 items-center gap-4">
+        <span className="hidden shrink-0 font-semibold tracking-tight sm:inline">fusion-console</span>
+        <nav className="flex gap-1 overflow-x-auto">
           {tab("chat", "Chat", MessageSquare)}
           {tab("agents", "Agents", Bot)}
           {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("gateway", "Gateway", Network)}
+          {tab("models", "Models", Cpu)}
           {tab("rag", "Knowledge Base", Database)}
 {tab("code", "Coding Agent", Code2)}
           {tab("team", "Team", Users)}
@@ -308,8 +314,12 @@ function ChatPage() {
   const [active, setActive] = useState<Conversation | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [gwProvider, setGwProvider] = useState<Provider | null>(null);
-  const [gwModels, setGwModels] = useState<GatewayModelItem[]>([]);
-  const [brainModel, setBrainModel] = useState("");
+  const [providers, setProviders] = useState<Provider[]>([]);
+  // Per-conversation provider+model binding (persisted server-side). When no
+  // conversation is open yet the selection is held here and applied on send.
+  const [selProvider, setSelProvider] = useState("");
+  const [selModel, setSelModel] = useState("");
+  const [modelOpts, setModelOpts] = useState<string[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<{ name: string; size: number; stored: string; path: string }[]>([]);
@@ -322,6 +332,10 @@ function ChatPage() {
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
   const [err, setErr] = useState("");
   const [unread, setUnread] = useState<Record<string, number>>({});
+  // H5 (mobile) drawers: the conversation rail and the dispatch rail are
+  // hidden below md/lg — on phones they open as overlay drawers instead.
+  const [convDrawer, setConvDrawer] = useState(false);
+  const [dispatchDrawer, setDispatchDrawer] = useState(false);
 const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -343,25 +357,45 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   useEffect(() => {
     refreshConvs().catch(() => {});
     api.providers().then((r) => {
-      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled) ?? null;
+      const list = (r.providers ?? []).filter((p) => p.enabled);
+      setProviders(list);
+      const gw = list.find((p) => p.type === "gateway") ?? null;
       setGwProvider(gw);
-      if (!gw) return;
-      // Brain selector = model names from the gateway (/v1/models), matching
-      // the Gateway page brain card. Gateway unreachable: fall back to the
-      // provider's stored model so chat still works.
-      api.gatewayModels().then((m) => {
-        const items = m.items ?? [];
-        setGwModels(items);
-        setBrainModel((cur) => cur || (gw.model && items.some((i) => i.value === gw.model) ? gw.model : items[0]?.value || gw.model || ""));
-      }).catch(() => {
-        setGwModels(gw.model ? [{ id: gw.model, backend: "", value: gw.model, local: false }] : []);
-        setBrainModel((cur) => cur || gw.model || "");
-      });
+      // Default selection: the gateway provider, else the first enabled one.
+      setSelProvider((cur) => cur || gw?.id || list[0]?.id || "");
     }).catch(() => {});
     api.agents().then((r) => {
       setAgents(r.agents ?? []);
     }).catch(() => {});
   }, [refreshConvs]);
+
+  // Model options follow the selected provider's /v1/models; fall back to
+  // the provider's stored default when the endpoint is unreachable.
+  useEffect(() => {
+    if (!selProvider) return;
+    const prov = providers.find((p) => p.id === selProvider);
+    let stop = false;
+    api.models(selProvider).then((r) => {
+      if (stop) return;
+      const opts = r.models ?? [];
+      setModelOpts(opts.length ? opts : prov?.model ? [prov.model] : []);
+      setSelModel((cur) => (opts.includes(cur) ? cur : opts[0] || prov?.model || ""));
+    }).catch(() => {
+      if (stop) return;
+      setModelOpts(prov?.model ? [prov.model] : []);
+      setSelModel((cur) => cur || prov?.model || "");
+    });
+    return () => { stop = true; };
+  }, [selProvider, providers]);
+
+  // Opening a conversation adopts its persisted provider+model binding.
+  useEffect(() => {
+    if (!active) return;
+    if (active.ProviderID) {
+      setSelProvider(active.ProviderID);
+      if (active.Model) setSelModel(active.Model);
+    }
+  }, [active?.ID]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -422,6 +456,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const openConv = async (c: Conversation) => {
     setActive(c);
     setErr("");
+    setConvDrawer(false);
     const r = await api.messages(c.ID);
     setEntries((r.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta })));
     if (unread[c.ID] > 0) {
@@ -437,15 +472,30 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     await api.messages(r.id).catch(() => {});
   };
 
-  const changeBrain = async (model: string) => {
-    setBrainModel(model);
-    if (!gwProvider || !model) return;
-    try {
-      const updated = { ...gwProvider, model };
-      await api.saveProvider(updated);
-      setGwProvider(updated);
-    } catch (ex) {
-      setErr((ex as Error).message);
+  // Per-conversation provider+model selection. Persisted on the open
+  // conversation; held in state otherwise and applied on the next send.
+  // Never writes provider.Model — the provider default is owned by the
+  // Models page (single-owner rule, issue #15).
+  const changeProvider = async (pid: string) => {
+    setSelProvider(pid);
+    if (active) {
+      try {
+        await api.setConversationModel(active.ID, pid, selModel);
+        await refreshConvs();
+      } catch (ex) {
+        setErr((ex as Error).message);
+      }
+    }
+  };
+  const changeModel = async (m: string) => {
+    setSelModel(m);
+    if (active) {
+      try {
+        await api.setConversationModel(active.ID, selProvider, m);
+        await refreshConvs();
+      } catch (ex) {
+        setErr((ex as Error).message);
+      }
     }
   };
 
@@ -519,8 +569,8 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       await runAgentTask(text, mentioned.name);
       return;
     }
-    if (!gwProvider) {
-      setErr("no gateway provider — open the Gateway page and click Create API key first");
+    if (!gwProvider && !selProvider) {
+      setErr("no enabled provider — set one up on the Models page first");
       return;
     }
     setBusy(true);
@@ -533,16 +583,21 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         const r = await api.createConversation(text.slice(0, 40), "chat");
         conv = { ID: r.id, Title: text.slice(0, 40), Kind: "chat", User: "", AgentName: "", Workdir: "", CreatedAt: "" };
         setActive(conv);
+        // Persist the pre-conversation provider/model selection on first send.
+        if (selProvider) {
+          await api.setConversationModel(conv.ID, selProvider, selModel).catch(() => {});
+        }
         await refreshConvs();
       }
       setEntries((e) => [...e, { role: "user", content: full }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: full, orchestrate }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, provider_id: selProvider || gwProvider?.id, content: full, orchestrate }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
           const last = copy[copy.length - 1];
           if (type === "delta") last.content += (ev.text as string) ?? "";
+          else if (type === "notice") last.content += `\n\n> ℹ️ ${ev.text}\n`;
           else if (type === "approval") {
             setApproval({ id: (ev.id as string) ?? "", detail: (ev.detail as string) ?? "" });
             last.content += `\n\n> ⏸ awaiting your approval: ${ev.detail ?? ""}\n\n`;
@@ -623,7 +678,12 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
 
   return (
     <div className="flex h-full">
-      <aside className="hidden md:flex w-64 flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40">
+      {convDrawer && (
+        <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setConvDrawer(false)} />
+      )}
+      <aside
+        className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white md:static md:flex md:w-64 md:shadow-none md:bg-white/40 dark:bg-zinc-900 dark:md:bg-white/40`}
+      >
         <div className="p-3">
           <Button variant="outline" className="w-full" onClick={newChat}>
             <Plus size={14} /> New chat
@@ -673,6 +733,13 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       <div className="flex flex-1 flex-col min-w-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
           <button
+            onClick={() => setConvDrawer(true)}
+            title="Conversations"
+            className="md:hidden flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+          >
+            <Menu size={16} />
+          </button>
+          <button
             onClick={() => setOrchestrate((v) => !v)}
             title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
             className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors ${
@@ -683,19 +750,33 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           >
             <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
           </button>
-          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="The brain model: fusion-gateway routes chat to this model (fed by /v1/models)">
-            <Brain size={14} className="text-indigo-500" /> brain
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="Provider for this conversation — persisted per conversation">
+            <Brain size={14} className="text-indigo-500" /> provider
           </label>
-          <Select value={brainModel} onChange={(e) => changeBrain(e.target.value)} className="w-48"
-            title="Model served by fusion-gateway — cloud models are pinned to their backend via the qualified backend/model id">
-            {gwModels.length === 0 && brainModel && <option value={brainModel}>{brainModel}</option>}
-            {gwModels.map((m) => (
-              <option key={m.value} value={m.value}>{m.id}{m.backend && !m.local ? ` · ${m.backend}` : ""}</option>
+          <Select value={selProvider} onChange={(e) => changeProvider(e.target.value)} className="w-44"
+            title="Which LLM provider this conversation talks to (gateway or direct)">
+            {providers.length === 0 && <option value="">no provider</option>}
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name || p.id}{p.type === "gateway" ? " · gateway" : ""}</option>
             ))}
           </Select>
-          {!gwProvider && (
-            <span className="text-xs text-amber-600 dark:text-amber-400">no gateway provider — create an API key on the Gateway page</span>
+          <Select value={selModel} onChange={(e) => changeModel(e.target.value)} className="w-48"
+            title="Model for this conversation — served by the selected provider (fed by its /v1/models)">
+            {modelOpts.length === 0 && selModel && <option value={selModel}>{selModel}</option>}
+            {modelOpts.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </Select>
+          {providers.length === 0 && (
+            <span className="text-xs text-amber-600 dark:text-amber-400">no enabled provider — set one up on the Models page</span>
           )}
+          <button
+            onClick={() => setDispatchDrawer(true)}
+            title="Dispatches"
+            className="lg:hidden ml-auto flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+          >
+            <PanelRight size={16} />
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -822,7 +903,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           </div>
         </div>
       </div>
-      <DispatchPanel onOpen={openConv} />
+      <DispatchPanel
+        onOpen={(c) => { setDispatchDrawer(false); openConv(c); }}
+        drawerOpen={dispatchDrawer}
+        onDrawerClose={() => setDispatchDrawer(false)}
+      />
     </div>
   );
 }
@@ -830,7 +915,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
 // DispatchPanel is the right rail of the chat page: every background run
 // (run_agent background=true) grouped into running / queued / finished.
 // Clicking a finished row opens its conversation.
-function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
+function DispatchPanel({ onOpen, drawerOpen, onDrawerClose }: { onOpen: (c: Conversation) => void; drawerOpen?: boolean; onDrawerClose?: () => void }) {
   const [runs, setRuns] = useState<DispatchRun[]>([]);
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [busyWorkers, setBusyWorkers] = useState<WorkerStatus[]>([]);
@@ -951,7 +1036,13 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
     </div>
   );
   return (
-    <aside className="hidden lg:flex w-72 shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40 p-3">
+    <>
+      {drawerOpen && (
+        <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={onDrawerClose} />
+      )}
+      <aside
+        className={`${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-72 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-zinc-900/40 p-3`}
+      >
       <div className="flex items-center justify-between px-1 pb-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>
         <div className="flex items-center gap-1.5">
@@ -1043,6 +1134,7 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
         </div>
       )}
     </aside>
+    </>
   );
 }
 
@@ -1226,22 +1318,6 @@ function GatewayPage() {
       setErr((ex as Error).message);
     }
   };
-  const saveBrainModel = async () => {
-    setMsg(""); setErr("");
-    try {
-      const r = await api.providers();
-      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled);
-      if (!gw) {
-        setErr("no gateway provider configured — create an API key first");
-        return;
-      }
-      await api.saveProvider({ ...gw, model: brainModel });
-      setMsg(`brain model set to ${brainModel}`);
-    } catch (ex) {
-      setErr((ex as Error).message);
-    }
-  };
-
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
       <h2 className="text-lg font-semibold">Gateway</h2>
@@ -1275,18 +1351,11 @@ function GatewayPage() {
         <Card className="space-y-3 p-4">
           <h3 className="font-medium flex items-center gap-2"><Cpu size={16} /> Brain model</h3>
           <p className="text-sm text-zinc-500">
-            Model the brain (chat planner) uses. Requests still go through the gateway —
-            cloud models are pinned to their backend via the qualified <code>backend/model</code> id.
+            The gateway provider's default model: <span className="font-medium text-zinc-700 dark:text-zinc-200">{brainModel || "not set"}</span>.
+            Chat reads it per conversation — change the default on the Models page (single owner
+            of provider.Model), or pick a different provider/model in each conversation's header.
+            Cloud models are pinned to their backend via the qualified <code>backend/model</code> id.
           </p>
-          <div className="flex flex-wrap gap-2">
-            <Select className="w-72" value={brainModel} onChange={(e) => setBrainModel(e.target.value)}>
-              {!brainModel && <option value="">choose model...</option>}
-              {gwModels.map((m) => (
-                <option key={m.value} value={m.value}>{m.id}{m.backend && !m.local ? ` · ${m.backend}` : ""}</option>
-              ))}
-            </Select>
-            <Button onClick={saveBrainModel} disabled={!brainModel}>Save</Button>
-          </div>
         </Card>
       )}
 
