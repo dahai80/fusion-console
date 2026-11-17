@@ -396,7 +396,10 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		send(map[string]any{"type": "notice", "text": note})
 	}
 
-	pEnv, forcedModel := s.providerEnv(cli, wk)
+	pEnv, forcedModel, providerNotice := s.providerEnv(cli, wk)
+	if providerNotice != "" {
+		send(map[string]any{"type": "notice", "text": providerNotice})
+	}
 	budget := settings.MaxBudgetUSD
 	if wk != nil && wk.MaxBudgetUSD > 0 {
 		budget = wk.MaxBudgetUSD

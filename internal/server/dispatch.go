@@ -481,7 +481,11 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 	}
 	log.Printf("orchestrator: dispatch worker=%s agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
 		args.Agent, cli, isolationOf(wk), workdir, budget, user)
-	pEnv, forcedModel := s.providerEnv(cli, wk)
+	pEnv, forcedModel, providerNotice := s.providerEnv(cli, wk)
+	if providerNotice != "" && send != nil {
+		send(map[string]any{"type": "tool", "tool": callName, "status": "progress",
+			"detail": fmt.Sprintf("%s provider notice: %s", args.Agent, providerNotice)})
+	}
 	taskText := s.prefixWorkerTask(ctx, args.Agent, args.Task, s.workerMemoryModeFor(wk))
 	if brief := s.workerWorkspaceBrief(args.Agent, wk, workdir); brief != "" {
 		taskText = brief + "\n" + taskText
