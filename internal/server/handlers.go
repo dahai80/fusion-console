@@ -476,7 +476,8 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		taskText = brief + "\n" + taskText
 	}
 	opts := agent.RunOpts{
-		Task: taskText, Workdir: workdir,
+		Timeout: s.dispatchTimeout(),
+		Task:    taskText, Workdir: workdir,
 		Model:           forcedModel,
 		PermissionMode:  settings.PermissionMode,
 		MaxBudgetUSD:    budget,

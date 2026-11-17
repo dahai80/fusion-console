@@ -61,7 +61,11 @@ type processHandle struct {
 // launch builds and starts the subprocess for an adapter. parser maps one
 // stdout JSON object to events; non-JSON lines fall back to plain text.
 func launch(ctx context.Context, opts RunOpts, command string, args []string, feedTask bool, parser func(map[string]any, *parseState) []Event) (*processHandle, <-chan Event, error) {
-	runCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	timeout := defaultTimeout
+	if opts.Timeout > 0 {
+		timeout = opts.Timeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	cmd := exec.CommandContext(runCtx, command, args...)
 	cmd.Dir = opts.Workdir
 	if len(opts.Env) > 0 {
