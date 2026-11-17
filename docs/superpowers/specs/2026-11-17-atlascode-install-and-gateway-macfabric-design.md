@@ -109,14 +109,56 @@ runtime logic.
   `~/Library/MacFabric/prod`, dual-protocol gateway on :8999.
 - Console capabilities: detect (port probe + launchctl label), start/stop via
   launchctl, health read-out in the Models page entry.
-- Fresh install: MacFabric ships as a dmg with its own installer; console does
-  not reproduce that installer — when absent, the preset entry shows
-  "requires one-time MacFabric install" with the local installer script
-  (`~/Library/MacFabric/prod/scripts/release-install.sh`) executed only if
-  present.
-- OPEN QUESTION for the user: on a fresh Mac, where should the console point
-  for the MacFabric dmg (public release URL? internal channel?) — until
-  answered, the preset's install affordance is guidance, not automation.
+
+### 6.1 Fresh-install strategy — two stages (evaluated 2026-11-17)
+
+Facts: the MacFabric repo is public but has **no GitHub Releases**; the dmg is
+an unsigned, unnotarized local build (installer milestones are MacFabric P4);
+the proven install path is `scripts/release-install.sh` (gateway-v* tag →
+codeload tarball → uv venv → launchd rewrite → smoke test).
+
+**Stage 1 (this change):**
+- Local source repo present (`~/Documents/MacFabric` +
+  `scripts/release-install.sh` exists) → the preset's Install button runs the
+  script (the battle-tested tag→tarball→launchd chain).
+- Fresh Mac without the repo → guidance text + repo URL only. No fake
+  automation: an unsigned dmg would be blocked by Gatekeeper, so full auto-
+  install now would guarantee failure, not success.
+
+**Stage 2 (after MacFabric P4 ships signed/notarized dmg):**
+- MacFabric publishes GitHub Releases (dmg asset; optional GitCode mirror for
+  CN networks).
+- The repo gains a channel manifest (`channel.json`: latest dmg URL + sha256);
+  the console reads it instead of hardcoding URLs — MacFabric's release
+  cadence decouples from console releases.
+- The preset's install affordance upgrades to download-dmg-and-open (or remote
+  mode of `release-install.sh`). A one-line change behind the same button.
+
+## 6.2 Preset lifecycle state machine (both managed presets)
+
+```
+                    ┌──────────────────────────────────────────────┐
+                    │            preset entry (Models page)         │
+                    └──────────────────────────────────────────────┘
+                        │ probe: port + (launchd label | binary path)
+        ┌───────────────┼─────────────────────────────┐
+        ▼               ▼                             ▼
+   not installed   installed, not running        running
+        │               │                             │
+        │ install       │ start                       │
+        │ fusion-gw:    │ fusion-gw: spawn detached   │
+        │  release dl   │  (log + pid file)           │  manage:
+        │  → config     │ macfabric: launchctl        │  stop / view logs /
+        │  generate-once│  kickstart com.macfabric.   │  backends (fusion-gw)
+        │ macfabric:    │  gateway                    │  health read-out
+        │  stage-1/2    │                             │
+        │  per §6.1     │                             │
+        ▼               ▼                             ▼
+        └────────── poll health (30s) ────────────────┘
+                        │ healthy
+                        ▼
+        source usable in the chat/agent selection layer
+```
 
 ## 7. Frontend changes
 
