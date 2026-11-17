@@ -139,15 +139,15 @@ export const api = {
   skills: (repo?: string) =>
     req<{ skills: SkillEntry[] }>(`/api/skills${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`),
   readSkill: (path: string, repo?: string) =>
-    req<{ content: string }>(`/api/skills/read?path=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`),
-  saveSkill: (s: { name: string; description: string; body: string; scope: string; repo?: string }) =>
+    req<{ content: string; doc: SkillDoc }>(`/api/skills/read?path=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`),
+  saveSkill: (s: { name: string; description: string; extra: string; body: string; scope: string; repo?: string }) =>
     req<{ ok: boolean; path: string }>("/api/skills", { method: "POST", body: JSON.stringify(s) }),
   deleteSkill: (name: string, scope: string, repo?: string) =>
     req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}?scope=${scope}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`, { method: "DELETE" }),
   draftSkill: (d: { hint: string; text: string }) =>
-    req<{ content: string }>("/api/skills/draft", { method: "POST", body: JSON.stringify(d) }),
+    req<{ content: string; doc: SkillDoc; warnings: string[] | null }>("/api/skills/draft", { method: "POST", body: JSON.stringify(d) }),
   importSkill: (source: string) =>
-    req<{ content: string }>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) }),
+    req<SkillImport>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) }),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>
@@ -298,6 +298,24 @@ export type SkillEntry = {
   description: string;
   scope: "global" | "project";
   path: string;
+};
+
+// SkillDoc is a SKILL.md parsed server-side: name/description are edited in
+// the form, extra holds every other frontmatter line verbatim.
+export type SkillDoc = {
+  name: string;
+  description: string;
+  extra: string;
+  body: string;
+};
+
+export type SkillImport = {
+  content: string;
+  doc: SkillDoc;
+  url: string;
+  via_mirror: boolean;
+  warnings: string[] | null;
+  missing_files: string[] | null;
 };
 
 export type DashboardBucket = {
