@@ -1,31 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderCheck, PenLine, ShieldAlert, Sparkles, Upload } from "lucide-react";
-import { api, type SkillDoc, type SkillEntry } from "./api";
+import { FolderCheck, Library, PenLine, ShieldAlert, Sparkles, Upload } from "lucide-react";
+import { api, type CatalogSkill, type SkillDoc, type SkillEntry } from "./api";
 import { Badge, Button, Card, Input, Select, Textarea } from "./components/ui";
-
-// Curated industry skills worth one-click importing. Sources are pinned to
-// repos we have vetted; everything else can be typed into the import box.
-const CURATED: { label: string; source: string }[] = [
-    { label: "skill-creator (Anthropic)", source: "anthropics/skills/skills/skill-creator" },
-    { label: "frontend-design (Anthropic)", source: "anthropics/skills/skills/frontend-design" },
-    { label: "mcp-builder (Anthropic)", source: "anthropics/skills/skills/mcp-builder" },
-    { label: "webapp-testing (Anthropic)", source: "anthropics/skills/skills/webapp-testing" },
-    { label: "docx (Anthropic)", source: "anthropics/skills/skills/docx" },
-    { label: "pdf (Anthropic)", source: "anthropics/skills/skills/pdf" },
-    { label: "brainstorming (superpowers)", source: "obra/superpowers/skills/brainstorming" },
-    { label: "systematic-debugging (superpowers)", source: "obra/superpowers/skills/systematic-debugging" },
-    { label: "test-driven-development (superpowers)", source: "obra/superpowers/skills/test-driven-development" },
-    { label: "writing-plans (superpowers)", source: "obra/superpowers/skills/writing-plans" },
-];
 
 // Review notes shown above the editor for imported or AI-drafted skills:
 // where the content came from and what the server-side audit flagged.
 type SkillReview = { source?: string; warnings: string[]; missing: string[] };
 
-type SkillTab = "installed" | "new" | "draft" | "import";
+type SkillTab = "installed" | "catalog" | "new" | "draft" | "import";
 
 const TABS: { id: SkillTab; label: string; icon: typeof FolderCheck }[] = [
     { id: "installed", label: "Installed", icon: FolderCheck },
+    { id: "catalog", label: "Catalog", icon: Library },
     { id: "new", label: "New Skill", icon: PenLine },
     { id: "draft", label: "AI Draft", icon: Sparkles },
     { id: "import", label: "Import from GitHub", icon: Upload },
@@ -52,11 +38,39 @@ export function SkillsPanel() {
     const [draftHint, setDraftHint] = useState("");
     const [draftText, setDraftText] = useState("");
     const [importSource, setImportSource] = useState("");
+    const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
 
     const load = useCallback(() => {
         api.skills(repo || undefined).then((r) => setSkills(r.skills ?? [])).catch((e) => setErr((e as Error).message));
     }, [repo]);
     useEffect(() => { load(); }, [load]);
+
+    const projectRepo = scope === "project" && repo.trim() ? repo.trim() : undefined;
+    const loadCatalog = useCallback(() => {
+        api.skillsCatalog(projectRepo).then((r) => setCatalog(r.skills ?? [])).catch((e) => setErr((e as Error).message));
+    }, [projectRepo]);
+    useEffect(() => { if (tab === "catalog") loadCatalog(); }, [tab, loadCatalog]);
+
+    // installFromCatalog copies the whole vendored skill directory. A skill
+    // that is already present is only replaced after explicit confirmation.
+    const installFromCatalog = async (c: CatalogSkill) => {
+        const status = scope === "project" ? c.project : c.global;
+        if (scope === "project" && !projectRepo) { setErr("project scope needs an absolute repo path"); return; }
+        if (status && !window.confirm(status === "modified"
+            ? `"${c.name}" is installed with local changes. Replace it with the catalog version? Local edits will be lost.`
+            : `Reinstall "${c.name}" from the catalog?`)) return;
+        setBusy(true); setMsg(""); setErr("");
+        try {
+            const r = await api.installCatalogSkill({ name: c.name, scope, repo: projectRepo, overwrite: !!status });
+            setMsg(`skill "${c.name}" installed to ${r.path}`);
+            loadCatalog();
+            load();
+        } catch (ex) {
+            setErr((ex as Error).message);
+        } finally {
+            setBusy(false);
+        }
+    };
 
     const openEditor = (doc?: Partial<SkillDoc>, opts: { scope?: "global" | "project"; review?: SkillReview } = {}) => {
         setEditing(true);
@@ -178,6 +192,57 @@ export function SkillsPanel() {
                 </div>
             )}
 
+            {tab === "catalog" && (
+                <div className="space-y-3">
+                    <p className="text-xs text-zinc-500">
+                        Popular skills bundled with the console, copied verbatim from pinned upstream commits with their
+                        license files. Install copies the whole skill directory (SKILL.md plus scripts and references).
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Select className="w-auto" value={scope} onChange={(e) => setScope(e.target.value as "global" | "project")}>
+                            <option value="global">install to global (~/.claude/skills)</option>
+                            <option value="project">install to project (&lt;repo&gt;/.claude/skills)</option>
+                        </Select>
+                        {scope === "project" && (
+                            <Input className="flex-1" placeholder="/absolute/path/to/repo" value={repo} onChange={(e) => setRepo(e.target.value)} />
+                        )}
+                    </div>
+                    <div className="max-h-[32rem] space-y-4 overflow-y-auto pr-1">
+                        {[...new Set(catalog.map((c) => c.category))].map((cat) => (
+                            <div key={cat} className="space-y-2">
+                                <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">{cat}</p>
+                                {catalog.filter((c) => c.category === cat).map((c) => {
+                                    const status = scope === "project" ? c.project : c.global;
+                                    return (
+                                        <Card key={c.name} className="flex items-start justify-between gap-3 p-3 text-sm">
+                                            <div className="min-w-0 space-y-1">
+                                                <p className="flex flex-wrap items-center gap-2 font-medium">
+                                                    {c.name}
+                                                    <Badge>{c.license}</Badge>
+                                                    {status === "installed" && <Badge tone="ok">installed</Badge>}
+                                                    {status === "modified" && <Badge tone="warn">installed · modified</Badge>}
+                                                </p>
+                                                <p className="line-clamp-2 text-xs text-zinc-500">{c.description}</p>
+                                                <p className="text-xs text-zinc-400">
+                                                    <a className="hover:text-indigo-500 hover:underline" href={c.url} target="_blank" rel="noreferrer">
+                                                        {c.source}@{c.commit.slice(0, 7)}
+                                                    </a>
+                                                    {" · "}{c.files} file{c.files === 1 ? "" : "s"} · {(c.bytes / 1024).toFixed(0)} KB
+                                                </p>
+                                            </div>
+                                            <Button variant={status ? "ghost" : "default"} className="shrink-0" disabled={busy} onClick={() => installFromCatalog(c)}>
+                                                {status ? "Reinstall" : "Install"}
+                                            </Button>
+                                        </Card>
+                                    );
+                                })}
+                            </div>
+                        ))}
+                        {catalog.length === 0 && <p className="text-sm text-zinc-400">Loading catalog…</p>}
+                    </div>
+                </div>
+            )}
+
             {tab === "new" && (
                 <Card className="space-y-3 p-4">
                     <h3 className="font-medium">{name ? `Edit skill: ${name}` : "New skill"}</h3>
@@ -236,14 +301,10 @@ export function SkillsPanel() {
                         <Input className="flex-1" placeholder="owner/repo or owner/repo/path (SKILL.md is fetched)" value={importSource} onChange={(e) => setImportSource(e.target.value)} />
                         <Button onClick={() => importSkill(importSource)} disabled={busy || !importSource.trim()}>Fetch</Button>
                     </div>
-                    <div className="flex flex-wrap gap-1">
-                        {CURATED.map((c) => (
-                            <button key={c.source} onClick={() => { setImportSource(c.source); importSkill(c.source); }} disabled={busy}
-                                className="rounded-lg border border-zinc-200/80 px-2 py-1 text-xs text-zinc-500 hover:border-indigo-400 hover:text-indigo-600 dark:border-zinc-800 dark:hover:text-indigo-400">
-                                {c.label}
-                            </button>
-                        ))}
-                    </div>
+                    <p className="text-xs text-zinc-500">
+                        Fetches <code>SKILL.md</code> only — bundled scripts and references are not imported.
+                        Popular skills ship complete in the <button className="text-indigo-500 hover:underline" onClick={() => setTab("catalog")}>Catalog</button> tab.
+                    </p>
                 </Card>
             )}
         </div>

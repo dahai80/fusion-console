@@ -102,6 +102,17 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   the console. Operations are limited to what the daemon exposes today
   (task cancel/rerun, orchestrator limits). Secrets resolve from env
   (`FUSION_WS_TOKEN`, `FUSION_CONSOLE_APIKEY_AGENT_STUDIO`) or keychain.
+- **Skills** — manage the `SKILL.md` skills agents load (Agents page →
+  Skills): edit with every frontmatter field preserved, AI-draft, import a
+  SKILL.md from GitHub (audited and source-flagged before saving), or install
+  from the bundled **catalog**: 26 popular skills from
+  [anthropics/skills](https://github.com/anthropics/skills) (Apache-2.0),
+  [obra/superpowers](https://github.com/obra/superpowers) (MIT) and
+  [openai/skills](https://github.com/openai/skills) (Apache-2.0), vendored
+  verbatim from pinned commits with their license files
+  (`internal/skillcatalog/`; refresh with `make skills-sync`). Catalog
+  installs copy the whole skill directory and never overwrite local edits
+  without confirmation.
 - **Multi-user (light)** — per-user bcrypt passwords, HttpOnly session cookies,
   login required even inside the tailnet.
 - **Knowledge Base (optional fusion-rag)** — nothing is downloaded until you
