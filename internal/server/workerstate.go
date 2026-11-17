@@ -111,7 +111,7 @@ func discoverOrphans() map[string]string {
 	}
 	vals := map[string]string{}
 	// One ps pass for candidate agent processes...
-	out, err := exec.Command("ps", "-axo", "pid=lstart=", "command=").CombinedOutput()
+	out, err := exec.Command("ps", "-axo", "pid=,lstart=,command=").CombinedOutput()
 	if err != nil {
 		log.Printf("server: orphan scan ps failed: %v", err)
 		return vals
