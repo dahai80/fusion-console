@@ -69,6 +69,16 @@ export default function TeamPage() {
         else { setPb(null); setPbError(msg); }
       });
   };
+  // Sidebar "New team" lands here with ?new=1 — open the wizard once and
+  // strip the param so a refresh does not re-trigger it.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("new") === "1") {
+      setWizard(true);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("new");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
   useEffect(() => { load(); }, [focusTeam]);
   useEffect(() => {
     const t = setInterval(load, 5000);

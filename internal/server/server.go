@@ -21,27 +21,28 @@ import (
 
 // Server holds shared dependencies for all handlers.
 type Server struct {
-	cfg         *config.Config
-	cfgDir      string
-	auth        *auth.Manager
-	store       *store.Store
-	models      *chat.ModelList
-	agents      map[string]agent.Adapter
-	agentRuns   sync.Mutex               // one agent subprocess per host at a time
-	approvals   sync.Map                 // confirm-mode dispatch gates: id -> chan bool
-	harness     *harness.Client          // fusion-harness sidecar (chat guards)
-	autoToken   string                   // one-time auto-login token for --open; empty = disabled
-	ragInstall  ragInstallState          // background fusion-rag install job (zero value = idle)
-	codeInstall ragInstallState          // background fusion-code install job (same job-state shape)
-	runs        workerRuns               // live worker dispatch registry (busy/idle + current task)
-	bg          dispatchRegistry         // background dispatch runs (queued/running/done)
-	dispatchTok string                   // loopback secret for MCP background-dispatch handoff
-	mcpMode     bool                     // true when serving the MCP stdio sidecar (ephemeral process)
-	team        teamDialer               // agent-studio team observer (poller + snapshot cache)
-	verMu       sync.Mutex               // guards verLast + verCache (CLI version fingerprint)
-	verLast     map[string]string        // agent name -> last-seen CLI version
-	verCache    map[string]verCacheEntry // command -> --version result (TTL)
-	mux         *http.ServeMux
+	cfg           *config.Config
+	cfgDir        string
+	auth          *auth.Manager
+	store         *store.Store
+	models        *chat.ModelList
+	agents        map[string]agent.Adapter
+	agentRuns     sync.Mutex               // one agent subprocess per host at a time
+	approvals     sync.Map                 // confirm-mode dispatch gates: id -> chan bool
+	harness       *harness.Client          // fusion-harness sidecar (chat guards)
+	autoToken     string                   // one-time auto-login token for --open; empty = disabled
+	ragInstall    ragInstallState          // background fusion-rag install job (zero value = idle)
+	studioInstall ragInstallState          // background agent-studio install job (same job-state shape)
+	codeInstall   ragInstallState          // background fusion-code install job (same job-state shape)
+	runs          workerRuns               // live worker dispatch registry (busy/idle + current task)
+	bg            dispatchRegistry         // background dispatch runs (queued/running/done)
+	dispatchTok   string                   // loopback secret for MCP background-dispatch handoff
+	mcpMode       bool                     // true when serving the MCP stdio sidecar (ephemeral process)
+	team          teamDialer               // agent-studio team observer (poller + snapshot cache)
+	verMu         sync.Mutex               // guards verLast + verCache (CLI version fingerprint)
+	verLast       map[string]string        // agent name -> last-seen CLI version
+	verCache      map[string]verCacheEntry // command -> --version result (TTL)
+	mux           *http.ServeMux
 }
 
 // verCacheEntry is a cached `--version` probe result.
@@ -133,6 +134,8 @@ func (s *Server) routes() {
 	// path-preserving reverse proxy for its UI and REST API. Auth-gated like
 	// every other console surface.
 	m.HandleFunc("GET /api/rag/status", s.auth.Require(s.handleRagStatus))
+	m.HandleFunc("GET /api/studio/status", s.auth.Require(s.handleStudioStatus))
+	m.HandleFunc("POST /api/studio/install", s.auth.Require(s.handleStudioInstall))
 	m.HandleFunc("POST /api/rag/install", s.auth.Require(s.handleRagInstall))
 	m.HandleFunc("POST /api/rag/start", s.auth.Require(s.handleRagStart))
 	m.HandleFunc("POST /api/rag/stop", s.auth.Require(s.handleRagStop))

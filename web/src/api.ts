@@ -165,6 +165,12 @@ export const api = {
   saveOrchestration: (o: Orchestrator) =>
     req<{ ok: boolean }>("/api/settings/orchestration", { method: "POST", body: JSON.stringify(o) }),
   ragStatus: () => req<RagStatus>("/api/rag/status"),
+  studioStatus: () =>
+    req<{
+      installed: boolean; daemon_running: boolean; enabled: boolean;
+      dir: string; socket: string; phase: string; logs?: string[]; error?: string;
+    }>("/api/studio/status"),
+  studioInstall: () => req<{ status: string }>("/api/studio/install", { method: "POST" }),
   ragInstall: () => req<{ status: string }>("/api/rag/install", { method: "POST" }),
   ragStart: () => req<{ running: boolean }>("/api/rag/start", { method: "POST" }),
   ragStop: () => req<{ running: boolean }>("/api/rag/stop", { method: "POST" }),

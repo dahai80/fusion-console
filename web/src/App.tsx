@@ -115,7 +115,7 @@ function Shell() {
           <Onboarding onDone={() => setPage("models")} />
         )}
         {page === "dashboard" && <Dashboard />}
-        {page === "chat" && <ChatPage />}
+        {page === "chat" && <ChatPage onGoTeam={() => setPage("team")} />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
         {page === "models" && <ModelsPage />}
@@ -309,8 +309,14 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
 
 type ChatEntry = { role: string; content: string; meta?: string };
 
-function ChatPage() {
+function ChatPage({ onGoTeam }: { onGoTeam: () => void }) {
   const [convs, setConvs] = useState<Conversation[]>([]);
+  // Sidebar history tabs: chats vs teams. The Teams tab bootstraps the
+  // agent-studio integration (status + consented install) and lists live
+  // teams as conversation-like entry points.
+  const [sideTab, setSideTab] = useState<"chat" | "team">("chat");
+  const [teamsLive, setTeamsLive] = useState<{ name: string }[]>([]);
+  const [studio, setStudio] = useState<{ installed: boolean; daemon_running: boolean; dir: string; phase: string; logs?: string[]; error?: string } | null>(null);
   const [active, setActive] = useState<Conversation | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [gwProvider, setGwProvider] = useState<Provider | null>(null);
@@ -464,6 +470,40 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       api.ackDispatches(c.ID).then(() => setUnread((u) => ({ ...u, [c.ID]: 0 }))).catch(() => {});
     }
   };
+
+  // Studio bootstrap + live teams polling for the Teams sidebar tab.
+  useEffect(() => {
+    const read = () => api.studioStatus().then(setStudio).catch(() => setStudio(null));
+    read();
+    const busy = studio?.phase === "installing" || studio?.phase === "starting";
+    const t = setInterval(read, busy ? 2000 : 30000);
+    return () => clearInterval(t);
+  }, [studio?.phase]);
+  useEffect(() => {
+    if (sideTab !== "team") return;
+    const read = () => api.teamTeams().then((r) => setTeamsLive((r.teams ?? []).map((x: Record<string, any>) => ({ name: String(x.name || "") })))).catch(() => setTeamsLive([]));
+    read();
+    const t = setInterval(read, 10000);
+    return () => clearInterval(t);
+  }, [sideTab]);
+  const openTeam = (name: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("team", name);
+    url.searchParams.delete("new");
+    window.history.replaceState(null, "", url.toString());
+    onGoTeam();
+    setConvDrawer(false);
+  };
+  const goNewTeam = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("new", "1");
+    url.searchParams.delete("team");
+    window.history.replaceState(null, "", url.toString());
+    onGoTeam();
+    setConvDrawer(false);
+  };
+  const studioInstalling = studio?.phase === "installing" || studio?.phase === "starting";
+  const studioReady = studio?.daemon_running || studio?.installed;
 
   const newChat = async () => {
     const r = await api.createConversation("chat " + new Date().toLocaleString(), "chat");
@@ -685,13 +725,70 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       <aside
         className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-64 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-zinc-900/40`}
       >
-        <div className="p-3">
-          <Button variant="outline" className="w-full" onClick={newChat}>
-            <Plus size={14} /> New chat
-          </Button>
+        <div className="p-3 space-y-2">
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-zinc-200/60 p-1 text-xs dark:bg-zinc-800/60">
+            <button
+              onClick={() => setSideTab("chat")}
+              className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 ${sideTab === "chat" ? "bg-white shadow-sm text-indigo-600 dark:bg-zinc-900 dark:text-indigo-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
+            >
+              <MessageSquare size={13} /> Chats
+            </button>
+            <button
+              onClick={() => setSideTab("team")}
+              className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 ${sideTab === "team" ? "bg-white shadow-sm text-indigo-600 dark:bg-zinc-900 dark:text-indigo-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
+            >
+              <Users size={13} /> Teams
+            </button>
+          </div>
+          {sideTab === "chat" ? (
+            <Button variant="outline" className="w-full" onClick={newChat}>
+              <Plus size={14} /> New chat
+            </Button>
+          ) : studioReady ? (
+            <Button variant="outline" className="w-full" onClick={goNewTeam}>
+              <Plus size={14} /> New team
+            </Button>
+          ) : (
+            <Button variant="outline" className="w-full" onClick={goNewTeam} disabled={!studio?.installed && studioInstalling}>
+              <Plus size={14} /> New team
+            </Button>
+          )}
         </div>
+        {sideTab === "team" && studio && !studioReady && (
+          <div className="mx-3 mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+            <p className="font-medium">Team needs fusion-agent-studio</p>
+            <p className="mt-1 opacity-80">The daemon is not running and the package is not installed yet. Install it into the workspace venv via pip (editable), then the daemon starts automatically.</p>
+            {studioInstalling ? (
+              <p className="mt-2 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase}: installing…</p>
+            ) : (
+              <button
+                onClick={() => api.studioInstall().then(() => api.studioStatus().then(setStudio)).catch(() => {})}
+                className="mt-2 rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
+              >
+                Install fusion-agent-studio (pip)
+              </button>
+            )}
+            {studio.error && <p className="mt-2 font-mono text-[10px] opacity-80">{studio.error}</p>}
+            {(studio.logs ?? []).length > 0 && (
+              <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] opacity-70">{(studio.logs ?? []).slice(-8).join("\n")}</pre>
+            )}
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-1">
-          {convs.map((c) => (
+          {sideTab === "team" && studioReady && teamsLive.map((t) => (
+            <button
+              key={String(t.name)}
+              onClick={() => openTeam(String(t.name))}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
+            >
+              <Users size={14} className="shrink-0 text-indigo-500" />
+              <span className="truncate">{String(t.name)}</span>
+            </button>
+          ))}
+          {sideTab === "team" && studioReady && teamsLive.length === 0 && (
+            <p className="px-3 py-2 text-xs text-zinc-400">No live teams yet — create one from chat (orchestrate on) or with New team.</p>
+          )}
+          {sideTab === "chat" && convs.map((c) => (
             <div
               key={c.ID}
               className={`group flex w-full items-center gap-1 rounded-xl pr-1 text-sm ${
