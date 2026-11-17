@@ -316,8 +316,15 @@ func (r *dispatchRegistry) unreadCounts() map[int64]int {
 // and starts the run in a goroutine. Execution still goes through the
 // one-subprocess gate, so background runs queue behind a foreground one.
 func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispatchArgs, wk *config.WorkerConfig, cli string, settings config.AgentSettings, budget float64) (string, error) {
+	// Display name: the resolved named worker, not the raw agent id the brain
+	// passed (often the CLI type "claude" — cards and chat summaries must show
+	// which worker ran, e.g. "fusion-web-shell").
+	workerName := args.Agent
+	if wk != nil && wk.Name != "" {
+		workerName = wk.Name
+	}
 	run := &bgRun{
-		Worker:         args.Agent,
+		Worker:         workerName,
 		Agent:          cli,
 		Task:           args.Task,
 		ConversationID: convID,
@@ -372,7 +379,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 			}
 		}
 	}()
-	return fmt.Sprintf("dispatched as background run #%d (worker %s). It runs after any current agent subprocess and reports back into this conversation when finished; progress is visible in the dispatch panel and via dispatch_status.", run.ID, args.Agent), nil
+	return fmt.Sprintf("dispatched as background run #%d (worker %s). It runs after any current agent subprocess and reports back into this conversation when finished; progress is visible in the dispatch panel and via dispatch_status.", run.ID, workerName), nil
 }
 
 // summarizeDispatch renders the completion message persisted into the chat.
