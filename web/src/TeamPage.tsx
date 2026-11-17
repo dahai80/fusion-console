@@ -129,6 +129,15 @@ export default function TeamPage() {
   const alerts = snap?.alerts ?? [];
   const brief = snap?.brief_warnings ?? {};
 
+  if (wizard) {
+    return (
+      <TeamWizard
+        onCreated={(team) => { setWizard(false); applyFocus(team); }}
+        onCancel={() => setWizard(false)}
+      />
+    );
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -143,10 +152,20 @@ export default function TeamPage() {
           )}
           {snap?.fetched_at && <span>{new Date(snap.fetched_at).toLocaleTimeString()}</span>}
           <Button variant="ghost" onClick={load}><RefreshCw size={14} /> Refresh</Button>
+          <Button onClick={() => setWizard(true)}><Plus size={14} /> New team</Button>
         </div>
       </div>
 
       {err && <p className="text-sm text-red-500">{err}</p>}
+
+      {focusTeam && (
+        <div className="flex items-center gap-2 rounded-xl bg-indigo-500/10 px-3 py-1.5 text-sm text-indigo-600 dark:text-indigo-400">
+          <Eye size={14} /> observing <span className="font-mono">{focusTeam}</span>
+          <button onClick={() => applyFocus("")} className="ml-1 rounded p-0.5 hover:bg-indigo-500/20" title="Back to the default team">
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* Lifecycle + lead loop controls (issue #14). Disband is the only
           destructive one — it confirms with member/open-task counts first. */}
