@@ -90,6 +90,7 @@ func (s *Server) orchestratorPrompt() string {
 	b.WriteString("- If a task concerns a repository that no worker owns, do not force a dispatch — tell the user to file an issue in that repo instead.\n")
 	b.WriteString("- Dispatch workflow: instruct each worker to fix on a topic branch, run the repo's tests, then merge to the default branch and push — never direct commits to the default branch. Verify the merge landed (read_artifact or the worker's report) before reporting success to the user.\n")
 	b.WriteString("- Long dispatches: use run_agent with background=true for anything expected to run longer than ~2 minutes. Tell the user it is running in the background; the result is posted into this conversation automatically when done. Do not block the turn waiting on it.\n")
+	b.WriteString("- Dispatch sizing: each run_agent brief covers ONE bounded unit of work — a single issue, or one self-contained change. Never bundle multiple issues or phases into one brief: background dispatches are hard-killed at 30 minutes and a multi-part brief loses all unfinished parts. Split multi-part work into sequential dispatches (one issue per dispatch), verify each result, then dispatch the next.\n")
 	if g := workspaceGuidelines(s.agentsRoot(), 8*1024); g != "" {
 		b.WriteString("\nWorkspace conventions (CLAUDE.md / AGENTS.md found in the brain workspace):\n")
 		b.WriteString(g)
