@@ -195,9 +195,31 @@ func (s *Server) pollTeam(team string) *teamSnapshot {
 	// Team lifecycle (ACTIVE/PAUSED/...) drives the pause/resume/disband
 	// controls. The daemon answers {"status":"error"} for an unregistered
 	// team — that just means no lifecycle yet, not an observer failure.
-	if res, err := teamRPC(studioSocketPath(), jwt, "teams.status", map[string]any{"team": team}); err == nil {
-		if res["status"] == "ok" {
-			snap.Lifecycle, _ = res["lifecycle"].(string)
+	// Wizard-created teams own their tasks/members in the kernel team
+	// registry (teams.status), NOT the infra task store (task.list) — when
+	// the team is registered, its tasks and members replace the store view.
+	if res, err := teamRPC(studioSocketPath(), jwt, "teams.status", map[string]any{"team": team}); err == nil && res["status"] == "ok" {
+		snap.Lifecycle, _ = res["lifecycle"].(string)
+		if tm, ok := res["tasks"].(map[string]any); ok && len(tm) > 0 {
+			tasks := make([]map[string]any, 0, len(tm))
+			for tid, t := range tm {
+				m, _ := t.(map[string]any)
+				if m == nil {
+					m = map[string]any{}
+				}
+				m["task_id"] = tid
+				tasks = append(tasks, m)
+			}
+			snap.Tasks = tasks
+		}
+		if mm, ok := res["members"].([]any); ok && len(mm) > 0 {
+			roster := make([]map[string]any, 0, len(mm))
+			for _, m := range mm {
+				if entry, ok := m.(map[string]any); ok {
+					roster = append(roster, entry)
+				}
+			}
+			snap.Roster = roster
 		}
 	}
 
