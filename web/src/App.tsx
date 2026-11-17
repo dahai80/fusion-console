@@ -781,7 +781,7 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
         <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
       )}
       {r.status === "error" && r.error && (
-        <p className="mt-0.5 truncate text-[11px] text-red-400" title={r.error}>{r.error}</p>
+        <p className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-red-500/5 p-1.5 text-[11px] leading-4 text-red-500">{r.error}</p>
       )}
     </button>
   );

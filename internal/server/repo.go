@@ -30,8 +30,14 @@ func syncRepo(base, label, url, branch string) (string, string, error) {
 	if url == "" {
 		return "", "", fmt.Errorf("%s: repository URL is empty", label)
 	}
-	target := filepath.Join(base, "repo")
 	branch = strings.TrimSpace(branch)
+	// When the base dir itself is already a checkout of this repo (workers
+	// whose work_dir points straight at a clone), sync in place instead of
+	// nesting a repo/ subdir beside the existing tree.
+	target := filepath.Join(base, "repo")
+	if _, err := os.Stat(filepath.Join(base, ".git")); err == nil {
+		target = base
+	}
 
 	if _, err := os.Stat(filepath.Join(target, ".git")); os.IsNotExist(err) {
 		args := []string{"clone"}

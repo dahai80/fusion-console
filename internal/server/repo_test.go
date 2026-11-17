@@ -73,6 +73,31 @@ func TestSyncRepo(t *testing.T) {
 		t.Fatal("expected error for empty repo URL")
 	}
 
+	// In-place sync: when the base dir itself is a checkout of the repo,
+	// syncRepo must use it as-is (no nested repo/ dir) and fast-forward it.
+	inplace := t.TempDir()
+	runGit(t, inplace, "clone", origin, ".")
+	target, warn, err = syncRepo(inplace, "w2", origin, "")
+	if err != nil || warn != "" {
+		t.Fatalf("inplace sync: err=%v warn=%q", err, warn)
+	}
+	if target != inplace {
+		t.Fatalf("expected in-place target %s, got %s", inplace, target)
+	}
+	if _, err := os.Stat(filepath.Join(inplace, "repo")); err == nil {
+		t.Fatal("nested repo/ dir created despite existing checkout")
+	}
+	os.WriteFile(filepath.Join(seed, "hello.txt"), []byte("v3\n"), 0o600)
+	runGit(t, seed, "add", ".")
+	runGit(t, seed, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "v3")
+	runGit(t, seed, "push", "origin", "main")
+	if _, warn, err = syncRepo(inplace, "w2", origin, ""); err != nil || warn != "" {
+		t.Fatalf("inplace pull: err=%v warn=%q", err, warn)
+	}
+	if b, _ := os.ReadFile(filepath.Join(inplace, "hello.txt")); string(b) != "v3\n" {
+		t.Fatalf("expected v3 after in-place pull, got %q", b)
+	}
+
 	// URL detection: URLs and scp-like remotes, not local paths.
 	for _, u := range []string{"https://github.com/o/r.git", "http://x/r", "git@github.com:o/r.git", "ssh://git@host/r"} {
 		if !isRepoURL(u) {
