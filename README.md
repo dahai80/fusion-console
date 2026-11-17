@@ -23,7 +23,7 @@ session in the brain work dir with the same dispatch tools exposed over MCP
 (`fusion-console mcp` subcommand); cost rows are booked as `brain:claude`.
 Its work
 directory (artifact sandbox for `read_artifact` and the worktree parent) is
-configurable in the Workers tab; the default is `~/.fusion-console/agents`.
+configurable in the Workers tab; the default is `~/.fusion/fusion-console/agents`.
 The brain can also be bound to a code source: a GitHub URL (cloned into the
 brain work dir and fast-forward-pulled before every dispatch, local changes
 never overwritten) or a local repo path (used as the brain workspace as-is).
@@ -98,7 +98,7 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   toolbar and the chat model becomes the main brain: it dispatches work to
   headless agents with native tool-calls (`list_agents`, `run_agent`,
   `read_artifact`), each agent running in its own dedicated workspace
-  (`~/.fusion-console/agents/<name>/`, per-agent `work_dir` override in
+  (`~/.fusion/fusion-console/agents/<name>/`, per-agent `work_dir` override in
   config). The loop is bounded (8 iterations); every dispatch passes the
   [fusion-harness](https://github.com/dahai80/fusion-console) tool-admission
   chain (deny-first, fail-closed) via a Python sidecar, and chat turns are
@@ -183,7 +183,7 @@ make test       # go test ./...
 ./bin/fusion-console            # listens on 127.0.0.1:11480
 ```
 
-Data dir: `~/.fusion-console` (override with `FUSION_CONSOLE_DIR`).
+Data dir: `~/.fusion/fusion-console` (override with `FUSION_CONSOLE_DIR`).
 First run creates user `admin` with the factory default password
 `fusion-admin-2026` (set `FUSION_CONSOLE_ADMIN_PASSWORD` before first start
 to override) — change it after first login on any non-local deployment.

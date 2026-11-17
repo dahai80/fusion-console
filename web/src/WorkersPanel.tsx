@@ -188,7 +188,7 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
           )}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Input className="min-w-64 flex-1" placeholder="brain work dir — empty = ~/.fusion-console/agents" value={brainDir}
+          <Input className="min-w-64 flex-1" placeholder="brain work dir — empty = ~/.fusion/fusion-console/agents" value={brainDir}
             onChange={(e) => setBrainDir(e.target.value)} />
           <Button variant="outline" disabled={busy || !orch}
             onClick={() => orch && saveOrch({
@@ -240,7 +240,7 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
         {/* Step 2: workspace */}
         <section>
           <p className="mb-2 text-xs font-medium text-zinc-500">2 · Workspace</p>
-          <Input className="mb-2" placeholder="work dir — empty = ~/.fusion-console/agents/<name>" value={newWorkDir}
+          <Input className="mb-2" placeholder="work dir — empty = ~/.fusion/fusion-console/agents/<name>" value={newWorkDir}
             onChange={(e) => setNewWorkDir(e.target.value)} />
           <div className="mb-2 grid grid-cols-3 gap-2">
             {([

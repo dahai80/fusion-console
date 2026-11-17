@@ -54,7 +54,7 @@ fusion-console.exe             # Windows
 
 The first start:
 
-1. Creates `~/.fusion-console/` (config + SQLite database)
+1. Creates `~/.fusion/fusion-console/` (config + SQLite database)
 2. Creates user `admin` with the factory default password
    `fusion-admin-2026` (override with the `FUSION_CONSOLE_ADMIN_PASSWORD`
    env var before first start)
@@ -67,7 +67,7 @@ that can reach the host), sign in as `admin` / `fusion-admin-2026`.
 > If the console is reachable beyond localhost (e.g. over Tailscale), set
 > `FUSION_CONSOLE_ADMIN_PASSWORD` before first start, or change the
 > password after login (add users by editing
-> `~/.fusion-console/config.json` with a bcrypt hash and restarting).
+> `~/.fusion/fusion-console/config.json` with a bcrypt hash and restarting).
 
 That's it — the only required configuration is the LLM (next section).
 
@@ -116,7 +116,7 @@ Agents are the local CLIs on the office host. Install at least one:
 
 Check the **Agents** page in the console — agents found on PATH show
 `detected`; missing ones are grayed out (config path override: edit the
-agent's `command` in `~/.fusion-console/config.json` to an absolute path).
+agent's `command` in `~/.fusion/fusion-console/config.json` to an absolute path).
 
 To run a task: **Chat page** → select the agent → fill **workdir**
 (the project directory the agent may touch) → type the task → press the
@@ -133,7 +133,7 @@ Tailscale-only remote access setup for phone/laptop use outside the office.
 
 | Symptom | Fix |
 |---|---|
-| Login password lost | delete `~/.fusion-console/config.json`, restart — admin is recreated with the factory default `fusion-admin-2026` (or your `FUSION_CONSOLE_ADMIN_PASSWORD`) |
+| Login password lost | delete `~/.fusion/fusion-console/config.json`, restart — admin is recreated with the factory default `fusion-admin-2026` (or your `FUSION_CONSOLE_ADMIN_PASSWORD`) |
 | Gateway admin GUI asks for login again | save the gateway admin username/password once on the Gateway page (OS keychain) — "Open Admin GUI" then signs in automatically |
 | `401 auth_error` from gateway | wrong client key, or key not in gateway `auth.api_keys` |
 | `model not allowed` | gateway key's `allowed_models` does not cover the model |

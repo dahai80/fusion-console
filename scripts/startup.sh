@@ -8,8 +8,8 @@ cd "$(dirname "$0")"
 HERE="$(pwd)"
 CONSOLE_BIN="$HERE/fusion-console"
 GATEWAY_BIN="$HERE/fusion-gateway"
-[ -x "$CONSOLE_BIN" ] || CONSOLE_BIN="$HOME/.fusion-console/bin/fusion-console"
-[ -x "$GATEWAY_BIN" ] || GATEWAY_BIN="$HOME/.fusion-console/bin/fusion-gateway"
+[ -x "$CONSOLE_BIN" ] || CONSOLE_BIN="$HOME/.fusion/fusion-console/bin/fusion-console"
+[ -x "$GATEWAY_BIN" ] || GATEWAY_BIN="$HOME/.fusion/fusion-console/bin/fusion-gateway"
 
 port_open() { # port_open <port> -> 0 if something listens
     if command -v lsof >/dev/null 2>&1; then
@@ -19,7 +19,7 @@ port_open() { # port_open <port> -> 0 if something listens
     fi
 }
 
-mkdir -p "$HOME/.fusion-console/bin" "$HOME/.fusion-console/log"
+mkdir -p "$HOME/.fusion/fusion-console/bin" "$HOME/.fusion/fusion-console/log"
 
 # 1. One-time: replace the packaged bootstrap JWT secret with a random one.
 if [ -f "$HERE/config.yaml" ] && grep -q "FUSION-CONSOLE-BOOTSTRAP-SECRET-0000" "$HERE/config.yaml"; then
@@ -37,7 +37,7 @@ if [ -x "$GATEWAY_BIN" ] && [ -n "$GW_CFG" ] && [ -f "$GW_CFG" ]; then
     if port_open 11432; then
         echo "gateway: already running on :11432"
     else
-        nohup "$GATEWAY_BIN" -config "$GW_CFG" > "$HOME/.fusion-console/log/gateway.log" 2>&1 &
+        nohup "$GATEWAY_BIN" -config "$GW_CFG" > "$HOME/.fusion/fusion-console/log/gateway.log" 2>&1 &
         echo "gateway: started (pid $!, config $GW_CFG, log ~/.fusion-console/log/gateway.log)"
     fi
 else
@@ -49,7 +49,7 @@ fi
 if port_open 11480; then
     echo "console: already running on :11480 — open http://127.0.0.1:11480"
 else
-    nohup "$CONSOLE_BIN" -open > "$HOME/.fusion-console/log/console.log" 2>&1 &
+    nohup "$CONSOLE_BIN" -open > "$HOME/.fusion/fusion-console/log/console.log" 2>&1 &
     echo "console: started (pid $!, log ~/.fusion-console/log/console.log)"
     echo "console: browser opening at http://127.0.0.1:11480 (auto-login)"
 fi

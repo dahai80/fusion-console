@@ -917,7 +917,7 @@ function GatewayPage() {
           <h3 className="font-medium flex items-center gap-2"><Download size={16} /> Install gateway</h3>
           <p className="text-sm text-zinc-500">
             Downloads the latest <a className="underline" href="https://github.com/dahai80/fusion-gateway/releases" target="_blank" rel="noreferrer">fusion-gateway release</a> for this
-            host (detected automatically) into <code>~/.fusion-console/bin/</code>. Then start it with your
+            host (detected automatically) into <code>~/.fusion/fusion-console/bin/</code>. Then start it with your
             gateway <code>config.yaml</code> and refresh this page.
           </p>
           <Button onClick={install} disabled={busy}>

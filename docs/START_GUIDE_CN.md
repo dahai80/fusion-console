@@ -45,13 +45,13 @@ fusion-console.exe             # Windows
 
 首次启动会：
 
-1. 创建 `~/.fusion-console/`（配置 + SQLite 数据库）
+1. 创建 `~/.fusion/fusion-console/`（配置 + SQLite 数据库）
 2. 创建 `admin` 用户，密码为出厂默认 `fusion-admin-2026`（首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD` 可覆盖）
 3. 监听 `http://127.0.0.1:11480`
 
 浏览器打开 `http://127.0.0.1:11480`，用 `admin` / `fusion-admin-2026` 登录。
 
-> 出厂默认密码仅为本机开发便利。console 暴露到本机之外（如 Tailscale）时，请首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD`，或登录后修改密码（加用户：编辑 `~/.fusion-console/config.json` 加 bcrypt hash 后重启）。
+> 出厂默认密码仅为本机开发便利。console 暴露到本机之外（如 Tailscale）时，请首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD`，或登录后修改密码（加用户：编辑 `~/.fusion/fusion-console/config.json` 加 bcrypt hash 后重启）。
 
 一键启动（macOS / Linux `./start.sh`，Windows `start.cmd`）：同时拉起随包附带的 fusion-gateway 和 console，并用系统默认浏览器打开已自动登录的页面。只需要再配 LLM（下一节）。
 
@@ -92,7 +92,7 @@ agent 是办公室主机上的本地 CLI，至少装一个：
 - Codex CLI：`codex` 在 PATH
 - OpenCode：`opencode` 在 PATH
 
-到 console 的 **Agents** 页检查：在 PATH 上显示 `detected`，否则灰显（改路径：编辑 `~/.fusion-console/config.json` 里该 agent 的 `command` 为绝对路径）。
+到 console 的 **Agents** 页检查：在 PATH 上显示 `detected`，否则灰显（改路径：编辑 `~/.fusion/fusion-console/config.json` 里该 agent 的 `command` 为绝对路径）。
 
 跑任务：**Chat 页** → 选 agent → 填 **workdir**（agent 允许操作的项目目录）→ 输入任务 → 点机器人按钮。agent 在该 workdir 内 headless 执行，工具调用、结果、成本实时流式显示并入成本报表。
 
@@ -104,7 +104,7 @@ agent 是办公室主机上的本地 CLI，至少装一个：
 
 | 现象 | 处理 |
 |---|---|
-| 登录密码丢失 | 删 `~/.fusion-console/config.json` 重启，重新创建 `admin`（出厂默认 `fusion-admin-2026` 或 `FUSION_CONSOLE_ADMIN_PASSWORD` 指定值） |
+| 登录密码丢失 | 删 `~/.fusion/fusion-console/config.json` 重启，重新创建 `admin`（出厂默认 `fusion-admin-2026` 或 `FUSION_CONSOLE_ADMIN_PASSWORD` 指定值） |
 | Gateway 管理界面又要登录 | 在 Gateway 页保存一次网关管理员用户名/密码（存 OS keychain），之后 "Open Admin GUI" 自动登录 |
 | 网关返回 `401 auth_error` | 客户端 key 错误，或网关 `auth.api_keys` 里没有 |
 | `model not allowed` | key 的 `allowed_models` 不含目标模型 |

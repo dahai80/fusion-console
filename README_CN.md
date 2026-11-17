@@ -8,7 +8,7 @@
 
 ## 编排：聊天指挥 Agent
 
-开启编排（设置 → Orchestration，或配置向导）后，当前聊天就是**大脑**：模型获得 3 个原生工具 — `list_agents`、`run_agent`、`read_artifact` — 自行决定何时把任务派给 headless agent、收回结果、读产出验证、向你汇报（每轮最多 8 次规划迭代）。不需要单独配置"大脑 agent" — 大脑就是你聊天用的那个模型。大脑工作目录（`read_artifact` 读取沙箱 + worktree 父目录）可在 Workers 标签页配置，默认 `~/.fusion-console/agents`。大脑还可绑定代码源：GitHub URL（每次派发前同步到大脑工作目录：clone / fast-forward pull，本地改动绝不覆盖）或本地仓库路径（直接作为大脑工作区）。
+开启编排（设置 → Orchestration，或配置向导）后，当前聊天就是**大脑**：模型获得 3 个原生工具 — `list_agents`、`run_agent`、`read_artifact` — 自行决定何时把任务派给 headless agent、收回结果、读产出验证、向你汇报（每轮最多 8 次规划迭代）。不需要单独配置"大脑 agent" — 大脑就是你聊天用的那个模型。大脑工作目录（`read_artifact` 读取沙箱 + worktree 父目录）可在 Workers 标签页配置，默认 `~/.fusion/fusion-console/agents`。大脑还可绑定代码源：GitHub URL（每次派发前同步到大脑工作目录：clone / fast-forward pull，本地改动绝不覆盖）或本地仓库路径（直接作为大脑工作区）。
 
 大脑也可切换为 **claude code**（Brain 卡片 → brain: claude code）：每次编排轮次在脑工作目录启动 claude 会话，通过 MCP（`fusion-console mcp` 子命令）获得与聊天规划器相同的派活工具，成本记为 `brain:claude`。向大脑传授工作规范：`brain_context_files`（Workers 标签页，每行一个路径）会注入规划器 prompt（总量上限 12 KB）— 指向工作规范文档和 repo 清单即可；claude code 大脑还会自动读取工作目录里的 `CLAUDE.md`，新装机器把规范文件复制进大脑工作目录即可生效。worker 与 repo 绑定：控制台会拒绝派发给未绑定该 repo 的 worker，跨 repo 的工作应改为在该 repo 提单。
 
@@ -24,7 +24,7 @@
 
 - **聊天**：SSE 流式对话，支持 OpenAI 兼容 / Anthropic 兼容 provider；fusion-gateway（:11432）只是其中一个可选项，不是硬依赖。
 - **Agent 会话**：同一聊天 UI 承载 headless agent CLI（`claude -p --output-format stream-json`、`codex exec --json`、`opencode run`、`fusion`）。一个任务进，统一事件流出（文本 / 工具调用 / 结果 / 成本）。
-- **编排（M1+M2）**：打开聊天工具栏的 `orchestrate` 开关（按轮授权），聊天模型即主大脑：通过原生 tool-calls（`list_agents` / `run_agent` / `read_artifact`）向 headless agent 派活，每个 agent 在自己的专属工作目录运行（默认 `~/.fusion-console/agents/<name>/`，可在配置里按 agent 覆盖 `work_dir`）。循环有界（8 轮）；每次派活都过 [fusion-harness](https://github.com/dahai80/fusion-console) 工具准入链（deny 优先、sidecar 不可用即 fail-closed），聊天轮次同样受 harness 保护（上下文压缩 + 按会话 token 预算）。成本分行：规划器 `chat:<provider>` 与被派发的 `agent:<name>` 分开记账。
+- **编排（M1+M2）**：打开聊天工具栏的 `orchestrate` 开关（按轮授权），聊天模型即主大脑：通过原生 tool-calls（`list_agents` / `run_agent` / `read_artifact`）向 headless agent 派活，每个 agent 在自己的专属工作目录运行（默认 `~/.fusion/fusion-console/agents/<name>/`，可在配置里按 agent 覆盖 `work_dir`）。循环有界（8 轮）；每次派活都过 [fusion-harness](https://github.com/dahai80/fusion-console) 工具准入链（deny 优先、sidecar 不可用即 fail-closed），聊天轮次同样受 harness 保护（上下文压缩 + 按会话 token 预算）。成本分行：规划器 `chat:<provider>` 与被派发的 `agent:<name>` 分开记账。
 - **配置界面**：provider + baseURL + 模型（从 /v1/models 拉取）；apiKey 存 OS keychain（Keychain / DPAPI / libsecret），绝不写进配置文件。
 - **成本账**：每轮入 SQLite，按天按来源出报表。
 - **失败日志（MAST 分类）**：编排失败自动打标 — 派发简报缺失触发 pre-flight 警告（聊天工具流可见）并记 `fc1_brief`，agent 报错记 `fc3_tool`；可手动补记 `fc2_handoff` / `other`。Dashboard 的 **Failures** 页列出全部标签，支持 JSONL 导出（[MAST, arXiv 2503.13657]）。
@@ -77,7 +77,7 @@ Windows x86_64。其他平台请用上面"构建"从源码编译。发新 wheel�
 ./bin/fusion-console            # 监听 127.0.0.1:11480
 ```
 
-数据目录 `~/.fusion-console`（可用 `FUSION_CONSOLE_DIR` 覆盖）。首次启动创建 `admin` 用户，出厂默认密码 `fusion-admin-2026`（首次启动前可用 `FUSION_CONSOLE_ADMIN_PASSWORD` 覆盖）；非本机部署首次登录后请修改。
+数据目录 `~/.fusion/fusion-console`（可用 `FUSION_CONSOLE_DIR` 覆盖）。首次启动创建 `admin` 用户，出厂默认密码 `fusion-admin-2026`（首次启动前可用 `FUSION_CONSOLE_ADMIN_PASSWORD` 覆盖）；非本机部署首次登录后请修改。
 
 开发者一键启动：一条命令拉起 gateway（随包附带时）、console，并用系统默认浏览器打开已自动登录的页面：
 

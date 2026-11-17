@@ -235,7 +235,7 @@ func DefaultDir() string {
 	if err != nil {
 		log.Fatalf("config: cannot resolve home directory: %v", err)
 	}
-	return filepath.Join(home, ".fusion-console")
+	return filepath.Join(home, ".fusion", "fusion-console")
 }
 
 // Path returns the config file path inside dir.
