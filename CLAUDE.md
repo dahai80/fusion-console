@@ -81,7 +81,32 @@ emit usage chunks twice per stream (partial on finish chunk + full trailing
 chunk) — take the max, never the sum. Cost rows: planner `chat:<provider>` vs
 dispatched `agent:<name>` kept separate.
 
+## Teams (agent-studio integration)
+
+Teams live entirely in the agent-studio daemon (UDS JSON-RPC on
+`/tmp/fusion-studio.sock`, overridable via `FUSION_STUDIO_SOCKET`); the console
+is a thin proxy and stores no team state. Two creation paths share one pipeline
+(`teamCreateCore`): the TeamPage wizard (`POST /api/team/create`) and the
+chat-side brain tool `create_team` (same register -> add_task -> optional
+lead_start order; per-task/lead errors stay visible, register failure aborts).
+
+Lifecycle:
+- **View**: TeamPage (sidebar Team tab) — the switcher lists every live team
+  from `teams.list`; `?team=<name>` deep-links. Chat-created teams appear
+  automatically with the next refresh.
+- **Converse**: chat tools `team_send` (one TeamMessage into the mailbox,
+  from/to must be existing members — register a console/operator member with
+  `create_team_member` first) and `team_inbox` (non-draining mailbox read).
+  Mailbox-async by design: no synchronous chat-to-lead round trip.
+- **Operate**: pause/resume/disband + lead start/stop/status from TeamPage or
+  via `/api/team/op`; disband confirms with member/open-task counts.
+- **Maintenance**: state persists on the daemon side (inbox files, task board,
+  playbook store under the studio teams dir); disband is the only removal —
+  paused teams keep their state across daemon restarts. The console never
+  garbage-collects teams.
+
 ## Conventions
+
 
 - Go: gofmt (tabs) wins over the monorepo 4-space rule; CI enforces gofmt -l.
 - Comments/logs/CI/GitHub: English only. User-facing docs bilingual:
