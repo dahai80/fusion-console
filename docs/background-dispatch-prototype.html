@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fusion-console — Background Dispatch Prototype</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+}
+</script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .log-line { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body class="bg-zinc-50 dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 min-h-screen">
+
+<!-- ============ header ============ -->
+<div class="max-w-4xl mx-auto px-6 pt-8">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-xl font-semibold">Background Dispatch — 交互原型</h1>
+      <p class="text-sm text-zinc-500 mt-1">大脑后台派活，聊天不阻塞。点卡片上的按钮模拟「worker 干完」看完成态。</p>
+    </div>
+    <button onclick="document.documentElement.classList.toggle('dark')"
+      class="rounded-xl border border-zinc-200/80 dark:border-zinc-800 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800">
+      明/暗切换
+    </button>
+  </div>
+
+  <!-- ============ design tokens legend ============ -->
+</div>
+
+<!-- ============ mock chat (3 columns) ============ -->
+<div class="max-w-7xl mx-auto px-6 py-8">
+  <div class="flex gap-4 items-start">
+  <!-- ======= sidebar: chat history ======= -->
+  <aside class="hidden md:block w-60 shrink-0 rounded-2xl border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm shadow-zinc-900/5 p-2">
+    <div class="flex items-center justify-between px-2 py-1.5">
+      <span class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Conversations</span>
+      <span class="flex h-5 w-5 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-500 text-sm">+</span>
+    </div>
+    <div class="space-y-0.5 text-sm">
+      <div class="flex items-center gap-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 px-3 py-2">
+        <svg class="shrink-0 text-zinc-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="truncate">让 fusion-health 修复…</span>
+        <span class="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-indigo-500 px-1.5 text-[11px] font-semibold text-white" title="1 个后台 run 已完成，未读">1</span>
+      </div>
+      <div class="flex items-center gap-2 rounded-xl px-3 py-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer">
+        <svg class="shrink-0 text-zinc-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="truncate">rag 检索延迟排查</span>
+        <span class="ml-auto inline-flex items-center gap-1 text-[11px] text-amber-500" title="后台 run 进行中">
+          <svg class="spin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>
+          1
+        </span>
+      </div>
+      <div class="flex items-center gap-2 rounded-xl px-3 py-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer">
+        <svg class="shrink-0 text-zinc-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="truncate">console v0.2.9 发布清单</span>
+      </div>
+      <div class="flex items-center gap-2 rounded-xl px-3 py-2 text-zinc-400">
+        <svg class="shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="truncate">dashboard 样式调整</span>
+      </div>
+    </div>
+    <p class="mt-2 px-2 text-[11px] leading-4 text-zinc-400">badge 实心 = 有已完成未读的后台 run<br>badge 转圈 = 该会话仍有 run 在跑</p>
+  </aside>
+
+  <!-- ======= chat column ======= -->
+  <div class="flex-1 min-w-0 rounded-2xl border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm shadow-zinc-900/5 overflow-hidden">
+
+    <!-- toolbar -->
+    <div class="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
+      <span class="flex items-center gap-1.5 rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-2.5 py-1.5 text-xs text-indigo-500">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
+        orchestrate: on
+      </span>
+      <span class="text-xs text-zinc-500">brain: claude (agent mode) · glm-5</span>
+      <span class="ml-auto text-xs text-zinc-400">3 个后台 run 运行中</span>
+    </div>
+
+    <!-- messages -->
+    <div class="space-y-4 p-4">
+
+      <!-- user msg -->
+      <div class="flex justify-end">
+        <div class="max-w-[80%] rounded-2xl rounded-br-md bg-indigo-500 px-4 py-2.5 text-sm text-white">
+          让 fusion-health 修复他自己代码仓的 issue
+        </div>
+      </div>
+
+      <!-- brain reply: text + running dispatch card -->
+      <div class="max-w-[85%] space-y-2">
+        <div class="flex items-start gap-2">
+          <span class="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-500/10 text-indigo-500">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.4-1.2 4.5-3 5.7V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.3C6.2 13.5 5 11.4 5 9a7 7 0 0 1 7-7z"/></svg>
+          </span>
+          <div class="space-y-2 min-w-0">
+            <p class="text-sm leading-relaxed">收到。fusion-health 有 2 个 open issue，我先把 #41（数据导出空指针）派给 <code class="rounded bg-zinc-100 px-1 text-xs dark:bg-zinc-800">fusion-health</code> worker 后台执行，同时继续处理你的其他指令。</p>
+
+            <!-- ======= RUNNING dispatch card ======= -->
+            <div id="card-running" class="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3">
+              <div class="flex flex-wrap items-center gap-2 text-sm">
+                <svg class="spin text-amber-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>
+                <span class="font-medium">fusion-health</span>
+                <span class="rounded-lg bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium text-amber-600">run #12 · 04:32</span>
+                <span class="ml-auto flex items-center gap-2">
+                  <button onclick="toggleLog('log-running')" class="rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">日志</button>
+                  <button onclick="completeRun()" class="rounded-lg border border-amber-500/40 px-2 py-1 text-xs text-amber-600 hover:bg-amber-500/10">▶ 模拟完成</button>
+                </span>
+              </div>
+              <p class="mt-1.5 truncate text-xs text-zinc-500">▸ Fix issue #41: 数据导出接口空指针 — 建分支 fix/41 → 修复 → 测试 → 合并 → push</p>
+              <div id="log-running" class="hidden mt-2 rounded-xl bg-zinc-950/95 p-2.5 text-[11px] leading-5 text-zinc-400 log-line">
+                <div><span class="text-zinc-600">04:29:12</span> <span class="text-emerald-400">✓</span> synced repo (fast-forward to a3f9c21)</div>
+                <div><span class="text-zinc-600">04:29:15</span> <span class="text-emerald-400">✓</span> branch fix/41 created</div>
+                <div><span class="text-zinc-600">04:31:40</span> <span class="text-sky-400">⚙</span> Edit internal/api/export.go:187 — nil check on req.Filter</div>
+                <div><span class="text-zinc-600">04:32:18</span> <span class="text-sky-400">⚙</span> Bash pytest tests/test_export.py -x <span class="text-zinc-600">(running…)</span></div>
+              </div>
+            </div>
+
+            <p class="text-sm leading-relaxed text-zinc-500">干活期间聊天不被占用，你可以继续派其他活或聊别的。我会在它完成后汇报。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- user msg 2 -->
+      <div class="flex justify-end">
+        <div class="max-w-[80%] rounded-2xl rounded-br-md bg-indigo-500 px-4 py-2.5 text-sm text-white">
+          顺便让 fusion-rag 把检索延迟的 issue 也修了
+        </div>
+      </div>
+
+      <!-- brain reply 2: second card, queued state -->
+      <div class="max-w-[85%] space-y-2">
+        <div class="flex items-start gap-2">
+          <span class="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-500/10 text-indigo-500">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.4-1.2 4.5-3 5.7V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.3C6.2 13.5 5 11.4 5 9a7 7 0 0 1 7-7z"/></svg>
+          </span>
+          <div class="space-y-2 min-w-0">
+            <p class="text-sm leading-relaxed">好，fusion-rag #17 已派。当前全局只允许 1 个 agent 子进程并发，它排在 run #12 后面自动执行。</p>
+
+            <!-- ======= QUEUED dispatch card ======= -->
+            <div class="rounded-2xl border border-zinc-200/80 dark:border-zinc-800 p-3">
+              <div class="flex flex-wrap items-center gap-2 text-sm">
+                <svg class="text-zinc-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+                <span class="font-medium">fusion-rag</span>
+                <span class="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800">queued · 等 run #12</span>
+              </div>
+              <p class="mt-1.5 truncate text-xs text-zinc-500">▸ Fix issue #17: 检索延迟 P99 过高 — 分析 + 优化</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ======= COMPLETED card (appears after clicking 模拟完成) ======= -->
+      <div id="card-done" class="hidden max-w-[85%] space-y-2">
+        <div class="flex items-start gap-2">
+          <span class="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          </span>
+          <div class="space-y-2 min-w-0 w-full">
+            <div class="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+              <div class="flex flex-wrap items-center gap-2 text-sm">
+                <svg class="text-emerald-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+                <span class="font-medium">fusion-health</span>
+                <span class="rounded-lg bg-emerald-500/10 px-1.5 py-0.5 text-xs font-medium text-emerald-600">run #12 完成 · 06:41 · $0.83</span>
+                <span class="ml-auto flex items-center gap-2">
+                  <button onclick="toggleLog('log-done')" class="rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">日志</button>
+                  <button onclick="toggleLog('artifact')" class="rounded-lg px-2 py-1 text-xs text-indigo-500 hover:bg-indigo-500/10">产出</button>
+                </span>
+              </div>
+              <p class="mt-1.5 text-xs text-zinc-500">✓ fix/41 已合并主干并 push · 测试 47 passed · commit <code class="text-indigo-500">e8d2f90</code> · issue #41 已评论并关闭</p>
+              <div id="artifact" class="hidden mt-2 rounded-xl border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3 text-xs">
+                <p class="font-medium mb-1">worker 汇报（原文）</p>
+                <p class="text-zinc-500 leading-5">根因：ExportHandler 未判空 req.Filter，过滤为空时 panic。修复：入口增加 nil check + 单测覆盖空过滤分支。回归：pytest 47 passed。PR 无需 review 流程（按仓规范直接合并）。</p>
+              </div>
+              <div id="log-done" class="hidden mt-2 rounded-xl bg-zinc-950/95 p-2.5 text-[11px] leading-5 text-zinc-400 log-line">
+                <div><span class="text-zinc-600">04:33:02</span> <span class="text-emerald-400">✓</span> pytest 47 passed in 12.4s</div>
+                <div><span class="text-zinc-600">04:35:10</span> <span class="text-emerald-400">✓</span> merged fix/41 → main, pushed a3f9c21..e8d2f90</div>
+                <div><span class="text-zinc-600">04:36:41</span> <span class="text-emerald-400">✓</span> issue #41 commented + closed</div>
+              </div>
+            </div>
+            <!-- brain verification message -->
+            <p class="text-sm leading-relaxed">fusion-health 完成了：#41 空指针已修复（缺 nil check），47 个测试全过，已合并 push 并关单。要我把 diff 摘要贴出来，或继续派别的活吗？</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- composer -->
+    <div class="border-t border-zinc-200/80 dark:border-zinc-800 p-3">
+      <div class="flex gap-2">
+        <div class="flex-1 rounded-xl border border-zinc-200/80 dark:border-zinc-800 px-3 py-2 text-sm text-zinc-400">Message… (@ to hand off to an agent)</div>
+        <span class="flex items-center gap-1.5 rounded-xl bg-indigo-500 px-3 py-2 text-white"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= right rail: dispatch panel ======= -->
+  <aside class="hidden lg:block w-72 shrink-0 rounded-2xl border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm shadow-zinc-900/5 p-3">
+    <div class="flex items-center justify-between px-1 pb-2">
+      <span class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">派活中心</span>
+      <span class="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800">1 跑 · 1 排队</span>
+    </div>
+    <div class="space-y-2 text-sm">
+      <!-- running -->
+      <div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-2.5">
+        <div class="flex items-center gap-2">
+          <svg class="spin shrink-0 text-amber-500" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>
+          <span class="font-medium text-xs">fusion-health</span>
+          <span class="ml-auto text-[11px] text-amber-600">04:32</span>
+        </div>
+        <p class="mt-1 truncate text-[11px] text-zinc-500" title="Fix issue #41: 数据导出接口空指针">▸ Fix issue #41: 数据导出接口空指针</p>
+        <p class="mt-0.5 text-[11px] text-zinc-400">pytest tests/test_export.py -x</p>
+      </div>
+      <!-- queued -->
+      <div class="rounded-xl border border-zinc-200/80 dark:border-zinc-800 p-2.5">
+        <div class="flex items-center gap-2">
+          <svg class="shrink-0 text-zinc-400" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          <span class="font-medium text-xs">fusion-rag</span>
+          <span class="ml-auto text-[11px] text-zinc-400">queued</span>
+        </div>
+        <p class="mt-1 truncate text-[11px] text-zinc-500">▸ Fix issue #17: 检索延迟 P99 过高</p>
+      </div>
+      <!-- done -->
+      <div class="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-2.5">
+        <div class="flex items-center gap-2">
+          <svg class="shrink-0 text-emerald-500" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          <span class="font-medium text-xs">fusion-cowork</span>
+          <span class="ml-auto text-[11px] text-emerald-600">完成 · $0.41</span>
+        </div>
+        <p class="mt-1 truncate text-[11px] text-zinc-500">✓ issue #508 DAG approval checkpoint</p>
+        <p class="mt-0.5 text-[11px] text-indigo-500">commit 9c1e7ab · issue 已关</p>
+      </div>
+    </div>
+    <p class="mt-3 border-t border-zinc-200/80 px-1 pt-2 text-[11px] leading-4 text-zinc-400 dark:border-zinc-800">
+      派完的卡在聊天流里同步出现；这里看全局队列。点条目跳到对应会话。
+    </p>
+  </aside>
+  </div>
+
+  <!-- ============ notification badge mock ============ -->
+  <div class="mt-6 rounded-2xl border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+    <p class="text-sm font-medium mb-3">④ 会话历史里的状态标记（见左侧侧栏）</p>
+    <div class="text-xs text-zinc-500 leading-5">
+      实心数字 badge = 该会话有已完成未读的后台 run，点开即清零，结果已在对话流里；<br>
+      转圈数字 = 该会话还有 run 在跑；无标记 = 全部已读/无后台任务。Dashboard Workers tab 同步 busy/idle 分组。
+    </div>
+  </div>
+
+  <!-- ============ backend contract note ============ -->
+  <div class="mt-4 rounded-2xl border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 text-sm text-zinc-500">
+    <p class="font-medium text-zinc-700 dark:text-zinc-300 mb-2">落地要点（验收后实现）</p>
+    <ul class="list-disc space-y-1 pl-5 text-xs leading-5">
+      <li><code>run_agent</code> 工具新增 <code>background: true</code>：入队立即返回 run id，卡片以 tool 事件流推给前端</li>
+      <li>后台 run 完成后写回会话（结果摘要 + artifact），前端原位更新卡片；大脑下一轮自动带上下文验收</li>
+      <li>并发策略：默认保持 1 个子进程；<code>max_concurrent_agents</code> 配置项放大队列（排队卡显示 queued）</li>
+      <li>30 分钟单 run 超时不变；后台 run 超时/失败同样以卡片红色态 + 大脑汇报呈现</li>
+      <li>侧栏 Chat badge = 未读完成数，进入对话即清零</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+function toggleLog(id) {
+  document.getElementById(id).classList.toggle('hidden');
+}
+function completeRun() {
+  document.getElementById('card-running').classList.add('hidden');
+  document.getElementById('card-done').classList.remove('hidden');
+}
+</script>
+</body>
+</html>

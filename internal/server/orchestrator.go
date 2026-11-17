@@ -38,8 +38,9 @@ const orchestratorSystemPrompt = `You are the main brain of a local development 
 
 Tools:
 - list_agents: see which agents are installed.
-- run_agent: give one agent a concrete, self-contained task. The agent works in its own workspace and returns a result.
+- run_agent: give one agent a concrete, self-contained task. The agent works in its own workspace and returns a result. For tasks expected to take more than a couple of minutes (issue fixes, refactors, test suites) pass background=true — you get a run id immediately, the worker keeps running after your turn ends, and the outcome is posted into this conversation automatically. Reference a finished background run by its id when the user asks about progress.
 - read_artifact: read a file the agent produced, relative to the agents workspace root.
+- read_attachment: read a chat attachment segment by stored name (byte range with next_offset continuation). When the user attaches a document, read it through this tool segment by segment — never request the whole file at once.
 
 Rules:
 - Answer simple questions directly; delegate only real coding/execution work.
@@ -47,6 +48,110 @@ Rules:
 - After an agent finishes, verify its result (read_artifact when useful) before reporting to the user.
 - Never invent agent results; report only what run_agent actually returned.
 - Reply in the user's language.`
+
+// orchestratorPrompt composes the planner system prompt plus the live
+// workspace facts: brain work dir, bound code source, and the configured
+// worker fleet. Without this the brain asks the user for repo paths that are
+// already configured.
+func (s *Server) orchestratorPrompt() string {
+	orch := s.cfg.Orchestrator
+	var b strings.Builder
+	b.WriteString(orchestratorSystemPrompt)
+	b.WriteString("\n\nYour workspace configuration (already set up — never ask the user for these):\n")
+	b.WriteString("- Brain workspace root (read_artifact sandbox and worktree parent): " + s.agentsRoot() + "\n")
+	if repo := strings.TrimSpace(orch.BrainRepo); repo != "" {
+		if isRepoURL(repo) {
+			b.WriteString("- Brain code source: GitHub repo " + repo + ", synced before every dispatch into " + filepath.Join(s.brainBaseDir(), "repo") + "\n")
+		} else {
+			b.WriteString("- Brain code source: local repo mounted as the workspace at " + s.agentsRoot() + "\n")
+		}
+		if strings.TrimSpace(orch.BrainRepoBranch) != "" {
+			b.WriteString("- Brain repo branch: " + strings.TrimSpace(orch.BrainRepoBranch) + "\n")
+		}
+	}
+	if len(orch.Workers) > 0 {
+		b.WriteString("- Configured workers (dispatch targets, address by exact name):\n")
+		for _, w := range orch.Workers {
+			if !w.Enabled {
+				continue
+			}
+			src := w.Isolation
+			if src == "" {
+				src = "worktree"
+			}
+			detail := src
+			if w.Repo != "" {
+				detail += " @ " + w.Repo
+			}
+			b.WriteString("  * " + w.Name + " (" + w.Agent + ", " + detail + ")\n")
+		}
+	}
+	b.WriteString("- Repo ownership: a worker only handles work inside its bound repo/work dir (shown above); the console rejects cross-repo dispatches.\n")
+	b.WriteString("- If a task concerns a repository that no worker owns, do not force a dispatch — tell the user to file an issue in that repo instead.\n")
+	b.WriteString("- Dispatch workflow: instruct each worker to fix on a topic branch, run the repo's tests, then merge to the default branch and push — never direct commits to the default branch. Verify the merge landed (read_artifact or the worker's report) before reporting success to the user.\n")
+	b.WriteString("- Long dispatches: use run_agent with background=true for anything expected to run longer than ~2 minutes. Tell the user it is running in the background; the result is posted into this conversation automatically when done. Do not block the turn waiting on it.\n")
+	b.WriteString("- Dispatch sizing: each run_agent brief covers ONE bounded unit of work — a single issue, or one self-contained change. Never bundle multiple issues or phases into one brief: background dispatches are hard-killed at 30 minutes and a multi-part brief loses all unfinished parts. Split multi-part work into sequential dispatches (one issue per dispatch), verify each result, then dispatch the next.\n")
+	if g := workspaceGuidelines(s.agentsRoot(), 8*1024); g != "" {
+		b.WriteString("\nWorkspace conventions (CLAUDE.md / AGENTS.md found in the brain workspace):\n")
+		b.WriteString(g)
+	}
+	if ctx := s.brainContext(); ctx != "" {
+		b.WriteString("\nWorking conventions and background knowledge (from the configured context files):\n")
+		b.WriteString(ctx)
+	}
+	return b.String()
+}
+
+// brainContext loads the configured context files (working conventions, repo
+// inventories, team rules) into one bounded text block for the planner
+// prompt. Missing files are logged and skipped; the block is capped so a
+// huge file cannot drown the conversation.
+func (s *Server) brainContext() string {
+	const (
+		maxPerFile = 6 * 1024
+		maxTotal   = 12 * 1024
+	)
+	var b strings.Builder
+	for _, path := range s.cfg.Orchestrator.BrainContextFiles {
+		path = expandBrainPath(path)
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("orchestrator: brain context file %s unreadable (%v) — skipped", path, err)
+			continue
+		}
+		if b.Len()+len(data) > maxTotal {
+			data = data[:max(0, maxTotal-b.Len())]
+		}
+		if len(data) > maxPerFile {
+			data = data[:maxPerFile]
+		}
+		b.WriteString("--- " + path + " ---\n")
+		b.Write(data)
+		b.WriteString("\n")
+		if b.Len() >= maxTotal {
+			log.Printf("orchestrator: brain context truncated at %d bytes", b.Len())
+			break
+		}
+	}
+	return b.String()
+}
+
+// expandBrainPath expands a leading ~/ in a context file path.
+func expandBrainPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/"))
+		}
+	}
+	return path
+}
 
 // orchestratorTools declares the planner tool set (OpenAI function format;
 // the Anthropic provider converts to input_schema).
@@ -59,11 +164,12 @@ func orchestratorTools() []chat.ToolDecl {
 		},
 		{
 			Name:        "run_agent",
-			Description: "Run one headless coding agent on a concrete task. With worktree isolation the agent edits a fresh git worktree of the target repo; otherwise it works in its dedicated workspace. Returns the agent's final result text.",
+			Description: "Run one headless coding agent on a concrete task. With worktree isolation the agent edits a fresh git worktree of the target repo; otherwise it works in its dedicated workspace. Returns the agent's final result text. For long tasks (issue fixes, multi-step refactors) pass background=true: the call returns a run id immediately and the outcome is reported back into this conversation when the run finishes.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
-				`"agent":{"type":"string","description":"agent name, e.g. claude or fusion-code"},` +
+				`"agent":{"type":"string","description":"worker name from list_agents (preferred) or a bare agent type like claude"},` +
 				`"task":{"type":"string","description":"complete self-contained task description"},` +
-				`"repo":{"type":"string","description":"absolute path of the target repository; required when the agent uses worktree isolation, must be in the configured whitelist"}` +
+				`"repo":{"type":"string","description":"absolute path of the target repository; required when the agent uses worktree isolation, must be in the configured whitelist"},` +
+				`"background":{"type":"boolean","description":"true = run in background and report back later; use for tasks expected to take more than a couple of minutes"}` +
 				`},"required":["agent","task"]}`),
 		},
 		{
@@ -72,6 +178,15 @@ func orchestratorTools() []chat.ToolDecl {
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
 				`"path":{"type":"string","description":"relative path inside the agents root"}` +
 				`},"required":["path"]}`),
+		},
+		{
+			Name:        "read_attachment",
+			Description: "Read one byte-range segment of a chat attachment by its stored name. Returns the segment plus continuation metadata (total size, next_offset, eof) — follow next_offset until eof instead of requesting the whole file at once, so large documents never flood the context.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"stored":{"type":"string","description":"stored attachment name from the [attachment: ...] message reference"},` +
+				`"offset":{"type":"integer","description":"byte offset to start reading from; 0 for the first segment"},` +
+				`"max_bytes":{"type":"integer","description":"segment size in bytes, capped at 256 KB; default 64 KB"}` +
+				`},"required":["stored"]}`),
 		},
 		{
 			Name:        "create_team_member",
@@ -91,9 +206,41 @@ func orchestratorTools() []chat.ToolDecl {
 	}
 }
 
-// agentsRoot is the sandbox root for read_artifact and the default parent of
-// per-agent workspaces.
+// agentsRoot is the sandbox root for read_artifact and the parent of
+// worktree workspaces. When the brain is bound to a local repo that repo dir
+// is the root; otherwise the configured brain work dir (created on demand),
+// else the historical <config dir>/agents default.
 func (s *Server) agentsRoot() string {
+	if repo := strings.TrimSpace(s.cfg.Orchestrator.BrainRepo); repo != "" && !isRepoURL(repo) {
+		if st, err := os.Stat(repo); err == nil && st.IsDir() {
+			return repo
+		}
+		log.Printf("orchestrator: brain repo %s not found or not a directory — falling back to work dir", repo)
+	}
+	return s.brainBaseDir()
+}
+
+// brainBaseDir resolves (and creates) the brain work dir: the configured
+// value with ~ / relative paths expanded, else <config dir>/agents.
+func (s *Server) brainBaseDir() string {
+	d := strings.TrimSpace(s.cfg.Orchestrator.BrainWorkDir)
+	if d != "" {
+		if d == "~" || strings.HasPrefix(d, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				d = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(d, "~"), "/"))
+			}
+		}
+		if !filepath.IsAbs(d) {
+			if abs, err := filepath.Abs(d); err == nil {
+				d = abs
+			}
+		}
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			log.Printf("orchestrator: brain work dir %s unusable (%v) — falling back to default root", d, err)
+		} else {
+			return d
+		}
+	}
 	return filepath.Join(s.cfgDir, "agents")
 }
 
@@ -101,12 +248,7 @@ func (s *Server) agentsRoot() string {
 // the tool-role message for the next planner iteration. Long-running agent
 // dispatches stream progress through send so the browser shows live status.
 func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user string, convID int64, send func(map[string]any)) (string, error) {
-	var args struct {
-		Agent string `json:"agent"`
-		Task  string `json:"task"`
-		Path  string `json:"path"`
-		Repo  string `json:"repo"`
-	}
+	var args dispatchArgs
 	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
 		return "", fmt.Errorf("tool %s: bad arguments: %v", call.Name, err)
 	}
@@ -137,8 +279,18 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 
 	case "run_agent":
 		cli, wk := s.resolveWorkerTarget(args.Agent)
-		adapter, ok := s.agents[cli]
-		if !ok {
+		// The brain sometimes dispatches with a bare agent type plus a repo
+		// path. Resolve that back to the owning worker so isolation, budget,
+		// repo binding and Dashboard status all apply (deterministic, not
+		// prompt-dependent).
+		if wk == nil && strings.TrimSpace(args.Repo) != "" {
+			if byRepo := s.resolveWorkerByRepo(args.Repo); byRepo != nil {
+				wk = byRepo
+				cli = wk.Agent
+				log.Printf("orchestrator: dispatch by repo %s resolved to worker %s", args.Repo, wk.Name)
+			}
+		}
+		if _, ok := s.agents[cli]; !ok {
 			return "", fmt.Errorf("unknown agent %q", args.Agent)
 		}
 		if strings.TrimSpace(args.Task) == "" {
@@ -168,122 +320,17 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		if wk != nil && wk.MaxBudgetUSD > 0 {
 			budget = wk.MaxBudgetUSD
 		}
-		workdir := s.cfg.ResolveWorkDir(cli)
-		if wk != nil {
-			if wk.Isolation == "worktree" {
-				// Named workers carry their own default repo; the per-run
-				// argument wins when the brain passes one explicitly.
-				repo := args.Repo
-				if strings.TrimSpace(repo) == "" {
-					repo = wk.Repo
-				}
-				if strings.TrimSpace(repo) != "" {
-					wt, err := s.createWorktree(repo, args.Agent)
-					if err != nil {
-						return "", err
-					}
-					workdir = wt
-				}
-			} else {
-				workdir = s.cfg.ResolveWorkerDir(*wk)
+		// Long tasks run in the background: the call returns immediately and
+		// the outcome is reported back into the conversation when finished.
+		// In MCP mode this process is ephemeral (it dies with the claude
+		// turn), so the run is handed to the long-lived server instead.
+		if args.Background {
+			if s.mcpMode {
+				return s.enqueueViaServer(args)
 			}
+			return s.enqueueBackgroundDispatch(convID, user, args, wk, cli, settings, budget)
 		}
-		log.Printf("orchestrator: dispatch worker=%s agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
-			args.Agent, cli, isolationOf(wk), workdir, budget, user)
-		pEnv, forcedModel, bindNote := s.providerEnv(cli, wk)
-		if bindNote != "" && send != nil {
-			// Design v2 §4.1B: binding fallbacks surface in the chat stream,
-			// not only server logs.
-			send(map[string]any{"type": "tool", "tool": "run_agent", "status": "progress",
-				"detail": "ℹ️ " + bindNote})
-		}
-		taskText := s.prefixWorkerTask(ctx, args.Agent, args.Task)
-		opts := agent.RunOpts{
-			Task: taskText, Workdir: workdir,
-			Model:           forcedModel,
-			PermissionMode:  settings.PermissionMode,
-			MaxBudgetUSD:    budget,
-			MaxBudgetTokens: settings.MaxBudgetTokens,
-			Command:         settings.Command,
-			Env:             pEnv,
-		}
-		// One agent subprocess at a time, same gate as manual agent runs.
-		s.agentRuns.Lock()
-		defer s.agentRuns.Unlock()
-		if note := s.versionChangeNotice(args.Agent, agent.CommandFor(settings.Name, settings.Command)); note != "" && send != nil {
-			send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress", "detail": note})
-		}
-		evCh, err := adapter.Run(ctx, opts)
-		if err != nil {
-			s.tagFailure(convID, user, args.Agent, "fc3_tool", "failed to start: "+err.Error())
-			return "", fmt.Errorf("agent %s failed to start: %v", args.Agent, err)
-		}
-		// Live dashboard state: mark the worker busy and publish progress.
-		s.runs.start(args.Agent, args.Task)
-		defer s.runs.end(args.Agent)
-		full, result := "", ""
-		var usage agent.Event
-		// Live progress: forward the agent's own tool activity plus a periodic
-		// heartbeat, so the chat shows the worker is actually running.
-		start := time.Now()
-		heartbeat := time.NewTicker(15 * time.Second)
-		defer heartbeat.Stop()
-		running := true
-		for running {
-			select {
-			case ev, ok := <-evCh:
-				if !ok {
-					running = false
-					break
-				}
-				switch ev.Type {
-				case agent.EventText:
-					full += ev.Text
-				case agent.EventTool:
-					s.runs.progress(args.Agent, ev.ToolDetail)
-					if send != nil {
-						send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
-							"detail": fmt.Sprintf("%s: %s", args.Agent, ev.ToolDetail)})
-					}
-				case agent.EventResult:
-					result = ev.Text
-				case agent.EventUsage:
-					usage = ev
-				case agent.EventNotice:
-					// Non-fatal visibility signal (drift/version hints): pass
-					// through to the chat stream without failing the dispatch.
-					if send != nil {
-						send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
-							"detail": fmt.Sprintf("%s notice: %s", args.Agent, ev.Text)})
-					}
-				case agent.EventError:
-					s.tagFailure(convID, user, args.Agent, "fc3_tool", "agent error: "+ev.Text)
-					return "", fmt.Errorf("agent %s error: %s", args.Agent, ev.Text)
-				}
-			case <-heartbeat.C:
-				s.runs.progress(args.Agent, fmt.Sprintf("running (%ds elapsed)", int(time.Since(start).Seconds())))
-				if send != nil {
-					send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
-						"detail": fmt.Sprintf("%s still running (%ds elapsed)", args.Agent, int(time.Since(start).Seconds()))})
-				}
-			case <-ctx.Done():
-				return "", fmt.Errorf("agent %s canceled: %v", args.Agent, ctx.Err())
-			}
-		}
-		final := result
-		if final == "" {
-			final = full
-		}
-		// Cost rows stay separate: planner chat vs agent runs.
-		_ = s.store.LogCost(convID, user, "agent:"+args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
-		log.Printf("orchestrator: agent=%s finished cost=%.4f tokens_in=%d tokens_out=%d", args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
-		if s.workerMemoryMode() == "fusion-memory" && final != "" {
-			s.commitWorkerMemory(ctx, args.Agent, args.Task, final)
-		}
-		if final == "" {
-			return "agent returned no output", nil
-		}
-		return final, nil
+		return s.finishDispatch(ctx, convID, user, call.Name, args, wk, cli, settings, budget, send)
 
 	case "read_artifact":
 		root := s.agentsRoot()
@@ -302,6 +349,21 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 			return string(data) + "\n...(truncated at 64 KB)", nil
 		}
 		return string(data), nil
+	case "read_attachment":
+		seg, err := s.readAttachmentSegment(args.Stored, args.Offset, args.MaxBytes)
+		if err != nil {
+			return "", err
+		}
+		header := fmt.Sprintf("[attachment %s: bytes %d-%d of %d]", seg.Stored, seg.Offset, seg.Offset+int64(seg.BytesRead), seg.Total)
+		if seg.EOF {
+			header += " (eof)"
+		} else {
+			header += fmt.Sprintf(" — continue with offset %d", seg.NextOffset)
+		}
+		if seg.Encoding == "base64" {
+			header += " (binary segment, base64)"
+		}
+		return header + "\n" + seg.Content, nil
 	case "create_team_member":
 		if !s.cfg.AgentStudio.Enabled {
 			return "", fmt.Errorf("team view (agent-studio integration) is not enabled in settings")
@@ -374,7 +436,7 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 		// read-only MCP calls executed against the local fusion-rag server.
 		tools = append(tools, ragToolDecls()...)
 	}
-	msgs = append([]chat.Message{{Role: "system", Content: orchestratorSystemPrompt}}, msgs...)
+	msgs = append([]chat.Message{{Role: "system", Content: s.orchestratorPrompt()}}, msgs...)
 	full := ""
 	var total chat.Event
 	for turn := 0; turn < maxOrchestratorTurns; turn++ {
@@ -393,7 +455,7 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 			} else if len(compacted) > 0 {
 				msgs = fromHarnessMessages(compacted)
 				if len(msgs) == 0 || msgs[0].Role != "system" {
-					msgs = append([]chat.Message{{Role: "system", Content: orchestratorSystemPrompt}}, msgs...)
+					msgs = append([]chat.Message{{Role: "system", Content: s.orchestratorPrompt()}}, msgs...)
 				}
 			}
 		}
@@ -588,6 +650,31 @@ func (s *Server) resolveWorkerTarget(id string) (cli string, wk *config.WorkerCo
 	return id, nil
 }
 
+// resolveWorkerByRepo maps a repo path the brain passed to run_agent back to
+// the worker that owns it: exact work_dir match first, then the worker whose
+// name equals the repo directory's basename (workers are named after their
+// fusion-* checkouts). nil when no enabled worker claims the path.
+func (s *Server) resolveWorkerByRepo(repoPath string) *config.WorkerConfig {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return nil
+	}
+	base := strings.TrimSuffix(filepath.Base(repoPath), "/")
+	for i := range s.cfg.Orchestrator.Workers {
+		w := &s.cfg.Orchestrator.Workers[i]
+		if !w.Enabled {
+			continue
+		}
+		if wd := s.cfg.ResolveWorkerDir(*w); wd == repoPath {
+			return w
+		}
+		if w.Name != "" && w.Name == base {
+			return w
+		}
+	}
+	return nil
+}
+
 // providerEnv resolves a worker's forced provider (agent settings override,
 // else the wizard worker config) into subprocess env vars plus an optional
 // model override. Anthropic-compatible providers speak the ANTHROPIC_* env
@@ -615,6 +702,11 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		agentModel = wk.Model
 	}
 	if pid == "" {
+		// No forced provider, but a per-worker model can still apply on top
+		// of the CLI's own login.
+		if wk != nil && strings.TrimSpace(wk.Model) != "" {
+			return nil, strings.TrimSpace(wk.Model), ""
+		}
 		return nil, "", ""
 	}
 	var prov *config.Provider
@@ -679,7 +771,32 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		return nil, "", fmt.Sprintf("provider %s type %q is not injectable — %s will use its own default login", pid, prov.Type, cli)
 	}
 	log.Printf("orchestrator: worker %s forced to provider %s (%s) model=%q", cli, pid, prov.Type, model)
+	// Per-worker model override wins over the provider default.
+	if wk != nil && strings.TrimSpace(wk.Model) != "" {
+		model = strings.TrimSpace(wk.Model)
+		if _, ok := env["ANTHROPIC_BASE_URL"]; ok {
+			env["ANTHROPIC_MODEL"] = model
+		}
+	}
 	return env, model, ""
+}
+
+// normalizeRepo reduces a repo reference to a comparable identity token:
+// trims whitespace, trailing slash and .git suffix, then keeps only the
+// last path segment. A GitHub URL ("https://github.com/o/fusion-web-shell")
+// and a local checkout path ("/Users/x/fusion/fusion-web-shell") both
+// reduce to "fusion-web-shell", so a brain dispatch that points at the
+// checkout directory matches the worker's bound repo URL. Different repos
+// with the same basename still collide — acceptable at fusion scale where
+// workers are named after their checkouts.
+func normalizeRepo(repo string) string {
+	r := strings.TrimSpace(repo)
+	r = strings.TrimSuffix(r, "/")
+	r = strings.TrimSuffix(r, ".git")
+	if i := strings.LastIndexAny(r, "/\\"); i >= 0 {
+		r = r[i+1:]
+	}
+	return strings.ToLower(r)
 }
 
 func isolationOf(wk *config.WorkerConfig) string {
@@ -687,6 +804,39 @@ func isolationOf(wk *config.WorkerConfig) string {
 		return "workspace"
 	}
 	return wk.Isolation
+}
+
+// workerWorkspaceBrief describes the worker's own workspace in one line so
+// the agent never asks the user for its work dir or repository — it already
+// runs in the right place with the repo synced.
+func (s *Server) workerWorkspaceBrief(name string, wk *config.WorkerConfig, workdir string) string {
+	if wk == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[workspace] You are worker " + name + ", running in " + workdir)
+	switch wk.Isolation {
+	case "github":
+		b.WriteString(" — a checkout of GitHub repo " + strings.TrimSpace(wk.Repo))
+		if wk.RepoBranch != "" {
+			b.WriteString(" (branch " + strings.TrimSpace(wk.RepoBranch) + ")")
+		}
+		b.WriteString(", already synced to the latest upstream commit before this run")
+	case "worktree":
+		if repo := strings.TrimSpace(wk.Repo); repo != "" {
+			b.WriteString(" — a fresh worktree branched from local repo " + repo)
+		}
+	default: // standalone
+		b.WriteString(" — a dedicated empty workspace with no repo binding")
+	}
+	b.WriteString(". The workspace is already set up; never ask the user for repo paths or clone locations.")
+	b.WriteString("\n[workflow] Bug fixes and features follow the branch flow: create a topic branch (e.g. fix/<issue>), implement, run the repo's tests, merge into the default branch, push. Never commit directly to the default branch without a branch + test pass.")
+	// The claude CLI auto-reads CLAUDE.md from the working dir; AGENTS.md is
+	// injected explicitly so both convention files reach the worker.
+	if g := workspaceGuidelines(workdir, 4*1024, "AGENTS.md"); g != "" {
+		b.WriteString("\nWorkspace conventions (AGENTS.md):\n" + g)
+	}
+	return b.String()
 }
 
 // createWorktree adds a detached git worktree of repo under the agents root.
@@ -756,4 +906,133 @@ func fromHarnessMessages(msgs []harness.Message) []chat.Message {
 		out = append(out, chat.Message{Role: m.Role, Content: m.Content})
 	}
 	return out
+}
+
+// runAgentBrainTurn executes one orchestrated turn with claude code as the
+// brain: a claude CLI session in the brain work dir, wired to the console's
+// dispatch tools over MCP. Its own agentic loop replaces the planner loop.
+func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg string, send func(map[string]any)) {
+	ad, ok := s.agents["claude"]
+	if !ok {
+		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": "claude CLI not available"})
+		return
+	}
+	settings := s.agentSettings("claude")
+	mcpFile, err := s.ensureBrainMCPConfig()
+	if err != nil {
+		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": "mcp config: " + err.Error()})
+		return
+	}
+	allowed := ""
+	for _, t := range orchestratorTools() {
+		allowed += "mcp__fusion-console__" + t.Name + ","
+	}
+	workdir := s.agentsRoot()
+	// The claude CLI auto-reads CLAUDE.md from its working dir; AGENTS.md and
+	// the synced repo's own convention files are injected explicitly so both
+	// conventions reach the agent-brain.
+	pre := workspaceGuidelines(workdir, 6*1024, "AGENTS.md")
+	if repoDir := filepath.Join(s.brainBaseDir(), "repo"); repoDir != workdir {
+		pre += workspaceGuidelines(repoDir, 6*1024)
+	}
+	task := s.orchestratorPrompt() + "\n\nUser message:\n" + msg
+	if pre != "" {
+		task = "Workspace conventions:\n" + pre + "\n" + task
+	}
+	opts := agent.RunOpts{
+		Task: task, Workdir: workdir,
+		PermissionMode: settings.PermissionMode,
+		MaxBudgetUSD:   settings.MaxBudgetUSD,
+		Command:        settings.Command,
+		ExtraArgs:      []string{"--mcp-config", mcpFile, "--allowedTools", strings.TrimSuffix(allowed, ",")},
+	}
+	log.Printf("orchestrator: agent-brain turn conv=%d workdir=%s user=%s", convID, workdir, user)
+	s.agentRuns.Lock()
+	defer s.agentRuns.Unlock()
+	evCh, err := ad.Run(ctx, opts)
+	if err != nil {
+		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": err.Error()})
+		return
+	}
+	full := ""
+	var usage agent.Event
+	for ev := range evCh {
+		switch ev.Type {
+		case agent.EventText:
+			full += ev.Text
+			send(map[string]any{"type": "delta", "text": ev.Text})
+		case agent.EventTool:
+			send(map[string]any{"type": "tool", "tool": "brain", "status": "progress", "detail": ev.ToolDetail})
+		case agent.EventResult:
+			if ev.Text != "" {
+				full = ev.Text
+			}
+		case agent.EventUsage:
+			usage = ev
+		case agent.EventError:
+			send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": ev.Text})
+		}
+	}
+	if full != "" {
+		meta, _ := json.Marshal(map[string]any{
+			"provider": "claude", "brain": "agent",
+			"tokens_in": usage.TokensIn, "tokens_out": usage.TokensOut,
+		})
+		_, _ = s.store.AppendMessage(convID, "assistant", full, string(meta))
+		_ = s.store.LogCost(convID, user, "brain:claude", usage.CostUSD, usage.TokensIn, usage.TokensOut)
+	}
+	log.Printf("orchestrator: agent-brain turn done conv=%d tokens_in=%d tokens_out=%d", convID, usage.TokensIn, usage.TokensOut)
+}
+
+// ensureBrainMCPConfig writes the MCP config file that points a claude CLI
+// session back at this binary in "mcp" mode, exposing the dispatch tools.
+func (s *Server) ensureBrainMCPConfig() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(s.cfgDir, "mcp.json")
+	doc := map[string]any{
+		"mcpServers": map[string]any{
+			"fusion-console": map[string]any{"command": self, "args": []string{"mcp"}},
+		},
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// guidelineFiles are the convention files picked up from a workspace.
+var guidelineFiles = []string{"CLAUDE.md", "AGENTS.md"}
+
+// workspaceGuidelines reads the requested convention files found directly in
+// dir, capped to budget bytes overall. Missing files are skipped silently —
+// a workspace may have either, both, or neither.
+func workspaceGuidelines(dir string, budget int, names ...string) string {
+	if len(names) == 0 {
+		names = guidelineFiles
+	}
+	var b strings.Builder
+	for _, name := range names {
+		if b.Len() >= budget {
+			break
+		}
+		path := filepath.Join(dir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if len(data) > budget-b.Len() {
+			data = data[:budget-b.Len()]
+		}
+		b.WriteString("--- " + path + " ---\n")
+		b.Write(data)
+		b.WriteString("\n")
+	}
+	return b.String()
 }

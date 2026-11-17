@@ -87,6 +87,25 @@ func (s *Store) migrate() error {
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_failure_tags_user ON failure_tags(user, id)`,
+		`CREATE TABLE IF NOT EXISTS dispatch_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			conv_id INTEGER NOT NULL DEFAULT 0,
+			user TEXT NOT NULL DEFAULT '',
+			worker TEXT NOT NULL DEFAULT '',
+			agent TEXT NOT NULL DEFAULT '',
+			task TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',
+			started_at TEXT NOT NULL DEFAULT '',
+			finished_at TEXT NOT NULL DEFAULT '',
+			elapsed_s INTEGER NOT NULL DEFAULT 0,
+			cost_usd REAL NOT NULL DEFAULT 0,
+			tokens_in INTEGER NOT NULL DEFAULT 0,
+			tokens_out INTEGER NOT NULL DEFAULT 0,
+			detail TEXT NOT NULL DEFAULT '',
+			result TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			read INTEGER NOT NULL DEFAULT 0
+		)`,
 		`CREATE TABLE IF NOT EXISTS cost_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			conv_id INTEGER NOT NULL,
@@ -511,6 +530,114 @@ func (s *Store) RenameConversation(user string, id int64, title string) error {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("store: conversation %d not found for user", id)
+	}
+	return nil
+}
+
+// DispatchRunRow is one background dispatch, persisted so the run history
+// and unread state survive console restarts.
+type DispatchRunRow struct {
+	ID         int64
+	ConvID     int64
+	User       string
+	Worker     string
+	Agent      string
+	Task       string
+	Status     string
+	StartedAt  string
+	FinishedAt string
+	ElapsedS   int
+	CostUSD    float64
+	TokensIn   int
+	TokensOut  int
+	Detail     string
+	Result     string
+	Error      string
+	Read       bool
+}
+
+// CreateDispatchRun inserts a row and returns its ID.
+func (s *Store) CreateDispatchRun(r *DispatchRunRow) (int64, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO dispatch_runs (conv_id, user, worker, agent, task, status, started_at, finished_at,
+		  elapsed_s, cost_usd, tokens_in, tokens_out, detail, result, error, read)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ConvID, r.User, r.Worker, r.Agent, r.Task, r.Status, r.StartedAt, r.FinishedAt,
+		r.ElapsedS, r.CostUSD, r.TokensIn, r.TokensOut, r.Detail, r.Result, r.Error, r.Read)
+	if err != nil {
+		return 0, fmt.Errorf("store: create dispatch run: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// SaveDispatchRun writes the full row back (status transitions and final
+// accounting are the only writers).
+func (s *Store) SaveDispatchRun(r *DispatchRunRow) error {
+	_, err := s.db.Exec(
+		`UPDATE dispatch_runs SET status=?, started_at=?, finished_at=?, elapsed_s=?, cost_usd=?,
+		  tokens_in=?, tokens_out=?, detail=?, result=?, error=?, read=? WHERE id=?`,
+		r.Status, r.StartedAt, r.FinishedAt, r.ElapsedS, r.CostUSD,
+		r.TokensIn, r.TokensOut, r.Detail, r.Result, r.Error, r.Read, r.ID)
+	if err != nil {
+		return fmt.Errorf("store: save dispatch run %d: %w", r.ID, err)
+	}
+	return nil
+}
+
+// AckDispatchRuns marks every finished run of one conversation as seen.
+func (s *Store) AckDispatchRuns(convID int64) error {
+	_, err := s.db.Exec(`UPDATE dispatch_runs SET read=1 WHERE conv_id=? AND status='done'`, convID)
+	if err != nil {
+		return fmt.Errorf("store: ack dispatch runs: %w", err)
+	}
+	return nil
+}
+
+// ListDispatchRuns returns the most recent runs, oldest first (list order is
+// the caller's concern; the registry wants append order).
+func (s *Store) ListDispatchRuns(limit int) ([]*DispatchRunRow, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	rows, err := s.db.Query(
+		`SELECT id, conv_id, user, worker, agent, task, status, started_at, finished_at,
+		  elapsed_s, cost_usd, tokens_in, tokens_out, detail, result, error, read
+		 FROM dispatch_runs ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list dispatch runs: %w", err)
+	}
+	defer rows.Close()
+	var out []*DispatchRunRow
+	for rows.Next() {
+		var r DispatchRunRow
+		if err := rows.Scan(&r.ID, &r.ConvID, &r.User, &r.Worker, &r.Agent, &r.Task, &r.Status,
+			&r.StartedAt, &r.FinishedAt, &r.ElapsedS, &r.CostUSD, &r.TokensIn, &r.TokensOut,
+			&r.Detail, &r.Result, &r.Error, &r.Read); err != nil {
+			return nil, fmt.Errorf("store: scan dispatch run: %w", err)
+		}
+		out = append(out, &r)
+	}
+	// reverse into ascending id order
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, rows.Err()
+}
+
+// DeleteDispatchRun removes one run row (dismiss).
+func (s *Store) DeleteDispatchRun(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete dispatch run %d: %w", id, err)
+	}
+	return nil
+}
+
+// ClearFinishedDispatchRuns removes every done/error run row.
+func (s *Store) ClearFinishedDispatchRuns() error {
+	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE status IN ('done','error')`)
+	if err != nil {
+		return fmt.Errorf("store: clear finished dispatch runs: %w", err)
 	}
 	return nil
 }

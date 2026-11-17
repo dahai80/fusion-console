@@ -22,15 +22,13 @@ import (
 
 // gatewayConfigDir is where the console-managed gateway config lives.
 func gatewayConfigDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".fusion-console", "gateway")
+	return filepath.Join(config.DefaultDir(), "gateway")
 }
 
 func gatewayConfigPath() string { return filepath.Join(gatewayConfigDir(), "config.yaml") }
 
 func gatewayLogPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".fusion-console", "log", "gateway.log")
+	return filepath.Join(config.DefaultDir(), "log", "gateway.log")
 }
 
 func gatewayPidPath() string { return filepath.Join(gatewayConfigDir(), "gateway.pid") }

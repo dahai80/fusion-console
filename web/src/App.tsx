@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
+  CheckCircle,
+  Clock,
+  Copy,
   Cpu,
   Brain,
   ChevronDown,
+  XCircle,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -14,9 +18,14 @@ import {
   Sun,
   Terminal,
   Plus,
+  X,
   RefreshCw,
   KeyRound,
+  Loader2,
+  Maximize2,
+  Mic,
   Network,
+  Paperclip,
   Pencil,
   Trash2,
   Download,
@@ -27,7 +36,7 @@ Code2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type ChatDefault, type Conversation, type Message, type GatewayKey, type ModelCatalogItem, type Provider } from "./api";
+import { api, streamPOST, type AgentInfo, type ChatDefault, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type ModelCatalogItem, type Provider, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -310,9 +319,17 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [selModel, setSelModel] = useState("");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<{ name: string; size: number; stored: string; path: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [listening, setListening] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const recogRef = useRef<any>(null);
+  const [orchestrate, setOrchestrate] = useState(true);
   const [busy, setBusy] = useState(false);
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
   const [err, setErr] = useState("");
+  const [unread, setUnread] = useState<Record<string, number>>({});
+const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const resolveApproval = async (ok: boolean) => {
@@ -347,6 +364,36 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
 
+  // Background dispatches: poll the run list for sidebar badges and refresh
+  // the open conversation so finished runs appear without a manual reload.
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      try {
+        const r = await api.dispatches();
+        if (stop) return;
+        setUnread(r.unread_by_conv ?? {});
+        const hasActiveBg = (r.dispatches ?? []).some((d) => d.status === "running" || d.status === "queued");
+        if (!hasActiveBg) {
+          try {
+            const ws = await api.workersStatus();
+            if (stop) return;
+            setWorkingWorkers((ws.workers ?? []).filter((w) => w.busy).map((w) => w.name));
+          } catch { /* ignore */ }
+        } else {
+          setWorkingWorkers([]);
+        }
+        if (active && !busy) {
+          const mr = await api.messages(active.ID);
+          const fresh = (mr.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta }));
+          setEntries((cur) => (fresh.length !== cur.length ? fresh : cur));
+        }
+      } catch { /* transient — next tick retries */ }
+    };
+    const t = setInterval(tick, 6000);
+    return () => { stop = true; clearInterval(t); };
+  }, [active, busy]);
+
   const deleteConv = async (c: Conversation) => {
     if (!window.confirm(`Delete "${c.Title || "#" + c.ID}" and its messages?`)) return;
     try {
@@ -374,6 +421,9 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     setErr("");
     const r = await api.messages(c.ID);
     setEntries((r.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta })));
+    if (unread[c.ID] > 0) {
+      api.ackDispatches(c.ID).then(() => setUnread((u) => ({ ...u, [c.ID]: 0 }))).catch(() => {});
+    }
   };
 
   const newChat = async () => {
@@ -413,9 +463,68 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     }
   }, [active, chatDefault, catalog, selModel]);
 
+  const pickFiles = () => fileInputRef.current?.click();
+  const onFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const f of Array.from(files)) {
+        const r = await api.uploadAttachment(f);
+        setAttachments((a) => [...a, r]);
+      }
+    } catch (e) {
+      console.error("attachment upload failed", e);
+      setErr((e as Error).message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  // Voice dictation via the browser Web Speech API (Chrome/Edge, on-device).
+  // A local fusion-speech daemon is the fallback path later — the button
+  // disables itself with a hint when the browser has no recognizer.
+  const voiceSupported = typeof window !== "undefined" &&
+    !!((window as any).webkitSpeechRecognition || (window as any).SpeechRecognition);
+  const toggleVoice = () => {
+    const SR = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    if (!SR) return;
+    if (listening) {
+      recogRef.current?.stop();
+      return;
+    }
+    const rec = new SR();
+    rec.lang = navigator.language || "zh-CN";
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.onresult = (ev: any) => {
+      let t = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) t += ev.results[i][0].transcript;
+      setInput((cur) => (cur ? cur + t : t));
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = (ev: any) => {
+      console.error("speech recognition error", ev?.error);
+      setListening(false);
+    };
+    recogRef.current = rec;
+    setListening(true);
+    rec.start();
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
+    // Attachments pass the stored file path, never the content: the model
+    // pulls segments through the read API (byte-range with continuation
+    // metadata), so a single call can never push a whole large document into
+    // the context and the chat bubble stays small.
+    let full = text;
+    if (attachments.length > 0) {
+      const parts = attachments.map((a) =>
+        `\n\n[attachment: ${a.name} (${Math.max(1, Math.round(a.size / 1024))} KB) — GET /api/attachments/read?stored=${a.stored}&offset=0&max_bytes=65536; follow next_offset until eof, do not read the whole file at once]`);
+      full = text + parts.join("");
+    }
     // @agent mention hands the message off explicitly; anything else is a
     // plain brain chat turn (orchestration lets the brain dispatch workers).
     const mm = text.match(/@([a-zA-Z0-9_-]+)/);
@@ -431,6 +540,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     setBusy(true);
     setErr("");
     setInput("");
+    setAttachments([]);
     try {
       let conv = active;
       if (!conv) {
@@ -439,9 +549,9 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
         setActive(conv);
         await refreshConvs();
       }
-      setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
+      setEntries((e) => [...e, { role: "user", content: full }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: selProv, model: selModel, content: text, orchestrate: true }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, provider_id: selProv, model: selModel, content: full, orchestrate }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -549,6 +659,11 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
               >
                 {c.Kind === "agent" ? <Bot size={14} className="shrink-0" /> : <MessageSquare size={14} className="shrink-0" />}
                 <span className="truncate">{c.Title || `#${c.ID}`}</span>
+                {unread[c.ID] > 0 && (
+                  <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-indigo-500 px-1.5 text-[10px] font-semibold text-white" title={`${unread[c.ID]} finished background run(s) not seen yet`}>
+                    {unread[c.ID]}
+                  </span>
+                )}
               </button>
               <button
                 onClick={() => renameConv(c)}
@@ -571,6 +686,17 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
 
       <div className="flex flex-1 flex-col min-w-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
+          <button
+            onClick={() => setOrchestrate((v) => !v)}
+            title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
+            className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors ${
+              orchestrate
+                ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-500"
+                : "border-zinc-200/80 text-zinc-400 hover:text-zinc-600 dark:border-zinc-800 dark:hover:text-zinc-300"
+            }`}
+          >
+            <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
+          </button>
           <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="Model for this conversation — switch anytime, it applies to the next message and is remembered per conversation">
             <Brain size={14} className="text-indigo-500" /> model
           </label>
@@ -633,6 +759,17 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
               </div>
             </div>
           ))}
+          {busy && (
+            <div className="flex items-center gap-2 px-4 py-2 text-xs text-zinc-400">
+              <Loader2 size={14} className="animate-spin text-indigo-500" /> working…
+            </div>
+          )}
+          {!busy && workingWorkers.length > 0 && (
+            <div className="flex items-center gap-2 px-4 py-2 text-xs text-zinc-400">
+              <Loader2 size={14} className="animate-spin text-indigo-500" />
+              {workingWorkers.length} agent{workingWorkers.length > 1 ? "s" : ""} working in background: {workingWorkers.join(", ")}
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
 
@@ -660,12 +797,32 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
               ))}
             </div>
           )}
+          {attachments.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {attachments.map((a, i) => (
+                <span key={a.stored + i} className="flex items-center gap-1 rounded-lg bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                  <Paperclip size={10} /> {a.name}
+                  <button className="ml-0.5 text-zinc-400 hover:text-red-500"
+                    onClick={() => setAttachments((arr) => arr.filter((_, j) => j !== i))}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="flex gap-2">
+            <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => onFiles(e.target.files)} />
+            <Button variant="outline" className="self-end px-2.5" onClick={pickFiles} disabled={uploading}
+              title="Attach files (text files are inlined into the message)">
+              {uploading ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}
+            </Button>
             <Textarea
               rows={2}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
+                // IME safety: while the input method is composing (e.g.
+                // typing English inside a Chinese IME), Enter confirms the
+                // composition — it must never send the message.
+                if (e.nativeEvent.isComposing) return;
                 if (mentionOptions.length > 0 && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) {
                   e.preventDefault();
                   insertMention(mentionOptions[0].name);
@@ -673,18 +830,243 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
                 }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               }}
-              placeholder="Message…  (@ to hand off to an agent)"
+              placeholder={listening ? "listening…" : "Message…  (@ to hand off to an agent)"}
             />
             <div className="flex flex-col gap-2">
               <Button onClick={send} disabled={busy || !input.trim()}
                 title={mentionedAgent ? `Run with ${mentionedAgent.name}` : "Send as chat"}>
                 {mentionedAgent ? <Bot size={16} /> : <Send size={16} />}
               </Button>
+              <Button variant="outline" className="px-2.5" onClick={toggleVoice}
+                disabled={!voiceSupported}
+                title={voiceSupported ? (listening ? "Stop dictation" : "Voice input (browser speech)") : "Voice input needs Chrome/Edge (fusion-speech integration pending)"}>
+                <Mic size={16} className={listening ? "animate-pulse text-red-500" : ""} />
+              </Button>
             </div>
           </div>
         </div>
       </div>
+      <DispatchPanel onOpen={openConv} />
     </div>
+  );
+}
+
+// DispatchPanel is the right rail of the chat page: every background run
+// (run_agent background=true) grouped into running / queued / finished.
+// Clicking a finished row opens its conversation.
+function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
+  const [runs, setRuns] = useState<DispatchRun[]>([]);
+  const [convs, setConvs] = useState<Conversation[]>([]);
+  const [busyWorkers, setBusyWorkers] = useState<WorkerStatus[]>([]);
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const r = await api.dispatches();
+        setRuns(r.dispatches ?? []);
+      } catch { /* server unreachable — keep last snapshot */ }
+      try {
+        const r = await api.conversations();
+        setConvs(r.conversations ?? []);
+      } catch { /* ignore */ }
+      try {
+        const r = await api.workersStatus();
+        setBusyWorkers((r.workers ?? []).filter((w) => w.busy));
+      } catch { /* ignore */ }
+    };
+    load();
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, []);
+  const running = runs.filter((r) => r.status === "running");
+  const queued = runs.filter((r) => r.status === "queued");
+  const finished = runs.filter((r) => r.status === "done" || r.status === "error").slice(0, 8);
+  const openRun = (r: DispatchRun) => {
+    const c = convs.find((x) => x.ID === r.conversation_id);
+    if (c) onOpen(c);
+  };
+  // copyRun puts the full card content on the clipboard for bug reports —
+  // one click, no manual text selection across truncated lines.
+  const copyRun = async (r: DispatchRun | WorkerStatus, kind: "run" | "worker") => {
+    const lines = kind === "run"
+      ? [`run #${(r as DispatchRun).id} (${(r as DispatchRun).status})`, `worker: ${(r as DispatchRun).worker} (${(r as DispatchRun).agent})`,
+         `task: ${(r as DispatchRun).task}`, `elapsed: ${(r as DispatchRun).elapsed_s}s · cost: $${(r as DispatchRun).cost_usd.toFixed(4)}`,
+         (r as DispatchRun).detail ? `detail: ${(r as DispatchRun).detail}` : "",
+         (r as DispatchRun).error ? `error: ${(r as DispatchRun).error}` : "",
+         (r as DispatchRun).result ? `result: ${(r as DispatchRun).result}` : ""]
+      : [`worker: ${(r as WorkerStatus).name}`, `task: ${(r as WorkerStatus).task || ""}`,
+         `detail: ${(r as WorkerStatus).detail || ""}`, `elapsed: ${(r as WorkerStatus).elapsed_s ?? "?"}s`];
+    try {
+      await navigator.clipboard.writeText(lines.filter(Boolean).join("\n"));
+      setCopied(kind === "run" ? `run:${(r as DispatchRun).id}` : `worker:${(r as WorkerStatus).name}`);
+      setTimeout(() => setCopied(""), 1200);
+    } catch (e) {
+      console.error("copy failed", e);
+    }
+  };
+  const [copied, setCopied] = useState("");
+  const copyBtn = (key: string, onClick: () => void) => (
+    <button onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-600 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
+      title="Copy card details">
+      {copied === key ? <CheckCircle size={12} className="text-emerald-500" /> : <Copy size={12} />}
+    </button>
+  );
+  const clearFinished = async () => {
+    try {
+      await api.clearDispatches();
+      setRuns((r) => r.filter((x) => x.status === "running" || x.status === "queued"));
+    } catch { /* keep current view */ }
+  };
+  const dismissRun = async (id: number) => {
+    setRuns((r) => r.filter((x) => x.id !== id));
+    try {
+      await api.dismissDispatch(id);
+    } catch { /* next poll restores if delete failed */ }
+  };
+  // Expanded card view: a fixed overlay showing the full task / detail /
+  // error / result of one run — cards in the rail stay a fixed small size.
+  const [expanded, setExpanded] = useState<DispatchRun | null>(null);
+  const row = (r: DispatchRun) => (
+    <div key={r.id} onClick={() => openRun(r)}
+      className={`h-[72px] w-full overflow-hidden rounded-xl border p-2.5 text-left transition-colors select-text ${
+        r.status === "running"
+          ? "border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10"
+          : r.status === "done"
+            ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
+            : r.status === "error"
+              ? "border-red-500/30 bg-red-500/5 hover:bg-red-500/10"
+              : "border-zinc-200/80 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+      } ${r.conversation_id === 0 ? "cursor-default" : "cursor-pointer"}`}>
+      <div className="flex items-center gap-2">
+        {r.status === "running" ? (
+          <RefreshCw size={12} className="shrink-0 animate-spin text-amber-500" />
+        ) : r.status === "done" ? (
+          <CheckCircle size={12} className="shrink-0 text-emerald-500" />
+        ) : r.status === "error" ? (
+          <XCircle size={12} className="shrink-0 text-red-500" />
+        ) : (
+          <Clock size={12} className="shrink-0 text-zinc-400" />
+        )}
+        <span className="truncate text-xs font-medium">{r.worker}</span>
+        <span className={`ml-auto text-[11px] ${r.status === "running" ? "text-amber-600 dark:text-amber-400" : r.status === "done" ? "text-emerald-600 dark:text-emerald-400" : r.status === "error" ? "text-red-500" : "text-zinc-400"}`}>
+          {r.status === "running" ? `${r.elapsed_s}s`
+            : r.status === "queued" ? "queued"
+            : r.status === "done" ? `done · $${r.cost_usd.toFixed(2)}`
+            : "error"}
+        </span>
+        {copyBtn(`run:${r.id}`, () => copyRun(r, "run"))}
+        <button onClick={(e) => { e.stopPropagation(); setExpanded(r); }}
+          className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-600 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
+          title="Maximize — full details">
+          <Maximize2 size={12} />
+        </button>
+        {(r.status === "done" || r.status === "error") && (
+          <button onClick={(e) => { e.stopPropagation(); dismissRun(r.id); }}
+            className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-red-500 dark:hover:bg-zinc-700"
+            title="Dismiss this card">
+            <X size={12} />
+          </button>
+        )}
+      </div>
+      <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
+      {(r.status === "running" || r.status === "queued") && r.detail && (
+        <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
+      )}
+    </div>
+  );
+  return (
+    <aside className="hidden lg:flex w-72 shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40 p-3">
+      <div className="flex items-center justify-between px-1 pb-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800">
+            {running.length} running · {queued.length} queued
+          </span>
+          {(runs.some((r) => r.status === "done" || r.status === "error")) && (
+            <Button variant="ghost" className="px-1.5 py-0.5 text-[11px]" onClick={clearFinished} title="Remove all finished cards">
+              Clear
+            </Button>
+          )}
+        </div>
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto">
+        {/* Agent status strip: every worker with a live agent process, even
+            one recovered after a console restart (registry lost, process not). */}
+        {busyWorkers.length > 0 && (
+          <div className="space-y-1.5">
+            {busyWorkers.map((w) => (
+              <div key={w.name} className="select-text rounded-xl border border-indigo-500/30 bg-indigo-500/5 px-2.5 py-2">
+                <div className="flex items-center gap-2">
+                  <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
+                  <span className="truncate text-xs font-medium">{w.name}</span>
+                  <span className="ml-auto shrink-0 text-[11px] text-indigo-600 dark:text-indigo-400">
+                    {typeof w.elapsed_s === "number" ? `${w.elapsed_s}s` : "working"}
+                  </span>
+                  {copyBtn(`worker:${w.name}`, () => copyRun(w, "worker"))}
+                </div>
+                {w.task && <p className="mt-0.5 break-words text-[11px] text-zinc-500 dark:text-zinc-400" title={w.task}>{w.task}</p>}
+                {w.detail && <p className="break-words text-[11px] text-zinc-400" title={w.detail}>{w.detail}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+        {running.map(row)}
+        {queued.map(row)}
+        {finished.map(row)}
+        {runs.length === 0 && busyWorkers.length === 0 && (
+          <p className="px-1 pt-4 text-center text-xs text-zinc-400">
+            No background runs yet. The brain dispatches with background=true for long tasks.
+          </p>
+        )}
+      </div>
+      <p className="border-t border-zinc-200/80 px-1 pt-2 text-[11px] leading-4 text-zinc-400 dark:border-zinc-800">
+        Finished runs post their outcome into the conversation automatically.
+      </p>
+      {expanded && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 p-6" onClick={() => setExpanded(null)}>
+          <div className="flex max-h-[80vh] w-[560px] max-w-full flex-col rounded-2xl border border-zinc-200/80 bg-white shadow-lg shadow-zinc-900/10 dark:border-zinc-700 dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 border-b border-zinc-200/80 px-4 py-2.5 dark:border-zinc-800">
+              {expanded.status === "running" ? <RefreshCw size={14} className="animate-spin text-amber-500" />
+                : expanded.status === "done" ? <CheckCircle size={14} className="text-emerald-500" />
+                : expanded.status === "error" ? <XCircle size={14} className="text-red-500" />
+                : <Clock size={14} className="text-zinc-400" />}
+              <span className="text-sm font-medium">run #{expanded.id} · {expanded.worker}</span>
+              <span className="text-xs text-zinc-400">
+                {expanded.status} · {expanded.elapsed_s}s · ${expanded.cost_usd.toFixed(4)}
+              </span>
+              <button className="ml-auto rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" onClick={() => setExpanded(null)} title="Close">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 space-y-3 overflow-y-auto p-4 text-sm">
+              <section>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Task</p>
+                <p className="select-text whitespace-pre-wrap break-words text-zinc-700 dark:text-zinc-200">{expanded.task}</p>
+              </section>
+              {expanded.detail && (
+                <section>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Detail</p>
+                  <p className="select-text whitespace-pre-wrap break-words text-zinc-500 dark:text-zinc-400">{expanded.detail}</p>
+                </section>
+              )}
+              {expanded.error && (
+                <section>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-400">Error</p>
+                  <pre className="select-text whitespace-pre-wrap break-words rounded-xl bg-red-500/5 p-2.5 text-[12px] leading-5 text-red-600 dark:text-red-400">{expanded.error}</pre>
+                </section>
+              )}
+              {expanded.result && (
+                <section>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-emerald-400">Result</p>
+                  <pre className="select-text whitespace-pre-wrap break-words rounded-xl bg-emerald-500/5 p-2.5 text-[12px] leading-5 text-zinc-700 dark:text-zinc-200">{expanded.result}</pre>
+                </section>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </aside>
   );
 }
 
@@ -723,7 +1105,7 @@ function AgentsPage() {
           <p className="text-sm text-zinc-500">
             Headless adapters only — each run is one task in the chosen workdir. Agents missing from PATH are grayed out.
           </p>
-          {agents.map((a) => (
+          {agents.filter((a) => !a.is_worker).map((a) => (
             <Card key={a.name} className={`flex items-center justify-between p-4 ${!a.detected ? "opacity-50" : ""}`}>
               <div>
                 <p className="font-medium flex items-center gap-2">
@@ -929,7 +1311,7 @@ function GatewayPage() {
           <h3 className="font-medium flex items-center gap-2"><Download size={16} /> Install gateway</h3>
           <p className="text-sm text-zinc-500">
             Downloads the latest <a className="underline" href="https://github.com/dahai80/fusion-gateway/releases" target="_blank" rel="noreferrer">fusion-gateway release</a> for this
-            host (detected automatically) into <code>~/.fusion-console/bin/</code>. Then start it with your
+            host (detected automatically) into <code>~/.fusion/fusion-console/bin/</code>. Then start it with your
             gateway <code>config.yaml</code> and refresh this page.
           </p>
           <Button onClick={install} disabled={busy}>

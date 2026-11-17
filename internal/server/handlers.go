@@ -242,6 +242,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Orchestrator.Mode == "off" {
 			log.Printf("server: orchestration mode=off, ignoring orchestrate flag conv=%d", req.ConversationID)
 			send(map[string]any{"type": "tool", "tool": "orchestrate", "status": "denied", "detail": "orchestration is off in settings"})
+		} else if s.cfg.Orchestrator.BrainMode == "agent" {
+			// Agent-brain mode: claude code runs the turn with the console
+			// dispatch tools over MCP instead of the chat planner loop.
+			msg := ""
+			for i := len(chatMsgs) - 1; i >= 0; i-- {
+				if chatMsgs[i].Role == "user" {
+					msg = chatMsgs[i].Content
+					break
+				}
+			}
+			s.runAgentBrainTurn(r.Context(), req.ConversationID, user, msg, send)
+			send(map[string]any{"type": "done"})
+			return
 		} else if tp, ok := provider.(chat.ToolProvider); ok {
 			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: model, user: user}
 			full, total := s.runPlannerLoop(r.Context(), tp, &opts, apiKey, chatMsgs, send)
@@ -362,6 +375,19 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 			workdir = s.cfg.ResolveWorkDir(cli)
 		}
 	}
+	// Github-isolation workers run in the synced checkout, not the bare
+	// workspace dir (same behavior as brain dispatch).
+	if wk != nil && wk.Isolation == "github" && req.Workdir == "" {
+		dir, warn, err := syncRepo(s.cfg.ResolveWorkerDir(*wk), "worker "+req.Agent, wk.Repo, wk.RepoBranch)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		if warn != "" {
+			log.Printf("server: manual run repo sync warning: %s", warn)
+		}
+		workdir = dir
+	}
 	if fi, err := os.Stat(workdir); err != nil || !fi.IsDir() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workdir not accessible: " + workdir})
 		return
@@ -406,7 +432,10 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// Model resolution lives in providerEnv (per-agent override > provider
 	// default); empty leaves the CLI's own default.
-	taskText := s.prefixWorkerTask(r.Context(), req.Agent, req.Task)
+	taskText := s.prefixWorkerTask(r.Context(), req.Agent, req.Task, s.workerMemoryModeFor(wk))
+	if brief := s.workerWorkspaceBrief(req.Agent, wk, workdir); brief != "" {
+		taskText = brief + "\n" + taskText
+	}
 	opts := agent.RunOpts{
 		Task: taskText, Workdir: workdir,
 		Model:           forcedModel,
@@ -936,6 +965,20 @@ func (s *Server) handleWorkersStatus(w http.ResponseWriter, r *http.Request) {
 		for k, v := range s.runs.snapshot(id) {
 			row[k] = v
 		}
+		// Registry miss is not proof of idle: agent subprocesses survive a
+		// console restart, so check for a live agent process sitting in the
+		// worker's work dir and report busy when one is found.
+		if busy, _ := row["busy"].(bool); !busy && w.Enabled {
+			workDir := s.cfg.ResolveWorkerDir(w)
+			orphans := discoverOrphans()
+			if pid, ok := orphans[workDir]; ok {
+				row["busy"] = true
+				row["task"] = "in-flight task (registry lost on restart)"
+				if d := fmtOrphanDetail(pid); d != "" {
+					row["detail"] = d
+				}
+			}
+		}
 		if sp, ok := spend["agent:"+id]; ok {
 			for k, v := range sp {
 				row[k] = v
@@ -1040,13 +1083,30 @@ func (s *Server) handleSaveOrchestration(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		switch wk.Isolation {
-		case "", "worktree", "standalone":
+		case "", "github", "worktree", "standalone":
 		default:
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "isolation must be worktree or standalone"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "isolation must be github, worktree or standalone"})
 			return
 		}
 		if wk.Isolation == "" {
 			wk.Isolation = "worktree"
+		}
+		if wk.Isolation == "github" && strings.TrimSpace(wk.Repo) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "github isolation requires a repository URL"})
+			return
+		}
+		switch wk.Memory {
+		case "", "notes", "fusion-memory", "off":
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker memory must be notes, fusion-memory or off"})
+			return
+		}
+		if br := strings.TrimSpace(orch.BrainRepo); br != "" &&
+			!strings.HasPrefix(br, "http://") && !strings.HasPrefix(br, "https://") &&
+			!strings.HasPrefix(br, "git@") && !strings.HasPrefix(br, "ssh://") &&
+			!strings.HasPrefix(br, "/") && !strings.HasPrefix(br, "~/") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "brain repo must be a GitHub URL or an absolute local path"})
+			return
 		}
 	}
 	orch.Configured = true

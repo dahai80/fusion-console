@@ -9,10 +9,10 @@ cd /d "%~dp0"
 set "HERE=%CD%"
 set "CONSOLE_BIN=%HERE%\fusion-console.exe"
 set "GATEWAY_BIN=%HERE%\fusion-gateway.exe"
-if not exist "%CONSOLE_BIN%" set "CONSOLE_BIN=%USERPROFILE%\.fusion-console\bin\fusion-console.exe"
-if not exist "%GATEWAY_BIN%" set "GATEWAY_BIN=%USERPROFILE%\.fusion-console\bin\fusion-gateway.exe"
+if not exist "%CONSOLE_BIN%" set "CONSOLE_BIN=%USERPROFILE%\.fusion\fusion-console\bin\fusion-console.exe"
+if not exist "%GATEWAY_BIN%" set "GATEWAY_BIN=%USERPROFILE%\.fusion\fusion-console\bin\fusion-gateway.exe"
 
-set "LOGDIR=%USERPROFILE%\.fusion-console\log"
+set "LOGDIR=%USERPROFILE%\.fusion\fusion-console\log"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
 echo [startup] fusion-console launcher - package dir %HERE%

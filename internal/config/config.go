@@ -172,25 +172,32 @@ type WorkerConfig struct {
 	Name           string  `json:"name"`  // unique worker name; empty = legacy single worker addressed by agent type
 	Agent          string  `json:"agent"` // agent CLI type (claude, fusion-code, ...)
 	Enabled        bool    `json:"enabled"`
-	Isolation      string  `json:"isolation"` // "worktree" | "standalone"; empty = worktree
+	Isolation      string  `json:"isolation"` // "github" | "worktree" | "standalone"; empty = worktree
 	PermissionMode string  `json:"permission_mode"`
 	MaxBudgetUSD   float64 `json:"max_budget_usd"`
 	ProviderID     string  `json:"provider_id"` // force this provider for the worker CLI; empty = CLI default
 	Model          string  `json:"model"`       // per-worker model override; empty = agent settings, then provider default
 	WorkDir        string  `json:"work_dir"`    // dedicated workspace; empty = ~/.fusion-console/agents/<name-or-agent>
-	Repo           string  `json:"repo"`        // default repo for worktree isolation; empty = per-run repo argument
+	Repo           string  `json:"repo"`        // worktree: local repo path; github: repository URL
+	RepoBranch     string  `json:"repo_branch"` // github isolation: branch to track; empty = remote HEAD
+	Memory         string  `json:"memory"`      // per-worker memory mode; empty = global worker_memory
 }
 
 // OrchestratorConfig captures the onboarding wizard's brain-and-workers
 // decisions. The architect session and dispatch loop are NOT implemented by
 // this prototype — this section only persists what the wizard collected.
 type OrchestratorConfig struct {
-	Mode         string         `json:"mode"` // "off" | "confirm" | "auto"
-	BrainAgent   string         `json:"brain_agent"`
-	Repos        []string       `json:"repos"`
-	Workers      []WorkerConfig `json:"workers"`
-	Configured   bool           `json:"configured"`
-	WorkerMemory string         `json:"worker_memory"` // "notes" (default) | "fusion-memory" | "off"
+	Mode              string         `json:"mode"`       // "off" | "confirm" | "auto"
+	BrainMode         string         `json:"brain_mode"` // "chat" (default) | "agent" — brain implementation
+	BrainAgent        string         `json:"brain_agent"`
+	Repos             []string       `json:"repos"`
+	Workers           []WorkerConfig `json:"workers"`
+	Configured        bool           `json:"configured"`
+	WorkerMemory      string         `json:"worker_memory"`       // "notes" (default) | "fusion-memory" | "off"
+	BrainWorkDir      string         `json:"brain_work_dir"`      // brain artifacts + worktree root; empty = <config dir>/agents
+	BrainRepo         string         `json:"brain_repo"`          // brain code source: GitHub URL (synced) or local repo path (used as-is)
+	BrainRepoBranch   string         `json:"brain_repo_branch"`   // branch for a GitHub brain repo; empty = remote HEAD
+	BrainContextFiles []string       `json:"brain_context_files"` // local files (working conventions, repo inventory) injected into the planner prompt
 }
 
 // DefaultOrchestrator returns safe wizard defaults.
@@ -305,7 +312,7 @@ func DefaultDir() string {
 	if err != nil {
 		log.Fatalf("config: cannot resolve home directory: %v", err)
 	}
-	return filepath.Join(home, ".fusion-console")
+	return filepath.Join(home, ".fusion", "fusion-console")
 }
 
 // Path returns the config file path inside dir.

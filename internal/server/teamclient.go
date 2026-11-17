@@ -30,6 +30,7 @@ type teamSnapshot struct {
 	Limits    map[string]any            `json:"limits"`
 	Brief     map[string][]briefWarning `json:"brief_warnings"` // task_id -> warnings
 	Alerts    []string                  `json:"alerts"`
+	Lifecycle string                    `json:"lifecycle,omitempty"` // ACTIVE / PAUSED / ... from teams.status
 }
 
 // teamDialer holds the mutable client state (JWT cache + snapshot).
@@ -134,7 +135,7 @@ func (s *Server) startTeamPoller() {
 	log.Printf("server: team observer started (socket=%s team=%s)", studioSocketPath(), s.cfg.AgentStudio.Team)
 	go func() {
 		for {
-			snap := s.pollTeam()
+			snap := s.pollTeam(s.cfg.AgentStudio.Team)
 			s.team.mu.Lock()
 			s.team.snap = snap
 			s.team.mu.Unlock()
@@ -145,8 +146,10 @@ func (s *Server) startTeamPoller() {
 
 // pollTeam runs one full observation cycle: auth, then task board + roster +
 // health + limits. Failed/illegal transitions and brief rejections land in
-// Alerts so the UI can surface them instead of going silent.
-func (s *Server) pollTeam() *teamSnapshot {
+// Alerts so the UI can surface them instead of going silent. team is the
+// observed team name — the wizard deep-link passes a non-default team here
+// (issue #16).
+func (s *Server) pollTeam(team string) *teamSnapshot {
 	snap := &teamSnapshot{
 		FetchedAt: time.Now().UTC(),
 		Tasks:     []map[string]any{},
@@ -159,7 +162,6 @@ func (s *Server) pollTeam() *teamSnapshot {
 		snap.Error = err.Error()
 		return snap
 	}
-	team := s.cfg.AgentStudio.Team
 
 	if res, err := teamRPC(studioSocketPath(), jwt, "task.list", map[string]any{"team": team, "limit": 100}); err != nil {
 		snap.Error = err.Error()
@@ -189,6 +191,14 @@ func (s *Server) pollTeam() *teamSnapshot {
 	}
 	if res, err := teamRPC(studioSocketPath(), jwt, "team.get_limits", map[string]any{}); err == nil {
 		snap.Limits = res
+	}
+	// Team lifecycle (ACTIVE/PAUSED/...) drives the pause/resume/disband
+	// controls. The daemon answers {"status":"error"} for an unregistered
+	// team — that just means no lifecycle yet, not an observer failure.
+	if res, err := teamRPC(studioSocketPath(), jwt, "teams.status", map[string]any{"team": team}); err == nil {
+		if res["status"] == "ok" {
+			snap.Lifecycle, _ = res["lifecycle"].(string)
+		}
 	}
 
 	// Brief quality panel: reuse the #4 checker on every task's description —

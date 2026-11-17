@@ -34,7 +34,7 @@ the monorepo `architecture/port-registry.yaml`; validate changes with
 OS default browser at `/?fc_token=<one-time token>` which redeems itself via
 `POST /api/autologin`.
 
-Data dir `~/.fusion-console` (override: `FUSION_CONSOLE_DIR`). First run
+Data dir `~/.fusion/fusion-console` (override: `FUSION_CONSOLE_DIR`). First run
 creates `admin` with the factory default password `fusion-admin-2026`
 (override before first start: `FUSION_CONSOLE_ADMIN_PASSWORD`). API keys and
 the gateway admin credentials resolve from env
@@ -69,7 +69,7 @@ model native tool-calls (`list_agents` / `run_agent` / `read_artifact`) and a
 bounded planner loop (`maxOrchestratorTurns = 8`) in
 `internal/server/orchestrator.go`. Each agent runs in its own dedicated
 workspace (`config.ResolveWorkDir`: per-agent `work_dir` override or
-`~/.fusion-console/agents/<name>`); `read_artifact` is sandboxed to the agents
+`~/.fusion/fusion-console/agents/<name>`); `read_artifact` is sandboxed to the agents
 root. Guards run the real fusion-harness via the Python sidecar
 `sidecar/harnessd.py` (stdio JSON-RPC; `internal/harness/client.go` spawns it,
 respawn-on-next-use on failure): `pre_llm` = budget gate + compaction before

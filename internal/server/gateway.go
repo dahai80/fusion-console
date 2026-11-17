@@ -44,7 +44,7 @@ func gatewayBinaryPath() string {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	return filepath.Join(home, ".fusion-console", "bin", name)
+	return filepath.Join(home, ".fusion", "fusion-console", "bin", name)
 }
 
 // bundledGatewayPath returns the gateway binary shipped next to the console

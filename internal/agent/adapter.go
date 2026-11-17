@@ -104,6 +104,7 @@ type RunOpts struct {
 	MaxBudgetTokens int
 	Command         string            // optional executable override from settings
 	Env             map[string]string // extra env vars for the subprocess (provider forcing)
+	ExtraArgs       []string          // trailing CLI args (e.g. --mcp-config for the agent brain)
 }
 
 // Adapter is one coding-agent CLI integration.

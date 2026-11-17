@@ -17,23 +17,47 @@ your chat becomes the **brain**: it gets native tool calls — `list_agents`,
 `run_agent`, `read_artifact` — and decides on its own when to dispatch a task
 to a headless agent, collect the result, verify artifacts, and report back
 (bounded at 8 planner iterations per turn). There is no separate "brain agent"
-to configure — the brain is the model you are chatting with.
+to configure — the brain is the model you are chatting with. Alternatively set
+the brain to **claude code**: each orchestrated turn then runs a `claude` CLI
+session in the brain work dir with the same dispatch tools exposed over MCP
+(`fusion-console mcp` subcommand); cost rows are booked as `brain:claude`.
+Its work
+directory (artifact sandbox for `read_artifact` and the worktree parent) is
+configurable in the Workers tab; the default is `~/.fusion/fusion-console/agents`.
+The brain can also be bound to a code source: a GitHub URL (cloned into the
+brain work dir and fast-forward-pulled before every dispatch, local changes
+never overwritten) or a local repo path (used as the brain workspace as-is).
 
-Each worker agent runs in its own directory, in one of two isolation modes:
+Teaching the brain your conventions: `brain_context_files` (Workers tab,
+one path per line) are injected into the planner prompt, capped at 12 KB —
+point them at a working-conventions doc and a repo inventory. A claude code
+brain additionally reads `CLAUDE.md` from its work dir, so on a fresh install
+copying your conventions file into the brain work dir is enough. Workers are
+repo-bound: the console rejects dispatches that target a repository the
+worker is not bound to; cross-repo work should be filed as an issue in that
+repo instead.
 
-- **standalone** (default) — a fixed dedicated workspace per agent, shared
-  across tasks
+Each worker agent runs in its own directory, in one of three source modes:
+
+- **standalone** — a fixed dedicated workspace per agent, shared across tasks
 - **worktree** — each dispatch creates a fresh detached `git worktree` of a
-  target repo (whitelist-enforced) and works there
+  local repo (whitelist-enforced) and works there
+- **github** — the worker is bound to a GitHub repository URL: the first
+  dispatch clones it into the work dir, later dispatches fetch and
+  fast-forward to the latest commit; a dirty tree or local commits are
+  reported as a warning and never overwritten
 
 Guardrails are always on: workers can be disabled individually, per-worker
 budget caps, one agent subprocess at a time, every dispatch passes the
 fusion-harness tool-admission chain (fail-closed when the sidecar is down).
 In `confirm` mode every `run_agent` dispatch waits for your approval in the
 browser; `auto` mode dispatches immediately; `off` disables the tools.
-Each worker can also be pinned to a configured provider (wizard Workers step):
-the console injects `ANTHROPIC_*` or `OPENAI_*` env vars from the keychain
-key, overriding the CLI's own login; leave it unset to keep the CLI default.
+Each worker can also be pinned to a configured provider plus a model override
+(wizard Workers step): the console injects `ANTHROPIC_*` or `OPENAI_*` env
+vars from the keychain key, overriding the CLI's own login; leave it unset to
+keep the CLI default. Worker memory defaults to the zero-dependency `notes`
+convention (NOTES.md in the workspace) and can be switched per worker to the
+fusion-memory hub or off.
 
 ## Quickstart (3 commands)
 
@@ -74,7 +98,7 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   toolbar and the chat model becomes the main brain: it dispatches work to
   headless agents with native tool-calls (`list_agents`, `run_agent`,
   `read_artifact`), each agent running in its own dedicated workspace
-  (`~/.fusion-console/agents/<name>/`, per-agent `work_dir` override in
+  (`~/.fusion/fusion-console/agents/<name>/`, per-agent `work_dir` override in
   config). The loop is bounded (8 iterations); every dispatch passes the
   [fusion-harness](https://github.com/dahai80/fusion-console) tool-admission
   chain (deny-first, fail-closed) via a Python sidecar, and chat turns are
@@ -159,7 +183,7 @@ make test       # go test ./...
 ./bin/fusion-console            # listens on 127.0.0.1:11480
 ```
 
-Data dir: `~/.fusion-console` (override with `FUSION_CONSOLE_DIR`).
+Data dir: `~/.fusion/fusion-console` (override with `FUSION_CONSOLE_DIR`).
 First run creates user `admin` with the factory default password
 `fusion-admin-2026` (set `FUSION_CONSOLE_ADMIN_PASSWORD` before first start
 to override) — change it after first login on any non-local deployment.
@@ -355,6 +379,29 @@ internal/store/       SQLite persistence (conversations, messages, cost log)
 web/                  React + Tailwind SPA source
 deploy/               launchd / systemd / schtasks + Tailscale guide
 ```
+
+## FAQ
+
+### Worker does not start: the work dir looks fine but the agent gets a literal `～/...` directory
+
+Typing a work dir like `~/fusion/fusion-site` with a Chinese IME often turns
+the ASCII `~` into a full-width `～` (and `~foo` without the slash never
+expands either). The console only expands a leading ASCII `~/`, so the agent
+receives a literal directory named `～/...` relative to the server cwd and
+appears to "lose" its workspace. **Always paste work dirs as absolute paths**
+(`/Users/<you>/fusion/fusion-site`, `C:\work\fusion-site`) — or at least an
+ASCII `~/...` — and check the Workers tab row if a worker keeps starting in
+the wrong place.
+
+### Worker stalls or "does nothing": `permission_mode` is too restrictive for headless runs
+
+Workers run headless — nobody is at the terminal to answer prompts. The
+default `acceptEdits` only auto-approves file edits; anything else that needs
+confirmation (shell commands, network tools, depending on the CLI) blocks the
+run until the budget kills it. For unattended workers set
+**`permission_mode: bypassPermissions`** (Workers tab → worker detail). Keep
+the per-worker budget cap as the real safety boundary, and prefer `confirm`
+orchestration mode when you want to approve dispatches yourself.
 
 ## License
 

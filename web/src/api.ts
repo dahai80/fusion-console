@@ -57,8 +57,10 @@ export type Message = {
 };
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  // FormData bodies must keep the browser-generated multipart Content-Type.
+  const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
+    headers: isForm ? {} : { "Content-Type": "application/json" },
     credentials: "same-origin",
     ...init,
   });
@@ -168,15 +170,15 @@ export const api = {
   skills: (repo?: string) =>
     req<{ skills: SkillEntry[] }>(`/api/skills${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`),
   readSkill: (path: string, repo?: string) =>
-    req<{ content: string }>(`/api/skills/read?path=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`),
-  saveSkill: (s: { name: string; description: string; body: string; scope: string; repo?: string }) =>
+    req<{ content: string; doc: SkillDoc }>(`/api/skills/read?path=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`),
+  saveSkill: (s: { name: string; description: string; extra: string; body: string; scope: string; repo?: string }) =>
     req<{ ok: boolean; path: string }>("/api/skills", { method: "POST", body: JSON.stringify(s) }),
   deleteSkill: (name: string, scope: string, repo?: string) =>
     req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}?scope=${scope}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`, { method: "DELETE" }),
   draftSkill: (d: { hint: string; text: string }) =>
-    req<{ content: string }>("/api/skills/draft", { method: "POST", body: JSON.stringify(d) }),
+    req<{ content: string; doc: SkillDoc; warnings: string[] | null }>("/api/skills/draft", { method: "POST", body: JSON.stringify(d) }),
   importSkill: (source: string) =>
-    req<{ content: string }>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) }),
+    req<SkillImport>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) }),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>
@@ -188,12 +190,32 @@ export const api = {
   ragSetEnabled: (enabled: boolean) =>
     req<{ enabled: boolean }>("/api/rag/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
   workersStatus: () => req<{ workers: WorkerStatus[] }>("/api/workers/status"),
+  uploadAttachment: (file: File) =>
+    req<{ name: string; size: number; stored: string; path: string }>("/api/attachments", {
+      method: "POST",
+      body: (() => { const f = new FormData(); f.append("file", file); return f; })(),
+    }),
+  readAttachment: (stored: string, offset: number, maxBytes: number) =>
+    req<{
+      stored: string; total: number; offset: number; bytes_read: number;
+      next_offset: number; encoding: string; content: string; eof: boolean;
+    }>(`/api/attachments/read?stored=${encodeURIComponent(stored)}&offset=${offset}&max_bytes=${maxBytes}`),
+  dispatches: () => req<{ dispatches: DispatchRun[]; unread_by_conv: Record<string, number> }>("/api/dispatches"),
+  ackDispatches: (conversationId: number) =>
+    req<{ ok: boolean }>("/api/dispatches/ack", { method: "POST", body: JSON.stringify({ conversation_id: conversationId }) }),
+  dismissDispatch: (id: number) =>
+    req<{ ok: boolean }>(`/api/dispatches/${id}/dismiss`, { method: "POST" }),
+  clearDispatches: () => req<{ ok: boolean }>("/api/dispatches/clear", { method: "POST" }),
   failuresList: () => req<{ failures: FailureRow[] }>("/api/failures"),
   failuresAdd: (body: { agent?: string; category: string; note: string }) =>
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
-  teamView: () => req<TeamSnapshot>("/api/team/view"),
+  teamView: (team?: string) =>
+    req<TeamSnapshot>(`/api/team/view${team ? `?team=${encodeURIComponent(team)}` : ""}`),
   teamAgents: () => req<{ agents: Record<string, any>[] }>("/api/team/agents"),
-  teamOp: (body: { op: string; task_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[] }) =>
+  teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
+  teamCreate: (body: TeamCreateReq) =>
+    req<TeamCreateRes>("/api/team/create", { method: "POST", body: JSON.stringify(body) }),
+  teamOp: (body: { op: string; task_id?: string; entry_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean }) =>
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
   codeInstall: (agent: string) =>
@@ -216,6 +238,62 @@ export type TeamSnapshot = {
   limits?: Record<string, any>;
   brief_warnings: Record<string, { item: string; fix: string }[]>;
   alerts: string[];
+  lifecycle?: string;
+};
+
+// teams.lead_status result (lead loop on the daemon, issue #17).
+export type LeadStatus = {
+  running: boolean;
+  lead_id?: string;
+  round?: number;
+  n_stalls?: number;
+  replan_count?: number;
+  last_verdict?: string;
+};
+
+// Team creation wizard payload (issue #16). Field names mirror the kernel
+// TeamDefinition/TeamMember exactly — the review step shows this verbatim.
+export type TeamCreateMember = {
+  name: string;
+  role: string;
+  skills: string[];
+  tool_allowlist: string[];
+  permission_mode: string;
+  budget_tokens: number;
+  max_concurrency: number;
+};
+
+export type TeamCreateReq = {
+  team: {
+    name: string;
+    namespace_key: string;
+    members: TeamCreateMember[];
+    lead_budget_tokens: number;
+    playbook: boolean;
+    max_depth: number;
+    metadata: Record<string, unknown>;
+  };
+  tasks: { title: string; detail: string }[];
+  lead_start: boolean;
+  lead_goal: string;
+};
+
+// One queued task's outcome — a rejected task is an entry with an error,
+// never a dropped row (partial success stays visible).
+export type TeamCreateTaskResult = {
+  index: number;
+  title: string;
+  task_id?: string;
+  error?: string;
+};
+
+export type TeamCreateRes = {
+  status: string;
+  team: string;
+  namespace_key: string;
+  tasks: TeamCreateTaskResult[];
+  lead_started: boolean;
+  lead_error?: string;
 };
 
 export type FailureRow = {
@@ -249,6 +327,27 @@ export type WorkerStatus = {
   elapsed_s?: number;
   last_task?: string;
   last_elapsed_s?: number;
+};
+
+// One background dispatch (run_agent with background=true), newest first.
+export type DispatchRun = {
+  id: number;
+  worker: string;
+  agent: string;
+  task: string;
+  conversation_id: number;
+  user: string;
+  status: "queued" | "running" | "done" | "error";
+  started_at: string;
+  finished_at: string;
+  elapsed_s: number;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  detail: string;
+  result: string;
+  error?: string;
+  read: boolean;
 };
 
 export type RagStatus = {
@@ -285,13 +384,15 @@ export type WorkerSettings = {
   name?: string;
   agent: string;
   enabled: boolean;
-  isolation: "worktree" | "standalone";
+  isolation: "github" | "worktree" | "standalone";
   permission_mode: string;
   max_budget_usd: number;
   provider_id: string;
   model?: string;
   work_dir: string;
   repo?: string;
+  repo_branch?: string;
+  memory?: string;
 };
 
 export type UsageRange = "today" | "week" | "month" | "all";
@@ -329,6 +430,24 @@ export type SkillEntry = {
   path: string;
 };
 
+// SkillDoc is a SKILL.md parsed server-side: name/description are edited in
+// the form, extra holds every other frontmatter line verbatim.
+export type SkillDoc = {
+  name: string;
+  description: string;
+  extra: string;
+  body: string;
+};
+
+export type SkillImport = {
+  content: string;
+  doc: SkillDoc;
+  url: string;
+  via_mirror: boolean;
+  warnings: string[] | null;
+  missing_files: string[] | null;
+};
+
 export type DashboardBucket = {
   bucket: string;
   brain_tokens_in: number;
@@ -358,6 +477,11 @@ export type Orchestrator = {
   workers: WorkerSettings[];
   configured: boolean;
   worker_memory?: "notes" | "fusion-memory" | "off";
+  brain_work_dir?: string;
+  brain_repo?: string;
+  brain_repo_branch?: string;
+  brain_mode?: "chat" | "agent";
+  brain_context_files?: string[];
 };
 
 // streamPOST performs a POST that yields SSE "data:" JSON events.
