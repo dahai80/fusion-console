@@ -271,6 +271,17 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 
 	case "run_agent":
 		cli, wk := s.resolveWorkerTarget(args.Agent)
+		// The brain sometimes dispatches with a bare agent type plus a repo
+		// path. Resolve that back to the owning worker so isolation, budget,
+		// repo binding and Dashboard status all apply (deterministic, not
+		// prompt-dependent).
+		if wk == nil && strings.TrimSpace(args.Repo) != "" {
+			if byRepo := s.resolveWorkerByRepo(args.Repo); byRepo != nil {
+				wk = byRepo
+				cli = wk.Agent
+				log.Printf("orchestrator: dispatch by repo %s resolved to worker %s", args.Repo, wk.Name)
+			}
+		}
 		adapter, ok := s.agents[cli]
 		if !ok {
 			return "", fmt.Errorf("unknown agent %q", args.Agent)
@@ -754,6 +765,31 @@ func (s *Server) resolveWorkerTarget(id string) (cli string, wk *config.WorkerCo
 		return w.Agent, w
 	}
 	return id, nil
+}
+
+// resolveWorkerByRepo maps a repo path the brain passed to run_agent back to
+// the worker that owns it: exact work_dir match first, then the worker whose
+// name equals the repo directory's basename (workers are named after their
+// fusion-* checkouts). nil when no enabled worker claims the path.
+func (s *Server) resolveWorkerByRepo(repoPath string) *config.WorkerConfig {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return nil
+	}
+	base := strings.TrimSuffix(filepath.Base(repoPath), "/")
+	for i := range s.cfg.Orchestrator.Workers {
+		w := &s.cfg.Orchestrator.Workers[i]
+		if !w.Enabled {
+			continue
+		}
+		if wd := s.cfg.ResolveWorkerDir(*w); wd == repoPath {
+			return w
+		}
+		if w.Name != "" && w.Name == base {
+			return w
+		}
+	}
+	return nil
 }
 
 // providerEnv resolves a worker's forced provider (agent settings override,
