@@ -321,11 +321,6 @@ function ChatPage({ onGoTeam }: { onGoTeam: () => void }) {
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [gwProvider, setGwProvider] = useState<Provider | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
-  // Per-conversation provider+model binding (persisted server-side). When no
-  // conversation is open yet the selection is held here and applied on send.
-  const [selProvider, setSelProvider] = useState("");
-  const [selModel, setSelModel] = useState("");
-  const [modelOpts, setModelOpts] = useState<string[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<{ name: string; size: number; stored: string; path: string }[]>([]);
@@ -368,41 +363,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       setProviders(list);
       const gw = list.find((p) => p.type === "gateway") ?? null;
       setGwProvider(gw);
-      // Default selection: the gateway provider, else the first enabled one.
-      setSelProvider((cur) => cur || gw?.id || list[0]?.id || "");
     }).catch(() => {});
     api.agents().then((r) => {
       setAgents(r.agents ?? []);
     }).catch(() => {});
   }, [refreshConvs]);
-
-  // Model options follow the selected provider's /v1/models; fall back to
-  // the provider's stored default when the endpoint is unreachable.
-  useEffect(() => {
-    if (!selProvider) return;
-    const prov = providers.find((p) => p.id === selProvider);
-    let stop = false;
-    api.models(selProvider).then((r) => {
-      if (stop) return;
-      const opts = r.models ?? [];
-      setModelOpts(opts.length ? opts : prov?.model ? [prov.model] : []);
-      setSelModel((cur) => (opts.includes(cur) ? cur : opts[0] || prov?.model || ""));
-    }).catch(() => {
-      if (stop) return;
-      setModelOpts(prov?.model ? [prov.model] : []);
-      setSelModel((cur) => cur || prov?.model || "");
-    });
-    return () => { stop = true; };
-  }, [selProvider, providers]);
-
-  // Opening a conversation adopts its persisted provider+model binding.
-  useEffect(() => {
-    if (!active) return;
-    if (active.ProviderID) {
-      setSelProvider(active.ProviderID);
-      if (active.Model) setSelModel(active.Model);
-    }
-  }, [active?.ID]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -513,33 +478,6 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     await api.messages(r.id).catch(() => {});
   };
 
-  // Per-conversation provider+model selection. Persisted on the open
-  // conversation; held in state otherwise and applied on the next send.
-  // Never writes provider.Model — the provider default is owned by the
-  // Models page (single-owner rule, issue #15).
-  const changeProvider = async (pid: string) => {
-    setSelProvider(pid);
-    if (active) {
-      try {
-        await api.setConversationModel(active.ID, pid, selModel);
-        await refreshConvs();
-      } catch (ex) {
-        setErr((ex as Error).message);
-      }
-    }
-  };
-  const changeModel = async (m: string) => {
-    setSelModel(m);
-    if (active) {
-      try {
-        await api.setConversationModel(active.ID, selProvider, m);
-        await refreshConvs();
-      } catch (ex) {
-        setErr((ex as Error).message);
-      }
-    }
-  };
-
   const pickFiles = () => fileInputRef.current?.click();
   const onFiles = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -610,7 +548,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       await runAgentTask(text, mentioned.name);
       return;
     }
-    if (!gwProvider && !selProvider) {
+    if (!gwProvider && providers.length === 0) {
       setErr("no enabled provider — set one up on the Models page first");
       return;
     }
@@ -624,15 +562,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         const r = await api.createConversation(text.slice(0, 40), "chat");
         conv = { ID: r.id, Title: text.slice(0, 40), Kind: "chat", User: "", AgentName: "", Workdir: "", CreatedAt: "" };
         setActive(conv);
-        // Persist the pre-conversation provider/model selection on first send.
-        if (selProvider) {
-          await api.setConversationModel(conv.ID, selProvider, selModel).catch(() => {});
-        }
         await refreshConvs();
       }
       setEntries((e) => [...e, { role: "user", content: full }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: selProvider || gwProvider?.id, content: full, orchestrate }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, content: full, orchestrate }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -848,26 +782,6 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           >
             <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
           </button>
-          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="Provider for this conversation — persisted per conversation">
-            <Brain size={14} className="text-indigo-500" /> provider
-          </label>
-          <Select value={selProvider} onChange={(e) => changeProvider(e.target.value)} className="w-44"
-            title="Which LLM provider this conversation talks to (gateway or direct)">
-            {providers.length === 0 && <option value="">no provider</option>}
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>{p.name || p.id}{p.type === "gateway" ? " · gateway" : ""}</option>
-            ))}
-          </Select>
-          <Select value={selModel} onChange={(e) => changeModel(e.target.value)} className="w-48"
-            title="Model for this conversation — served by the selected provider (fed by its /v1/models)">
-            {modelOpts.length === 0 && selModel && <option value={selModel}>{selModel}</option>}
-            {modelOpts.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </Select>
-          {providers.length === 0 && (
-            <span className="text-xs text-amber-600 dark:text-amber-400">no enabled provider — set one up on the Models page</span>
-          )}
           <button
             onClick={() => setDispatchDrawer(true)}
             title="Dispatches"
@@ -1462,7 +1376,7 @@ function GatewayPage() {
           <p className="text-sm text-zinc-500">
             The gateway provider's default model: <span className="font-medium text-zinc-700 dark:text-zinc-200">{brainModel || "not set"}</span>.
             Chat reads it per conversation — change the default on the Models page (single owner
-            of provider.Model), or pick a different provider/model in each conversation's header.
+            of provider.Model), or set the brain provider/model under Agents {'>'} Workers {'>'} Brain.
             Cloud models are pinned to their backend via the qualified <code>backend/model</code> id.
           </p>
         </Card>

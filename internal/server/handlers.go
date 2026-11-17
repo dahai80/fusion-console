@@ -174,17 +174,28 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	// Provider resolution: explicit request override > per-conversation
-	// binding > first enabled gateway provider. The resolved model follows
-	// the per-conversation binding when set, else the provider default.
-	// provider.Model itself is never written here (single-owner rule: the
-	// Models page owns the provider default).
+	// Provider resolution: explicit request override > brain config
+	// (Agents -> Workers -> Brain) > per-conversation binding > first enabled
+	// gateway provider. The brain setting is the everyday default so chat
+	// never has to pick a model per message; provider.Model itself is never
+	// written here (single-owner rule: the Models page owns the provider
+	// default).
 	user0 := s.auth.User(r)
 	var model string
 	var fallbackNotice string
 	prov, ok := s.providerByID(req.ProviderID)
 	if ok {
 		model = prov.DefaultModel()
+	} else if bp := strings.TrimSpace(s.cfg.Orchestrator.BrainProviderID); bp != "" {
+		if p, pok := s.providerByID(bp); pok {
+			prov = p
+			model = strings.TrimSpace(s.cfg.Orchestrator.BrainModel)
+			if model == "" {
+				model = p.DefaultModel()
+			}
+		} else {
+			log.Printf("server: chat brain provider %q unusable, falling back to gateway default", bp)
+		}
 	} else if conv, cerr := s.store.Conversation(user0, req.ConversationID); cerr == nil && conv.ProviderID != "" {
 		log.Printf("server: chat conv=%d request provider %q unusable, trying conversation binding %s", req.ConversationID, req.ProviderID, conv.ProviderID)
 		if p, pok := s.providerByID(conv.ProviderID); pok {
@@ -1029,6 +1040,12 @@ func (s *Server) handleSaveOrchestration(w http.ResponseWriter, r *http.Request)
 	if orch.BrainAgent != "" {
 		if _, ok := s.agents[orch.BrainAgent]; !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown brain agent " + orch.BrainAgent})
+			return
+		}
+	}
+	if bp := strings.TrimSpace(orch.BrainProviderID); bp != "" {
+		if _, ok := s.providerByID(bp); !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled brain provider " + bp})
 			return
 		}
 	}

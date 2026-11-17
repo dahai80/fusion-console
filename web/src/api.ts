@@ -469,6 +469,8 @@ export type Orchestrator = {
   brain_repo_branch?: string;
   brain_mode?: "chat" | "agent";
   brain_context_files?: string[];
+  brain_provider_id?: string;
+  brain_model?: string;
 };
 
 // streamPOST performs a POST that yields SSE "data:" JSON events.
