@@ -26,13 +26,15 @@ type Message struct {
 
 // Conversation is one chat or agent session.
 type Conversation struct {
-	ID        int64
-	User      string
-	Title     string
-	Kind      string // "chat" or "agent"
-	AgentName string
-	Workdir   string
-	CreatedAt time.Time
+	ID         int64
+	User       string
+	Title      string
+	Kind       string // "chat" or "agent"
+	AgentName  string
+	Workdir    string
+	ProviderID string // chat model source chosen for this conversation (design v2)
+	Model      string // chat model chosen for this conversation
+	CreatedAt  time.Time
 }
 
 // Store wraps the SQLite handle.
@@ -101,7 +103,46 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("store: migrate: %w", err)
 		}
 	}
+	// Column migrations: CREATE-only statements above cannot extend existing
+	// tables, so per-conversation model columns (design v2) go through an
+	// idempotent addColumn (PRAGMA check + ALTER).
+	for _, c := range []struct{ table, column, ddl string }{
+		{"conversations", "provider_id", `ALTER TABLE conversations ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''`},
+		{"conversations", "model", `ALTER TABLE conversations ADD COLUMN model TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := addColumn(s.db, c.table, c.column, c.ddl); err != nil {
+			return fmt.Errorf("store: migrate: %w", err)
+		}
+	}
 	return nil
+}
+
+// addColumn runs ddl when column is missing from table. CREATE-IF-NOT-EXISTS
+// cannot express this, and a bare ALTER fails on every startup after the
+// first — hence the PRAGMA probe.
+func addColumn(db *sql.DB, table, column, ddl string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil // already migrated
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(ddl)
+	return err
 }
 
 // Close closes the database.
@@ -118,10 +159,51 @@ func (s *Store) CreateConversation(user, title, kind, agentName, workdir string)
 	return res.LastInsertId()
 }
 
+// SetConversationModel persists the chat model source chosen for a
+// conversation (design v2: per-conversation selection, carried across
+// sessions). Empty providerID clears the override.
+func (s *Store) SetConversationModel(convID int64, providerID, model string) error {
+	_, err := s.db.Exec(`UPDATE conversations SET provider_id = ?, model = ? WHERE id = ?`,
+		providerID, model, convID)
+	if err != nil {
+		return fmt.Errorf("store: set conversation model: %w", err)
+	}
+	return nil
+}
+
+// ConversationModel returns the conversation's chosen model source.
+func (s *Store) ConversationModel(convID int64) (providerID, model string, err error) {
+	err = s.db.QueryRow(`SELECT provider_id, model FROM conversations WHERE id = ?`, convID).
+		Scan(&providerID, &model)
+	if err != nil {
+		return "", "", fmt.Errorf("store: conversation model: %w", err)
+	}
+	return providerID, model, nil
+}
+
+// ConversationProviderUsers returns the IDs of conversations bound to a
+// provider — the delete-confirmation consumer list (design v2 §4.1A).
+func (s *Store) ConversationProviderUsers(providerID string) ([]int64, error) {
+	rows, err := s.db.Query(`SELECT id FROM conversations WHERE provider_id = ? LIMIT 50`, providerID)
+	if err != nil {
+		return nil, fmt.Errorf("store: conversation provider users: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // ListConversations returns conversations for a user, newest first.
 func (s *Store) ListConversations(user string) ([]Conversation, error) {
 	rows, err := s.db.Query(
-		`SELECT id, user, title, kind, agent_name, workdir, created_at
+		`SELECT id, user, title, kind, agent_name, workdir, created_at, provider_id, model
 		 FROM conversations WHERE user = ? ORDER BY id DESC LIMIT 200`, user)
 	if err != nil {
 		return nil, fmt.Errorf("store: list conversations: %w", err)
@@ -131,7 +213,7 @@ func (s *Store) ListConversations(user string) ([]Conversation, error) {
 	for rows.Next() {
 		var c Conversation
 		var created string
-		if err := rows.Scan(&c.ID, &c.User, &c.Title, &c.Kind, &c.AgentName, &c.Workdir, &created); err != nil {
+		if err := rows.Scan(&c.ID, &c.User, &c.Title, &c.Kind, &c.AgentName, &c.Workdir, &created, &c.ProviderID, &c.Model); err != nil {
 			return nil, fmt.Errorf("store: scan conversation: %w", err)
 		}
 		c.CreatedAt, _ = time.Parse(time.RFC3339, created)
