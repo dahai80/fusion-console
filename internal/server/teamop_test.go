@@ -11,7 +11,7 @@ import (
 
 // TestTeamOpMethodMapping verifies the wire format of every op the console
 // proxies to the daemon: method name, required params, team fallback, and
-// required-field validation (issue #14).
+// required-field validation (issue #17: pause/resume/disband + lead ops).
 func TestTeamOpMethodMapping(t *testing.T) {
 	cases := []struct {
 		name       string

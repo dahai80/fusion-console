@@ -1,9 +1,9 @@
 // Team view HTTP surface: the snapshot read side plus the operations the
 // daemon exposes — task cancel/rerun, team.set_limits, and the lifecycle ops
 // teams.pause / teams.resume / teams.disband plus the lead loop
-// teams.lead_start / lead_stop / lead_status (issue #14; upstream RPCs landed
-// in fusion-agent-studio). The playbook panel stays hidden until
-// fusion-agent-studio#733 (teams.playbook_render/trace) ships.
+// teams.lead_start / lead_stop / lead_status (issue #17; upstream RPCs landed
+// in fusion-agent-studio). The playbook panel (issue #14) rides the same
+// proxy once teams.playbook_render/trace are wired.
 package server
 
 import (
