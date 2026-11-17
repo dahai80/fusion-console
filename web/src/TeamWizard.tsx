@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, ListPlus, Plus, Rocket, Trash2, Users, Wand2 } from "lucide-react";
-import { api, type TeamCreateRes, type TeamCreateTaskResult } from "./api";
-import { Badge, Button, Card, Input, Select, Textarea } from "./components/ui";
+import { ArrowLeft, ArrowRight, Check, Plus, Rocket, Trash2, Users, Wand2 } from "lucide-react";
+import { api, type TeamCreateRes, type TeamCreateTaskResult, type WorkerSettings } from "./api";
+import { Badge, Button, Card, Input, Select } from "./components/ui";
 
 // Team creation wizard (issue #16): 4 steps + done, reusing the v0.1.x
 // Onboarding shell pattern (step rail + one component per step). Client
@@ -10,13 +10,11 @@ import { Badge, Button, Card, Input, Select, Textarea } from "./components/ui";
 // words the daemon would. Server validation stays authoritative: whatever
 // the kernel rejects renders verbatim, the console never weakens it.
 
-type StepId = "basics" | "members" | "lead" | "review" | "done";
+type StepId = "basics" | "members" | "done";
 
 const STEPS: { id: StepId; label: string; icon: typeof Users }[] = [
   { id: "basics", label: "Team basics", icon: Wand2 },
   { id: "members", label: "Members", icon: Users },
-  { id: "lead", label: "Lead and tasks", icon: ListPlus },
-  { id: "review", label: "Review and create", icon: Rocket },
 ];
 
 // Kernel _VALID_MODES (fusion_harness/team.py) — the dropdown can only
@@ -33,8 +31,6 @@ type MemberDraft = {
   budget_tokens: number;
   max_concurrency: number;
 };
-
-type TaskDraft = { title: string; detail: string };
 
 // Mirror of internal/server/briefcheck.go checkBrief — the same five
 // contract items, flagged while typing so bad briefs die in the wizard
@@ -74,13 +70,10 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
 
   // Step 2 state.
   const [members, setMembers] = useState<MemberDraft[]>([]);
-  const [agents, setAgents] = useState<Record<string, any>[]>([]);
+  const [workers, setWorkers] = useState<WorkerSettings[]>([]);
 
   // Step 3 state.
-  const [leadBudget, setLeadBudget] = useState(200000);
-  const [tasks, setTasks] = useState<TaskDraft[]>([]);
-  const [leadStart, setLeadStart] = useState(false);
-  const [leadGoal, setLeadGoal] = useState("");
+  const [leadBudget] = useState(200000);
 
   // Submit state.
   const [submitting, setSubmitting] = useState(false);
@@ -92,7 +85,9 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
   // surface as a live team already registered under the same name.
   useEffect(() => {
     api.teamTeams().then((r) => setLiveTeams(r.teams ?? [])).catch(() => setLiveTeams([]));
-    api.teamAgents().then((r) => setAgents(r.agents ?? [])).catch(() => setAgents([]));
+    // Members come from the console fleet (orchestrator workers), not the
+    // daemon's registered agents — the team is staffed by configured workers.
+    api.orchestration().then((r) => setWorkers(r.orchestrator?.workers ?? [])).catch(() => setWorkers([]));
   }, []);
 
   const anchorWarn = useMemo(
@@ -139,10 +134,6 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
       : dupNames.length > 0
         ? `duplicate member names: ${dupNames.join(", ")}`
         : memberErrors.find((e) => e) || "";
-  const leadError = tasks.some((t) => !t.title.trim() && t.detail.trim())
-    ? "task with a description needs a short title"
-    : "";
-
   const payload = useMemo(
     () => ({
       team: {
@@ -162,19 +153,21 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
         max_depth: maxDepth,
         metadata: {},
       },
-      tasks: tasks.filter((t) => t.title.trim() || t.detail.trim()).map((t) => ({ title: t.title.trim(), detail: t.detail.trim() })),
-      lead_start: leadStart,
-      lead_goal: leadGoal.trim(),
+      // No queued tasks or lead loop here — assign work in chat afterwards
+      // (create_team tool / team_send), per the simplified wizard flow.
+      tasks: [],
+      lead_start: false,
+      lead_goal: "",
     }),
-    [name, nsKey, members, leadBudget, playbook, maxDepth, tasks, leadStart, leadGoal]
+    [name, nsKey, members, leadBudget, playbook, maxDepth]
   );
 
   const next = () => {
     setError("");
     if (step === "basics" && basicsError) return setError(basicsError);
     if (step === "members" && membersError) return setError(membersError);
-    if (step === "lead" && leadError) return setError(leadError);
-    setStep(step === "basics" ? "members" : step === "members" ? "lead" : "review");
+    if (step === "members") { submit(); return; }
+    setStep("members");
   };
 
   const submit = async () => {
@@ -206,13 +199,28 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
       },
     ]);
   };
+  // Seed a member from a configured worker: name from the worker, role from
+  // its agent type, permission mode carried over.
+  const addMemberFromWorker = (w: WorkerSettings) => {
+    const wname = (w.name || w.agent).replace(/[^A-Za-z0-9_-]/g, "-");
+    if (members.some((m) => m.name === wname)) return;
+    setMembers([
+      ...members,
+      {
+        name: wname,
+        role: w.agent,
+        skills: "",
+        tool_allowlist: "",
+        permission_mode: w.permission_mode || "default",
+        budget_tokens: 50000,
+        max_concurrency: 1,
+      },
+    ]);
+  };
 
   const patchMember = (i: number, patch: Partial<MemberDraft>) =>
     setMembers(members.map((m, j) => (j === i ? { ...m, ...patch } : m)));
 
-  const addTask = () => setTasks([...tasks, { title: "", detail: "" }]);
-  const patchTask = (i: number, patch: Partial<TaskDraft>) =>
-    setTasks(tasks.map((t, j) => (j === i ? { ...t, ...patch } : t)));
 
   if (step === "done" && result) {
     return (
@@ -330,13 +338,21 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
               <Select
                 className="w-full max-w-64"
                 value=""
-                onChange={(e) => { if (e.target.value) addMember(e.target.value); }}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) return;
+                  const w = workers.find((x) => (x.name || x.agent) === v);
+                  if (w) addMemberFromWorker(w); else addMember(v);
+                }}
               >
                 <option value="">add member from an existing worker…</option>
-                {agents.map((a) => (
-                  <option key={String(a.id)} value={String(a.name)}>{String(a.name)}</option>
+                {workers.filter((w) => w.enabled).map((w, i) => (
+                  <option key={i} value={`${w.name || w.agent}`}>{w.name || w.agent} · {w.agent}{w.model ? ` · ${w.model}` : ""}</option>
                 ))}
               </Select>
+              {workers.length === 0 && (
+                <span className="text-xs text-amber-600 dark:text-amber-400">no workers configured — add one on the Agents page first</span>
+              )}
               <Button variant="outline" onClick={() => addMember()}><Plus size={14} /> Blank member</Button>
             </div>
             {members.map((m, i) => (
@@ -373,68 +389,6 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
           </Card>
         )}
 
-        {step === "lead" && (
-          <Card className="space-y-4 p-4">
-            <div className="flex items-center gap-3">
-              <label className="text-sm font-medium">lead_budget_tokens</label>
-              <Input className="w-full sm:w-40" type="number" value={leadBudget} onChange={(e) => setLeadBudget(Number(e.target.value))} />
-              <span className="text-xs text-zinc-400">caps every member budget (Deadline.child semantics)</span>
-            </div>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium">Initial tasks (optional)</p>
-                <Button variant="outline" onClick={addTask}><Plus size={14} /> Task</Button>
-              </div>
-              {tasks.map((t, i) => {
-                const warn = checkBriefClient(t.detail);
-                return (
-                  <div key={i} className="space-y-2 rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-700/80">
-                    <Input value={t.title} onChange={(e) => patchTask(i, { title: e.target.value })} placeholder="short title" />
-                    <Textarea rows={3} value={t.detail} onChange={(e) => patchTask(i, { detail: e.target.value })}
-                      placeholder="full brief for the team lead to dispatch" />
-                    {warn.length > 0 && (
-                      <div className="rounded-lg bg-amber-500/10 p-2 text-xs text-amber-600 dark:text-amber-400">
-                        {warn.map((w) => <p key={w.item}>{w.item}: {w.fix}</p>)}
-                      </div>
-                    )}
-                    <Button variant="ghost" className="text-red-500 dark:text-red-400"
-                      onClick={() => setTasks(tasks.filter((_, j) => j !== i))}>
-                      <Trash2 size={14} /> Remove
-                    </Button>
-                  </div>
-                );
-              })}
-              {tasks.length === 0 && <p className="text-sm text-zinc-400">No initial tasks — the lead loop or the chat tools can add tasks later.</p>}
-            </div>
-          </Card>
-        )}
-
-        {step === "review" && (
-          <Card className="space-y-4 p-4">
-            <p className="text-sm font-medium">Exact payload sent to teams.register</p>
-            <pre className="max-h-80 overflow-auto rounded-xl bg-zinc-100 p-3 text-xs leading-5 dark:bg-zinc-800">
-              {JSON.stringify(payload.team, null, 2)}
-            </pre>
-            {payload.tasks.length > 0 && (
-              <>
-                <p className="text-sm font-medium">Queued teams.add_task calls</p>
-                <ul className="list-disc space-y-1 pl-5 text-sm">
-                  {payload.tasks.map((t) => <li key={t.title}>{t.title}</li>)}
-                </ul>
-              </>
-            )}
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={leadStart} onChange={(e) => setLeadStart(e.target.checked)}
-                className="h-4 w-4 rounded border-zinc-300 text-indigo-600" />
-              Start the lead loop after creation (off by default — opt-in)
-            </label>
-            {leadStart && (
-              <Input value={leadGoal} onChange={(e) => setLeadGoal(e.target.value)}
-                placeholder="lead goal — defaults to the first task's title" />
-            )}
-          </Card>
-        )}
-
         {error && (
           <Card className="border-red-300/60 p-3 dark:border-red-500/30">
             <p className="break-words text-sm text-red-600 dark:text-red-400">{error}</p>
@@ -450,10 +404,10 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
               <ArrowLeft size={14} /> Back
             </Button>
           )}
-          {step !== "review" ? (
+          {step === "basics" ? (
             <Button onClick={next}><ArrowRight size={14} /> Next</Button>
           ) : (
-            <Button onClick={submit} disabled={submitting}>
+            <Button onClick={next} disabled={submitting}>
               <Rocket size={14} /> {submitting ? "Creating…" : "Create team"}
             </Button>
           )}

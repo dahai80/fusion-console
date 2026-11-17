@@ -27,6 +27,7 @@ import {
   Maximize2,
   Mic,
   Network,
+  Rocket,
   Paperclip,
   Pencil,
   Trash2,
@@ -38,7 +39,7 @@ Code2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerStatus } from "./api";
+import { api, streamPOST, type AgentInfo, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
 import ModelsPage from "./ModelsPage";
 import { GatewayBackendsPanel } from "./GatewayBackends";
@@ -115,7 +116,7 @@ function Shell() {
           <Onboarding onDone={() => setPage("models")} />
         )}
         {page === "dashboard" && <Dashboard />}
-        {page === "chat" && <ChatPage onGoTeam={() => setPage("team")} />}
+        {page === "chat" && <ChatPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
         {page === "models" && <ModelsPage />}
@@ -309,7 +310,7 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
 
 type ChatEntry = { role: string; content: string; meta?: string };
 
-function ChatPage({ onGoTeam }: { onGoTeam: () => void }) {
+function ChatPage() {
   const [convs, setConvs] = useState<Conversation[]>([]);
   // Sidebar history tabs: chats vs teams. The Teams tab bootstraps the
   // agent-studio integration (status + consented install) and lists live
@@ -451,21 +452,84 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     const t = setInterval(read, 10000);
     return () => clearInterval(t);
   }, [sideTab]);
-  const openTeam = (name: string) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("team", name);
-    url.searchParams.delete("new");
-    window.history.replaceState(null, "", url.toString());
-    onGoTeam();
+  // Team group chat: clicking a team row opens (or creates) a conversation
+  // bound to that team — no page navigation. Each message there assigns a
+  // task to the team; replies come back via inbox polling.
+  // Team replies: poll the operator inbox while a team conversation is open
+  // and append new messages (server dedupes by msg_id).
+  useEffect(() => {
+    if (active?.Kind !== "team") return;
+    const pull = async () => {
+      try {
+        const r = await api.teamChatPoll(active.ID);
+        if ((r.messages ?? []).length) {
+          setEntries((e) => [...e, ...r.messages.map((m) => ({ role: m.role, content: m.content, meta: m.meta }))]);
+        }
+      } catch { /* daemon offline — next tick retries */ }
+    };
+    pull();
+    const t = setInterval(pull, 5000);
+    return () => clearInterval(t);
+  }, [active?.ID, active?.Kind]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openTeamChat = async (name: string) => {
     setConvDrawer(false);
+    const existing = convs.find((c) => c.Kind === "team" && c.AgentName === name);
+    if (existing) { await openConv(existing); return; }
+    try {
+      const r = await api.createConversation(`team: ${name}`, "team", name);
+      await refreshConvs();
+      setActive({ ID: r.id, Title: `team: ${name}`, Kind: "team", User: "", AgentName: name, Workdir: "", CreatedAt: "" });
+      setEntries([]);
+      setErr("");
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
   };
-  const goNewTeam = () => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("new", "1");
-    url.searchParams.delete("team");
-    window.history.replaceState(null, "", url.toString());
-    onGoTeam();
-    setConvDrawer(false);
+
+  // New team modal: name + worker selection, created in place.
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
+  const [teamName, setTeamName] = useState("");
+  const [teamPicked, setTeamPicked] = useState<string[]>([]);
+  const [teamWorkers, setTeamWorkers] = useState<WorkerSettings[]>([]);
+  const [teamErr, setTeamErr] = useState("");
+  const [teamCreating, setTeamCreating] = useState(false);
+  useEffect(() => {
+    if (!teamModalOpen) return;
+    api.orchestration().then((r) => setTeamWorkers(r.orchestrator?.workers ?? [])).catch(() => setTeamWorkers([]));
+  }, [teamModalOpen]);
+  const createTeam = async () => {
+    const nm = teamName.trim();
+    if (!nm) { setTeamErr("team name required"); return; }
+    const members = teamPicked.map((wn) => {
+      const w = teamWorkers.find((x) => (x.name || x.agent) === wn);
+      return {
+        name: (w?.name || w?.agent || wn).replace(/[^A-Za-z0-9_-]/g, "-"),
+        role: w?.agent || "",
+        skills: [] as string[],
+        tool_allowlist: [] as string[],
+        permission_mode: w?.permission_mode || "default",
+        budget_tokens: 50000,
+        max_concurrency: 1,
+      };
+    });
+    if (members.length === 0) { setTeamErr("pick at least one worker"); return; }
+    setTeamCreating(true);
+    setTeamErr("");
+    try {
+      await api.teamCreate({
+        team: { name: nm, namespace_key: nm, members, lead_budget_tokens: 200000, playbook: false, max_depth: 2, metadata: {} },
+        tasks: [], lead_start: false, lead_goal: "",
+      });
+      setTeamModalOpen(false);
+      setTeamName("");
+      setTeamPicked([]);
+      await openTeamChat(nm);
+    } catch (ex) {
+      setTeamErr((ex as Error).message);
+    } finally {
+      setTeamCreating(false);
+    }
   };
   const studioInstalling = studio?.phase === "installing" || studio?.phase === "starting";
   const studioReady = studio?.daemon_running || studio?.installed;
@@ -548,7 +612,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       await runAgentTask(text, mentioned.name);
       return;
     }
-    if (!gwProvider && providers.length === 0) {
+    if (active?.Kind !== "team" && !gwProvider && providers.length === 0) {
       setErr("no enabled provider — set one up on the Models page first");
       return;
     }
@@ -678,12 +742,8 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
             <Button variant="outline" className="w-full" onClick={newChat}>
               <Plus size={14} /> New chat
             </Button>
-          ) : studioReady ? (
-            <Button variant="outline" className="w-full" onClick={goNewTeam}>
-              <Plus size={14} /> New team
-            </Button>
           ) : (
-            <Button variant="outline" className="w-full" onClick={goNewTeam} disabled={!studio?.installed && studioInstalling}>
+            <Button variant="outline" className="w-full" onClick={() => setTeamModalOpen(true)} disabled={!studioReady}>
               <Plus size={14} /> New team
             </Button>
           )}
@@ -712,7 +772,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           {sideTab === "team" && studioReady && teamsLive.map((t) => (
             <button
               key={String(t.name)}
-              onClick={() => openTeam(String(t.name))}
+              onClick={() => openTeamChat(String(t.name))}
               className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
             >
               <Users size={14} className="shrink-0 text-indigo-500" />
@@ -771,6 +831,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           >
             <Menu size={16} />
           </button>
+          {active?.Kind === "team" && (
+            <span className="flex items-center gap-1.5 rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-2.5 py-1.5 text-xs text-indigo-500" title="Team conversation — each message assigns a task to the team; replies appear here via inbox polling">
+              <Users size={14} /> team: {active.AgentName}
+            </span>
+          )}
           <button
             onClick={() => setOrchestrate((v) => !v)}
             title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
@@ -920,6 +985,39 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           </div>
         </div>
       </div>
+      {teamModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !teamCreating && setTeamModalOpen(false)}>
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Users size={16} /> New team</h3>
+            <Input className="mb-3" placeholder="team name" value={teamName} onChange={(e) => setTeamName(e.target.value)} autoFocus />
+            <p className="mb-2 text-xs font-medium text-zinc-500">Members — pick from configured workers</p>
+            {teamWorkers.filter((w) => w.enabled).length === 0 && (
+              <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">no workers configured — add one on the Agents page first</p>
+            )}
+            <div className="mb-3 max-h-56 space-y-1 overflow-y-auto">
+              {teamWorkers.filter((w) => w.enabled).map((w) => {
+                const wn = w.name || w.agent;
+                const on = teamPicked.includes(wn);
+                return (
+                  <label key={wn} className="flex cursor-pointer items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
+                    <input type="checkbox" checked={on} className="h-4 w-4 rounded border-zinc-300 text-indigo-600"
+                      onChange={() => setTeamPicked(on ? teamPicked.filter((x) => x !== wn) : [...teamPicked, wn])} />
+                    <span className="font-medium">{wn}</span>
+                    <span className="text-xs text-zinc-500">{w.agent}{w.model ? ` · ${w.model}` : ""}</span>
+                  </label>
+                );
+              })}
+            </div>
+            {teamErr && <p className="mb-2 text-sm text-red-500">{teamErr}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setTeamModalOpen(false)} disabled={teamCreating}>Cancel</Button>
+              <Button onClick={createTeam} disabled={teamCreating}>
+                <Rocket size={14} /> {teamCreating ? "Creating…" : "Create team"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       <DispatchPanel
           onRunningCount={setDispatchActive}
         onOpen={(c) => { setDispatchDrawer(false); openConv(c); }}

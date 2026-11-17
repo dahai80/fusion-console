@@ -174,6 +174,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
+	// Team group chat: a conversation bound to a team (kind "team") turns
+	// each message into a task assignment — no LLM provider involved.
+	if req.ConversationID > 0 {
+		if conv, cerr := s.store.Conversation(s.auth.User(r), req.ConversationID); cerr == nil && conv.Kind == "team" {
+			s.handleTeamChatTurn(w, r, conv, req.Content)
+			return
+		}
+	}
+
 	// Provider resolution: explicit request override > brain config
 	// (Agents -> Workers -> Brain) > per-conversation binding > first enabled
 	// gateway provider. The brain setting is the everyday default so chat

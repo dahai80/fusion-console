@@ -27,7 +27,7 @@ export type Conversation = {
   ID: number;
   User: string;
   Title: string;
-  Kind: "chat" | "agent";
+  Kind: "chat" | "agent" | "team";
   AgentName: string;
   Workdir: string;
   ProviderID?: string;
@@ -80,7 +80,7 @@ export const api = {
     req<{ ok: boolean; key_id: string; key_prefix: string; raw_key: string }>("/api/gateway/key", { method: "POST" }),
   me: () => req<{ user: string }>("/api/me"),
   conversations: () => req<{ conversations: Conversation[] }>("/api/conversations"),
-  createConversation: (title: string, kind: "chat" | "agent", agentName = "", workdir = "") =>
+  createConversation: (title: string, kind: "chat" | "agent" | "team", agentName = "", workdir = "") =>
     req<{ id: number }>("/api/conversations", {
       method: "POST",
       body: JSON.stringify({ title, kind, agent_name: agentName, workdir }),
@@ -199,6 +199,8 @@ export const api = {
   teamView: (team?: string) =>
     req<TeamSnapshot>(`/api/team/view${team ? `?team=${encodeURIComponent(team)}` : ""}`),
   teamAgents: () => req<{ agents: Record<string, any>[] }>("/api/team/agents"),
+  teamChatPoll: (id: number) =>
+    req<{ messages: { role: string; content: string; meta?: string }[] }>(`/api/team/chat_poll?conversation_id=${id}`),
   teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
   teamCreate: (body: TeamCreateReq) =>
     req<TeamCreateRes>("/api/team/create", { method: "POST", body: JSON.stringify(body) }),

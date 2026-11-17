@@ -167,6 +167,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/failures/export", s.auth.Require(s.handleFailureExport))
 	m.HandleFunc("GET /api/team/view", s.auth.Require(s.handleTeamView))
 	m.HandleFunc("GET /api/team/agents", s.auth.Require(s.handleTeamAgents))
+	m.HandleFunc("GET /api/team/chat_poll", s.auth.Require(s.handleTeamChatPoll))
 	m.HandleFunc("GET /api/team/teams", s.auth.Require(s.handleTeamTeams))
 	m.HandleFunc("POST /api/team/op", s.auth.Require(s.handleTeamOp))
 	m.HandleFunc("POST /api/team/create", s.auth.Require(s.handleTeamCreate))
