@@ -156,6 +156,28 @@ regression-risk gate: existing chat (gateway + direct) must pass the
 current smoke before Phase 2 starts. Phase 5 Chat-page rewiring is the UI
 regression gate: scenario 6 must stay green.
 
+## Phase 0 — UX flows (user-perspective wiring, approved 2026-11-17)
+
+Every screen answers "which model am I using and how do I change it" with a
+visible path; no dead ends.
+
+1. **First run / empty state**: Chat page with zero enabled sources renders
+   an inline starter panel — two preset cards (macfabric on darwin, marked
+   macOS-only; fusion-gateway) + custom option. Each card is one click into
+   a pre-filled form; after save the panel offers "设为默认聊天模型 → 去聊天".
+   The Models tab shows a badge while no source exists.
+2. **Preset detection on arrival**: Models page probes ports on load —
+   macfabric detected running → card shows "检测到 127.0.0.1:8999，一键接入"
+   (only key confirm); not installed → stage-1 installer entry (§6.1);
+   fusion-gateway not installed → "安装并启动" one-click chain.
+3. **Default wiring**: saving the FIRST enabled source auto-suggests setting
+   it as the default chat model (one click, not silent) — new conversations
+   then just work; chat picker inherits per-conversation after.
+4. **Chat picker**: always visible in the chat header; empty state jumps to
+   the starter panel; gateway items greyed when unreachable with a "去 Gateway 页" link.
+5. **Agent binding**: Agents page rows show provider/model binding with the
+   per-CLI explanation (§4.1B); runtime fallbacks surface as run notices.
+
 ## Out of scope (explicit)
 
 Gateway auto-upgrade; MacFabric dmg automation (stage-2, upstream P4);
