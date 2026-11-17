@@ -17,6 +17,7 @@ import (
 
 	"github.com/dahai80/fusion-console/internal/agent"
 	"github.com/dahai80/fusion-console/internal/config"
+	"github.com/dahai80/fusion-console/internal/store"
 )
 
 // dispatchArgs is the parsed run_agent tool call payload.
@@ -33,6 +34,7 @@ type dispatchArgs struct {
 // and reported back into the originating conversation when it finishes.
 type bgRun struct {
 	ID             int64     `json:"id"`
+	DBID           int64     `json:"-"` // dispatch_runs row id (same value once persisted)
 	Worker         string    `json:"worker"`
 	Agent          string    `json:"agent"`
 	Task           string    `json:"task"`
@@ -150,7 +152,10 @@ func (s *Server) handleDispatchEnqueue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": msg})
 }
 
-// dispatchRegistry tracks background dispatches.
+// dispatchRegistry tracks background dispatches. Runs are write-through
+// persisted to SQLite: history and unread state survive console restarts,
+// and runs still marked running at boot are restored with a note (their
+// subprocess is reconciled separately by the orphan scan).
 type dispatchRegistry struct {
 	mu     sync.Mutex
 	nextID int64
@@ -160,9 +165,81 @@ type dispatchRegistry struct {
 func (r *dispatchRegistry) enqueue(run *bgRun) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.nextID++
-	run.ID = r.nextID
+	if run.ID > r.nextID {
+		r.nextID = run.ID
+	}
 	r.runs = append(r.runs, run)
+}
+
+// loadPersisted pulls the persisted run history into the registry at boot.
+// Runs still queued/running from a previous process get a restored note —
+// they were interrupted mid-flight, and any surviving subprocess shows up
+// via the worker orphan scan instead.
+func (s *Server) loadPersistedRuns() {
+	if s.store == nil {
+		return
+	}
+	rows, err := s.store.ListDispatchRuns(500)
+	if err != nil {
+		log.Printf("dispatch: load persisted runs: %v", err)
+		return
+	}
+	restored := 0
+	for _, row := range rows {
+		run := &bgRun{
+			ID: row.ID, Worker: row.Worker, Agent: row.Agent, Task: row.Task,
+			ConversationID: row.ConvID, User: row.User, Status: row.Status,
+			CostUSD: row.CostUSD, TokensIn: row.TokensIn, TokensOut: row.TokensOut,
+			Detail: row.Detail, Result: row.Result, Err: row.Error, Read: row.Read,
+		}
+		if t, err := time.Parse(time.RFC3339, row.StartedAt); err == nil {
+			run.StartedAt = t
+		}
+		if t, err := time.Parse(time.RFC3339, row.FinishedAt); err == nil {
+			run.FinishedAt = t
+			run.ElapsedS = row.ElapsedS
+		}
+		if run.Status == "queued" || run.Status == "running" {
+			run.Status = "error"
+			run.Err = "interrupted by console restart"
+			run.FinishedAt = time.Now()
+			restored++
+		}
+		s.bg.enqueue(run)
+	}
+	if len(rows) > 0 {
+		log.Printf("dispatch: restored %d persisted run(s) (%d interrupted in flight)", len(rows), restored)
+	}
+}
+
+// persistRun writes one run's current state to the store (best effort —
+// persistence failure never breaks the run itself).
+func (s *Server) persistRun(run *bgRun) {
+	if s.store == nil {
+		return
+	}
+	row := &store.DispatchRunRow{
+		ID: run.ID, ConvID: run.ConversationID, User: run.User,
+		Worker: run.Worker, Agent: run.Agent, Task: run.Task, Status: run.Status,
+		StartedAt: run.StartedAt.UTC().Format(time.RFC3339),
+		FinishedAt: run.FinishedAt.UTC().Format(time.RFC3339),
+		ElapsedS: run.ElapsedS, CostUSD: run.CostUSD,
+		TokensIn: run.TokensIn, TokensOut: run.TokensOut,
+		Detail: run.Detail, Result: run.Result, Error: run.Err, Read: run.Read,
+	}
+	var err error
+	if run.DBID == 0 {
+		if row.ID, err = s.store.CreateDispatchRun(row); err == nil {
+			run.DBID = row.ID
+			run.ID = row.ID // the DB row id is the canonical run id
+		}
+	} else {
+		row.ID = run.DBID
+		err = s.store.SaveDispatchRun(row)
+	}
+	if err != nil {
+		log.Printf("dispatch: persist run #%d: %v", run.ID, err)
+	}
 }
 
 // list returns a snapshot copy; conversation filters by convID > 0.
@@ -219,6 +296,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		Status:         "queued",
 	}
 	s.bg.enqueue(run)
+	s.persistRun(run)
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
@@ -226,6 +304,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 				s.bg.mu.Lock()
 				run.Status, run.Err, run.FinishedAt = "error", fmt.Sprintf("internal panic: %v", p), time.Now()
 				s.bg.mu.Unlock()
+				s.persistRun(run)
 			}
 		}()
 		s.agentRuns.Lock()
@@ -233,6 +312,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		s.bg.mu.Lock()
 		run.Status, run.StartedAt = "running", time.Now()
 		s.bg.mu.Unlock()
+		s.persistRun(run)
 
 		// The brain turn's context dies with its SSE stream; background runs
 		// must outlive it, capped at the same 30 minutes as foreground runs.
@@ -242,6 +322,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 
 		s.bg.mu.Lock()
 		run.FinishedAt = time.Now()
+		run.ElapsedS = int(run.FinishedAt.Sub(run.StartedAt).Seconds())
 		if err != nil {
 			run.Status, run.Err = "error", err.Error()
 		} else {
@@ -249,6 +330,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 			run.Result = final
 		}
 		s.bg.mu.Unlock()
+		s.persistRun(run)
 		log.Printf("orchestrator: background run #%d worker=%s status=%s", run.ID, run.Worker, run.Status)
 
 		// Report into the conversation so the chat history carries the
@@ -479,5 +561,8 @@ func (s *Server) handleDispatchAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.bg.ack(req.ConversationID)
+	if err := s.store.AckDispatchRuns(req.ConversationID); err != nil {
+		log.Printf("dispatch: persist ack conv=%d: %v", req.ConversationID, err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

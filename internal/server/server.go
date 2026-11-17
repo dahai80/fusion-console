@@ -75,6 +75,7 @@ func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	}
 	s.mux = http.NewServeMux()
 	s.routes()
+	s.loadPersistedRuns()
 	s.startTeamPoller()
 	return s
 }

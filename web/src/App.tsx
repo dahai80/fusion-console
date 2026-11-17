@@ -766,7 +766,7 @@ function ChatPage() {
           )}
           <div className="flex gap-2">
             <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => onFiles(e.target.files)} />
-            <Button variant="outline" className="self-end px-2.5" onClick={pickFiles} disabled={uploading || busy}
+            <Button variant="outline" className="self-end px-2.5" onClick={pickFiles} disabled={uploading}
               title="Attach files (text files are inlined into the message)">
               {uploading ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}
             </Button>
@@ -794,7 +794,7 @@ function ChatPage() {
                 {mentionedAgent ? <Bot size={16} /> : <Send size={16} />}
               </Button>
               <Button variant="outline" className="px-2.5" onClick={toggleVoice}
-                disabled={!voiceSupported || busy}
+                disabled={!voiceSupported}
                 title={voiceSupported ? (listening ? "Stop dictation" : "Voice input (browser speech)") : "Voice input needs Chrome/Edge (fusion-speech integration pending)"}>
                 <Mic size={16} className={listening ? "animate-pulse text-red-500" : ""} />
               </Button>
