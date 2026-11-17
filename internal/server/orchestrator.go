@@ -480,6 +480,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		} else if res.LeadStarted {
 			b.WriteString("\nlead loop started")
 		}
+		b.WriteString("\nView and operate this team on the Team page (switch to team \"" + res.Team + "\"). Converse with it here via team_send / team_inbox; pause/resume/disband it from the Team page or by asking me.")
 		return b.String(), nil
 
 	case "team_send":

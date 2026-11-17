@@ -661,7 +661,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setConvDrawer(false)} />
       )}
       <aside
-        className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-64 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-white/40`}
+        className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-64 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-zinc-900/40`}
       >
         <div className="p-3">
           <Button variant="outline" className="w-full" onClick={newChat}>
