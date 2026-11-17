@@ -87,8 +87,13 @@ function WorkersTab() {
           No workers configured yet — set them up on the Agents page.
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {workers.map((w) => (
+        (() => {
+          // Busy workers first (longest-running on top), idle below.
+          const busyList = workers.filter((w) => w.busy).sort((a, b) => (b.elapsed_s ?? 0) - (a.elapsed_s ?? 0));
+          const idleList = workers.filter((w) => !w.busy);
+          const grid = (list: WorkerStatus[]) => (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              {list.map((w) => (
             <Card key={w.name} className="p-4">
               <div className="flex flex-wrap items-center gap-2">
                 <Bot size={15} className={w.busy ? "text-amber-500" : "text-indigo-500"} />
@@ -124,8 +129,26 @@ function WorkersTab() {
               </div>
               <p className="mt-2 text-xs text-zinc-400">{w.last_run ? `last run ${w.last_run} UTC` : "no runs yet"}</p>
             </Card>
-          ))}
-        </div>
+              ))}
+            </div>
+          );
+          return (
+            <div className="space-y-5">
+              {busyList.length > 0 && (
+                <section>
+                  <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-600 dark:text-amber-400">
+                    <RefreshCw size={13} className="animate-spin" /> working now · {busyList.length}
+                  </h3>
+                  {grid(busyList)}
+                </section>
+              )}
+              <section>
+                <h3 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">idle · {idleList.length}</h3>
+                {grid(idleList)}
+              </section>
+            </div>
+          );
+        })()
       )}
     </div>
   );
