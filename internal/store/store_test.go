@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -124,5 +125,30 @@ func TestDeleteAndRenameConversation(t *testing.T) {
 	}
 	if err := s.DeleteConversation("other", id); err == nil {
 		t.Error("cross-user delete allowed")
+	}
+}
+
+func TestDispatchRunPersistence(t *testing.T) {
+	s := openTestStore(t)
+	row := &DispatchRunRow{ConvID: 1, User: "admin", Worker: "fusion-site", Agent: "claude",
+		Task: "fix issue", Status: "queued", StartedAt: time.Now().UTC().Format(time.RFC3339)}
+	id, err := s.CreateDispatchRun(row)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	row.ID = id
+	row.Status, row.Result, row.Read, row.ElapsedS = "done", "all good", true, 42
+	if err := s.SaveDispatchRun(row); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := s.ListDispatchRuns(10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("list: %v %d", err, len(got))
+	}
+	if got[0].Status != "done" || got[0].Result != "all good" || !got[0].Read || got[0].ElapsedS != 42 {
+		t.Fatalf("round trip mismatch: %+v", got[0])
+	}
+	if err := s.AckDispatchRuns(1); err != nil {
+		t.Fatalf("ack: %v", err)
 	}
 }
