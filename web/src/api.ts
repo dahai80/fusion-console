@@ -159,6 +159,9 @@ export const api = {
   ragSetEnabled: (enabled: boolean) =>
     req<{ enabled: boolean }>("/api/rag/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
   workersStatus: () => req<{ workers: WorkerStatus[] }>("/api/workers/status"),
+  dispatches: () => req<{ dispatches: DispatchRun[]; unread_by_conv: Record<string, number> }>("/api/dispatches"),
+  ackDispatches: (conversationId: number) =>
+    req<{ ok: boolean }>("/api/dispatches/ack", { method: "POST", body: JSON.stringify({ conversation_id: conversationId }) }),
   failuresList: () => req<{ failures: FailureRow[] }>("/api/failures"),
   failuresAdd: (body: { agent?: string; category: string; note: string }) =>
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
@@ -220,6 +223,27 @@ export type WorkerStatus = {
   elapsed_s?: number;
   last_task?: string;
   last_elapsed_s?: number;
+};
+
+// One background dispatch (run_agent with background=true), newest first.
+export type DispatchRun = {
+  id: number;
+  worker: string;
+  agent: string;
+  task: string;
+  conversation_id: number;
+  user: string;
+  status: "queued" | "running" | "done" | "error";
+  started_at: string;
+  finished_at: string;
+  elapsed_s: number;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  detail: string;
+  result: string;
+  error?: string;
+  read: boolean;
 };
 
 export type RagStatus = {

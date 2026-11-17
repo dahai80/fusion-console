@@ -34,6 +34,9 @@ type Server struct {
 	ragInstall  ragInstallState          // background fusion-rag install job (zero value = idle)
 	codeInstall ragInstallState          // background fusion-code install job (same job-state shape)
 	runs        workerRuns               // live worker dispatch registry (busy/idle + current task)
+	bg          dispatchRegistry         // background dispatch runs (queued/running/done)
+	dispatchTok string                   // loopback secret for MCP background-dispatch handoff
+	mcpMode     bool                     // true when serving the MCP stdio sidecar (ephemeral process)
 	team        teamDialer               // agent-studio team observer (poller + snapshot cache)
 	verMu       sync.Mutex               // guards verLast + verCache (CLI version fingerprint)
 	verLast     map[string]string        // agent name -> last-seen CLI version
@@ -51,13 +54,14 @@ type verCacheEntry struct {
 func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	s := &Server{
 		cfg: cfg, cfgDir: cfgDir,
-		auth:     auth.NewManager(),
-		store:    st,
-		models:   chat.NewModelList(),
-		agents:   map[string]agent.Adapter{},
-		harness:  harness.New(),
-		verLast:  map[string]string{},
-		verCache: map[string]verCacheEntry{},
+		auth:        auth.NewManager(),
+		store:       st,
+		models:      chat.NewModelList(),
+		agents:      map[string]agent.Adapter{},
+		harness:     harness.New(),
+		verLast:     map[string]string{},
+		verCache:    map[string]verCacheEntry{},
+		dispatchTok: dispatchToken(cfgDir),
 	}
 	// Protocol-driven agent registry: one adapter per enabled agent settings
 	// entry, resolved by protocol family (legacy entries fall back to a
@@ -130,6 +134,9 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/rag/stop", s.auth.Require(s.handleRagStop))
 	m.HandleFunc("POST /api/rag/enabled", s.auth.Require(s.handleRagEnabled))
 	m.HandleFunc("GET /api/workers/status", s.auth.Require(s.handleWorkersStatus))
+	m.HandleFunc("GET /api/dispatches", s.auth.Require(s.handleDispatches))
+	m.HandleFunc("POST /api/dispatches/ack", s.auth.Require(s.handleDispatchAck))
+	m.HandleFunc("POST /api/dispatches/enqueue", s.handleDispatchEnqueue)
 	// Method-qualified registrations: a bare "/shell/fusion-rag/" subtree
 	// pattern conflicts with the "GET /" SPA fallback in Go's mux.
 	ragProxyHandler := s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

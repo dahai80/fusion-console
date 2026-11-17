@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
+  CheckCircle,
+  Clock,
   Cpu,
   Brain,
   ChevronDown,
+  XCircle,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -28,7 +31,7 @@ Code2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type Conversation, type Message, type GatewayKey, type GatewayModelItem, type Provider } from "./api";
+import { api, streamPOST, type AgentInfo, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -308,6 +311,7 @@ function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
   const [err, setErr] = useState("");
+  const [unread, setUnread] = useState<Record<string, number>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const resolveApproval = async (ok: boolean) => {
@@ -352,6 +356,26 @@ function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
 
+  // Background dispatches: poll the run list for sidebar badges and refresh
+  // the open conversation so finished runs appear without a manual reload.
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      try {
+        const r = await api.dispatches();
+        if (stop) return;
+        setUnread(r.unread_by_conv ?? {});
+        if (active && !busy) {
+          const mr = await api.messages(active.ID);
+          const fresh = (mr.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta }));
+          setEntries((cur) => (fresh.length !== cur.length ? fresh : cur));
+        }
+      } catch { /* transient — next tick retries */ }
+    };
+    const t = setInterval(tick, 6000);
+    return () => { stop = true; clearInterval(t); };
+  }, [active, busy]);
+
   const deleteConv = async (c: Conversation) => {
     if (!window.confirm(`Delete "${c.Title || "#" + c.ID}" and its messages?`)) return;
     try {
@@ -379,6 +403,9 @@ function ChatPage() {
     setErr("");
     const r = await api.messages(c.ID);
     setEntries((r.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta })));
+    if (unread[c.ID] > 0) {
+      api.ackDispatches(c.ID).then(() => setUnread((u) => ({ ...u, [c.ID]: 0 }))).catch(() => {});
+    }
   };
 
   const newChat = async () => {
@@ -537,6 +564,11 @@ function ChatPage() {
               >
                 {c.Kind === "agent" ? <Bot size={14} className="shrink-0" /> : <MessageSquare size={14} className="shrink-0" />}
                 <span className="truncate">{c.Title || `#${c.ID}`}</span>
+                {unread[c.ID] > 0 && (
+                  <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-indigo-500 px-1.5 text-[10px] font-semibold text-white" title={`${unread[c.ID]} finished background run(s) not seen yet`}>
+                    {unread[c.ID]}
+                  </span>
+                )}
               </button>
               <button
                 onClick={() => renameConv(c)}
@@ -682,7 +714,99 @@ function ChatPage() {
           </div>
         </div>
       </div>
+      <DispatchPanel onOpen={openConv} />
     </div>
+  );
+}
+
+// DispatchPanel is the right rail of the chat page: every background run
+// (run_agent background=true) grouped into running / queued / finished.
+// Clicking a finished row opens its conversation.
+function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
+  const [runs, setRuns] = useState<DispatchRun[]>([]);
+  const [convs, setConvs] = useState<Conversation[]>([]);
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const r = await api.dispatches();
+        setRuns(r.dispatches ?? []);
+      } catch { /* server unreachable — keep last snapshot */ }
+      try {
+        const r = await api.conversations();
+        setConvs(r.conversations ?? []);
+      } catch { /* ignore */ }
+    };
+    load();
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, []);
+  const running = runs.filter((r) => r.status === "running");
+  const queued = runs.filter((r) => r.status === "queued");
+  const finished = runs.filter((r) => r.status === "done" || r.status === "error").slice(0, 8);
+  const openRun = (r: DispatchRun) => {
+    const c = convs.find((x) => x.ID === r.conversation_id);
+    if (c) onOpen(c);
+  };
+  const row = (r: DispatchRun) => (
+    <button key={r.id} onClick={() => openRun(r)} disabled={r.conversation_id === 0}
+      className={`w-full rounded-xl border p-2.5 text-left transition-colors ${
+        r.status === "running"
+          ? "border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10"
+          : r.status === "done"
+            ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
+            : r.status === "error"
+              ? "border-red-500/30 bg-red-500/5 hover:bg-red-500/10"
+              : "border-zinc-200/80 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+      } ${r.conversation_id === 0 ? "cursor-default" : "cursor-pointer"}`}>
+      <div className="flex items-center gap-2">
+        {r.status === "running" ? (
+          <RefreshCw size={12} className="shrink-0 animate-spin text-amber-500" />
+        ) : r.status === "done" ? (
+          <CheckCircle size={12} className="shrink-0 text-emerald-500" />
+        ) : r.status === "error" ? (
+          <XCircle size={12} className="shrink-0 text-red-500" />
+        ) : (
+          <Clock size={12} className="shrink-0 text-zinc-400" />
+        )}
+        <span className="truncate text-xs font-medium">{r.worker}</span>
+        <span className={`ml-auto text-[11px] ${r.status === "running" ? "text-amber-600 dark:text-amber-400" : r.status === "done" ? "text-emerald-600 dark:text-emerald-400" : r.status === "error" ? "text-red-500" : "text-zinc-400"}`}>
+          {r.status === "running" ? `${r.elapsed_s}s`
+            : r.status === "queued" ? "queued"
+            : r.status === "done" ? `done · $${r.cost_usd.toFixed(2)}`
+            : "error"}
+        </span>
+      </div>
+      <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
+      {(r.status === "running" || r.status === "queued") && r.detail && (
+        <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
+      )}
+      {r.status === "error" && r.error && (
+        <p className="mt-0.5 truncate text-[11px] text-red-400" title={r.error}>{r.error}</p>
+      )}
+    </button>
+  );
+  return (
+    <aside className="hidden lg:flex w-72 shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40 p-3">
+      <div className="flex items-center justify-between px-1 pb-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>
+        <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800">
+          {running.length} running · {queued.length} queued
+        </span>
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto">
+        {running.map(row)}
+        {queued.map(row)}
+        {finished.map(row)}
+        {runs.length === 0 && (
+          <p className="px-1 pt-4 text-center text-xs text-zinc-400">
+            No background runs yet. The brain dispatches with background=true for long tasks.
+          </p>
+        )}
+      </div>
+      <p className="border-t border-zinc-200/80 px-1 pt-2 text-[11px] leading-4 text-zinc-400 dark:border-zinc-800">
+        Finished runs post their outcome into the conversation automatically.
+      </p>
+    </aside>
   );
 }
 

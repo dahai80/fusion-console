@@ -19,6 +19,7 @@ import (
 // closes. Every tool call runs through the same executeToolCall path as the
 // chat planner, so budget, guards and repo-binding rules apply identically.
 func ServeMCPBrain(s *Server) {
+	s.mcpMode = true
 	dec := json.NewDecoder(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
 	log.SetOutput(os.Stderr) // stdout is the RPC channel; logs go to stderr

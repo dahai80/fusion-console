@@ -38,7 +38,7 @@ const orchestratorSystemPrompt = `You are the main brain of a local development 
 
 Tools:
 - list_agents: see which agents are installed.
-- run_agent: give one agent a concrete, self-contained task. The agent works in its own workspace and returns a result.
+- run_agent: give one agent a concrete, self-contained task. The agent works in its own workspace and returns a result. For tasks expected to take more than a couple of minutes (issue fixes, refactors, test suites) pass background=true — you get a run id immediately, the worker keeps running after your turn ends, and the outcome is posted into this conversation automatically. Reference a finished background run by its id when the user asks about progress.
 - read_artifact: read a file the agent produced, relative to the agents workspace root.
 
 Rules:
@@ -88,6 +88,7 @@ func (s *Server) orchestratorPrompt() string {
 	b.WriteString("- Repo ownership: a worker only handles work inside its bound repo/work dir (shown above); the console rejects cross-repo dispatches.\n")
 	b.WriteString("- If a task concerns a repository that no worker owns, do not force a dispatch — tell the user to file an issue in that repo instead.\n")
 	b.WriteString("- Dispatch workflow: instruct each worker to fix on a topic branch, run the repo's tests, then merge to the default branch and push — never direct commits to the default branch. Verify the merge landed (read_artifact or the worker's report) before reporting success to the user.\n")
+	b.WriteString("- Long dispatches: use run_agent with background=true for anything expected to run longer than ~2 minutes. Tell the user it is running in the background; the result is posted into this conversation automatically when done. Do not block the turn waiting on it.\n")
 	if g := workspaceGuidelines(s.agentsRoot(), 8*1024); g != "" {
 		b.WriteString("\nWorkspace conventions (CLAUDE.md / AGENTS.md found in the brain workspace):\n")
 		b.WriteString(g)
@@ -161,11 +162,12 @@ func orchestratorTools() []chat.ToolDecl {
 		},
 		{
 			Name:        "run_agent",
-			Description: "Run one headless coding agent on a concrete task. With worktree isolation the agent edits a fresh git worktree of the target repo; otherwise it works in its dedicated workspace. Returns the agent's final result text.",
+			Description: "Run one headless coding agent on a concrete task. With worktree isolation the agent edits a fresh git worktree of the target repo; otherwise it works in its dedicated workspace. Returns the agent's final result text. For long tasks (issue fixes, multi-step refactors) pass background=true: the call returns a run id immediately and the outcome is reported back into this conversation when the run finishes.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
-				`"agent":{"type":"string","description":"agent name, e.g. claude or fusion-code"},` +
+				`"agent":{"type":"string","description":"worker name from list_agents (preferred) or a bare agent type like claude"},` +
 				`"task":{"type":"string","description":"complete self-contained task description"},` +
-				`"repo":{"type":"string","description":"absolute path of the target repository; required when the agent uses worktree isolation, must be in the configured whitelist"}` +
+				`"repo":{"type":"string","description":"absolute path of the target repository; required when the agent uses worktree isolation, must be in the configured whitelist"},` +
+				`"background":{"type":"boolean","description":"true = run in background and report back later; use for tasks expected to take more than a couple of minutes"}` +
 				`},"required":["agent","task"]}`),
 		},
 		{
@@ -235,12 +237,7 @@ func (s *Server) brainBaseDir() string {
 // the tool-role message for the next planner iteration. Long-running agent
 // dispatches stream progress through send so the browser shows live status.
 func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user string, convID int64, send func(map[string]any)) (string, error) {
-	var args struct {
-		Agent string `json:"agent"`
-		Task  string `json:"task"`
-		Path  string `json:"path"`
-		Repo  string `json:"repo"`
-	}
+	var args dispatchArgs
 	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
 		return "", fmt.Errorf("tool %s: bad arguments: %v", call.Name, err)
 	}
@@ -282,8 +279,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 				log.Printf("orchestrator: dispatch by repo %s resolved to worker %s", args.Repo, wk.Name)
 			}
 		}
-		adapter, ok := s.agents[cli]
-		if !ok {
+		if _, ok := s.agents[cli]; !ok {
 			return "", fmt.Errorf("unknown agent %q", args.Agent)
 		}
 		if strings.TrimSpace(args.Task) == "" {
@@ -313,156 +309,17 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		if wk != nil && wk.MaxBudgetUSD > 0 {
 			budget = wk.MaxBudgetUSD
 		}
-		workdir := s.cfg.ResolveWorkDir(cli)
-		// Brain code source: keep the configured GitHub repo current before
-		// every dispatch so the brain workspace mirrors upstream. Warnings
-		// surface in the chat tool feed without failing the dispatch.
-		if url := strings.TrimSpace(s.cfg.Orchestrator.BrainRepo); url != "" && isRepoURL(url) {
-			_, warn, err := syncRepo(s.brainBaseDir(), "brain", url, s.cfg.Orchestrator.BrainRepoBranch)
-			if err != nil {
-				return "", fmt.Errorf("brain repo sync: %v", err)
+		// Long tasks run in the background: the call returns immediately and
+		// the outcome is reported back into the conversation when finished.
+		// In MCP mode this process is ephemeral (it dies with the claude
+		// turn), so the run is handed to the long-lived server instead.
+		if args.Background {
+			if s.mcpMode {
+				return s.enqueueViaServer(args)
 			}
-			if warn != "" && send != nil {
-				send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
-					"detail": "brain repo sync warning: " + warn})
-			}
+			return s.enqueueBackgroundDispatch(convID, user, args, wk, cli, settings, budget)
 		}
-		if wk != nil {
-			// Repo-binding guard: a worker with a bound repo only works on
-			// that repo. Cross-repo dispatches are rejected so the brain
-			// routes the task to the owning worker instead.
-			if bound := strings.TrimSpace(wk.Repo); bound != "" && wk.Isolation != "standalone" {
-				if asked := strings.TrimSpace(args.Repo); asked != "" && normalizeRepo(asked) != normalizeRepo(bound) {
-					return "", fmt.Errorf(
-						"worker %s is bound to repo %s and cannot work on %s — dispatch the task to the worker that owns %s, or file an issue in that repo instead",
-						args.Agent, bound, asked, asked)
-				}
-			}
-			switch wk.Isolation {
-			case "github":
-				// Sync the configured repository into the work dir, then run
-				// inside it. Warnings (dirty tree, local commits) surface in
-				// the chat tool feed without failing the dispatch.
-				dir, warn, err := syncRepo(s.cfg.ResolveWorkerDir(*wk), "worker "+args.Agent, wk.Repo, wk.RepoBranch)
-				if err != nil {
-					return "", err
-				}
-				workdir = dir
-				if warn != "" && send != nil {
-					send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
-						"detail": fmt.Sprintf("%s: repo sync warning: %s", args.Agent, warn)})
-				}
-			case "standalone":
-				workdir = s.cfg.ResolveWorkerDir(*wk)
-			default: // worktree (also the empty-isolation default)
-				// Named workers carry their own default repo; the per-run
-				// argument wins when the brain passes one explicitly.
-				repo := args.Repo
-				if strings.TrimSpace(repo) == "" {
-					repo = wk.Repo
-				}
-				if strings.TrimSpace(repo) != "" {
-					wt, err := s.createWorktree(repo, args.Agent)
-					if err != nil {
-						return "", err
-					}
-					workdir = wt
-				}
-			}
-		}
-		log.Printf("orchestrator: dispatch worker=%s agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
-			args.Agent, cli, isolationOf(wk), workdir, budget, user)
-		pEnv, forcedModel := s.providerEnv(cli, wk)
-		taskText := s.prefixWorkerTask(ctx, args.Agent, args.Task, s.workerMemoryModeFor(wk))
-		if brief := s.workerWorkspaceBrief(args.Agent, wk, workdir); brief != "" {
-			taskText = brief + "\n" + taskText
-		}
-		opts := agent.RunOpts{
-			Task: taskText, Workdir: workdir,
-			Model:           forcedModel,
-			PermissionMode:  settings.PermissionMode,
-			MaxBudgetUSD:    budget,
-			MaxBudgetTokens: settings.MaxBudgetTokens,
-			Command:         settings.Command,
-			Env:             pEnv,
-		}
-		// One agent subprocess at a time, same gate as manual agent runs.
-		s.agentRuns.Lock()
-		defer s.agentRuns.Unlock()
-		if note := s.versionChangeNotice(args.Agent, agent.CommandFor(settings.Name, settings.Command)); note != "" && send != nil {
-			send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress", "detail": note})
-		}
-		evCh, err := adapter.Run(ctx, opts)
-		if err != nil {
-			s.tagFailure(convID, user, args.Agent, "fc3_tool", "failed to start: "+err.Error())
-			return "", fmt.Errorf("agent %s failed to start: %v", args.Agent, err)
-		}
-		// Live dashboard state: mark the worker busy and publish progress.
-		s.runs.start(args.Agent, args.Task)
-		defer s.runs.end(args.Agent)
-		full, result := "", ""
-		var usage agent.Event
-		// Live progress: forward the agent's own tool activity plus a periodic
-		// heartbeat, so the chat shows the worker is actually running.
-		start := time.Now()
-		heartbeat := time.NewTicker(15 * time.Second)
-		defer heartbeat.Stop()
-		running := true
-		for running {
-			select {
-			case ev, ok := <-evCh:
-				if !ok {
-					running = false
-					break
-				}
-				switch ev.Type {
-				case agent.EventText:
-					full += ev.Text
-				case agent.EventTool:
-					s.runs.progress(args.Agent, ev.ToolDetail)
-					if send != nil {
-						send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
-							"detail": fmt.Sprintf("%s: %s", args.Agent, ev.ToolDetail)})
-					}
-				case agent.EventResult:
-					result = ev.Text
-				case agent.EventUsage:
-					usage = ev
-				case agent.EventNotice:
-					// Non-fatal visibility signal (drift/version hints): pass
-					// through to the chat stream without failing the dispatch.
-					if send != nil {
-						send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
-							"detail": fmt.Sprintf("%s notice: %s", args.Agent, ev.Text)})
-					}
-				case agent.EventError:
-					s.tagFailure(convID, user, args.Agent, "fc3_tool", "agent error: "+ev.Text)
-					return "", fmt.Errorf("agent %s error: %s", args.Agent, ev.Text)
-				}
-			case <-heartbeat.C:
-				s.runs.progress(args.Agent, fmt.Sprintf("running (%ds elapsed)", int(time.Since(start).Seconds())))
-				if send != nil {
-					send(map[string]any{"type": "tool", "tool": call.Name, "status": "progress",
-						"detail": fmt.Sprintf("%s still running (%ds elapsed)", args.Agent, int(time.Since(start).Seconds()))})
-				}
-			case <-ctx.Done():
-				return "", fmt.Errorf("agent %s canceled: %v", args.Agent, ctx.Err())
-			}
-		}
-		final := result
-		if final == "" {
-			final = full
-		}
-		// Cost rows stay separate: planner chat vs agent runs.
-		_ = s.store.LogCost(convID, user, "agent:"+args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
-		log.Printf("orchestrator: agent=%s finished cost=%.4f tokens_in=%d tokens_out=%d", args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
-		if s.workerMemoryModeFor(wk) == "fusion-memory" && final != "" {
-			s.commitWorkerMemory(ctx, args.Agent, args.Task, final)
-		}
-		if final == "" {
-			return "agent returned no output", nil
-		}
-		return final, nil
+		return s.finishDispatch(ctx, convID, user, call.Name, args, wk, cli, settings, budget, send)
 
 	case "read_artifact":
 		root := s.agentsRoot()
