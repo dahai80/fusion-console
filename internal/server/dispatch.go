@@ -512,6 +512,10 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 		Command:         settings.Command,
 		Env:             pEnv,
 	}
+	// Caveman default (issue #30): claude-family CLIs get the activation
+	// ruleset as an appended system prompt; other families ride the task.
+	claudeFamily := agent.ProtocolFor(cli, settings.Protocol) == agent.ProtocolClaudeStreamJSON
+	injectCaveman(s.cavemanPrompt(), claudeFamily, &opts.Task, &opts)
 	if note := s.versionChangeNotice(args.Agent, agent.CommandFor(settings.Name, settings.Command)); note != "" && send != nil {
 		send(map[string]any{"type": "tool", "tool": callName, "status": "progress", "detail": note})
 	}
