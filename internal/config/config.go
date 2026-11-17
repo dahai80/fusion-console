@@ -122,6 +122,9 @@ type OrchestratorConfig struct {
 	BrainRepo         string         `json:"brain_repo"`          // brain code source: GitHub URL (synced) or local repo path (used as-is)
 	BrainRepoBranch   string         `json:"brain_repo_branch"`   // branch for a GitHub brain repo; empty = remote HEAD
 	BrainContextFiles []string       `json:"brain_context_files"` // local files (working conventions, repo inventory) injected into the planner prompt
+	// DispatchTimeoutMinutes caps one dispatched agent run (foreground and
+	// background). 0 = 30 minutes; raise it for long multi-step briefs.
+	DispatchTimeoutMinutes int `json:"dispatch_timeout_minutes"`
 }
 
 // DefaultOrchestrator returns safe wizard defaults.

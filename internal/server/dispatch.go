@@ -352,7 +352,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 
 		// The brain turn's context dies with its SSE stream; background runs
 		// must outlive it, capped at the same 30 minutes as foreground runs.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), s.dispatchTimeout())
 		defer cancel()
 		final, err := s.finishDispatch(ctx, convID, user, "run_agent", args, wk, cli, settings, budget, nil)
 
@@ -380,6 +380,15 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		}
 	}()
 	return fmt.Sprintf("dispatched as background run #%d (worker %s). It runs after any current agent subprocess and reports back into this conversation when finished; progress is visible in the dispatch panel and via dispatch_status.", run.ID, workerName), nil
+}
+
+// dispatchTimeout returns the configured per-run cap for dispatched agent
+// subprocesses (foreground and background). Default 30 minutes.
+func (s *Server) dispatchTimeout() time.Duration {
+	if m := s.cfg.Orchestrator.DispatchTimeoutMinutes; m > 0 {
+		return time.Duration(m) * time.Minute
+	}
+	return 30 * time.Minute
 }
 
 // summarizeDispatch renders the completion message persisted into the chat.
@@ -495,7 +504,7 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 		return "", fmt.Errorf("unknown agent %q", cli)
 	}
 	opts := agent.RunOpts{
-		Task: taskText, Workdir: workdir,
+		Task: taskText, Workdir: workdir, Timeout: s.dispatchTimeout(),
 		Model:           forcedModel,
 		PermissionMode:  settings.PermissionMode,
 		MaxBudgetUSD:    budget,

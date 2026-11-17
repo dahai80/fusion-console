@@ -941,7 +941,8 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 		task = "Workspace conventions:\n" + pre + "\n" + task
 	}
 	opts := agent.RunOpts{
-		Task: task, Workdir: workdir,
+		Timeout: s.dispatchTimeout(),
+		Task:    task, Workdir: workdir,
 		PermissionMode: settings.PermissionMode,
 		MaxBudgetUSD:   settings.MaxBudgetUSD,
 		Command:        settings.Command,
