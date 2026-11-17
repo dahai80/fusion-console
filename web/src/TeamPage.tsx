@@ -47,6 +47,7 @@ export default function TeamPage() {
   // configured default team from the cached poller snapshot.
   const [focusTeam, setFocusTeam] = useState(() => new URLSearchParams(window.location.search).get("team") || "");
   const [wizard, setWizard] = useState(false);
+  const [liveTeams, setLiveTeams] = useState<string[]>([]);
   const load = () => {
     setErr("");
     api.teamView(focusTeam || undefined).then(setSnap).catch((e) => setErr((e as Error).message));
@@ -73,6 +74,17 @@ export default function TeamPage() {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, [focusTeam]);
+  // Team switcher options — the daemon's live teams (teams.list). Chat-created
+  // teams land here with the next refresh, same as wizard-created ones.
+  useEffect(() => {
+    const read = () =>
+      api.teamTeams()
+        .then((r) => setLiveTeams((r.teams ?? []).map((x: Record<string, any>) => String(x.name || "")).filter(Boolean)))
+        .catch(() => setLiveTeams([]));
+    read();
+    const t = setInterval(read, 15000);
+    return () => clearInterval(t);
+  }, []);
   // Pick-list source: the daemon's real agents — tasks dispatched to a roster
   // id that is not a real agent fail with "agent not found".
   useEffect(() => {
@@ -193,6 +205,24 @@ export default function TeamPage() {
           <Button onClick={() => setWizard(true)}><Plus size={14} /> New team</Button>
         </div>
       </div>
+
+      {/* Team switcher — every live team on the daemon (wizard- or chat-created).
+          Selection deep-links via ?team= so the view stays linkable. */}
+      {liveTeams.length > 0 && (
+        <div className="flex items-center gap-2 text-sm">
+          <label className="text-zinc-500 dark:text-zinc-400">Team</label>
+          <select
+            value={focusTeam}
+            onChange={(e) => applyFocus(e.target.value)}
+            className="rounded-xl border border-zinc-200/80 bg-white px-3 py-1.5 text-sm shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
+          >
+            <option value="">(default team)</option>
+            {liveTeams.map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {err && <p className="text-sm text-red-500">{err}</p>}
 
