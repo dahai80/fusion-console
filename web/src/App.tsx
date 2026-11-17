@@ -311,7 +311,7 @@ function ChatPage() {
   const [brainModel, setBrainModel] = useState("");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<{ name: string; size: number; stored: string; text?: string }[]>([]);
+  const [attachments, setAttachments] = useState<{ name: string; size: number; stored: string; path: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const [listening, setListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -489,14 +489,13 @@ function ChatPage() {
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
-    // Attachments inline into the prompt: text previews become fenced blocks,
-    // binaries are referenced by name (the model asks for details if needed).
+    // Attachments pass the stored file path, never the content: the model
+    // reads the file itself in chunks with its own tools, and the chat
+    // bubble stays small no matter how big the document is.
     let full = text;
     if (attachments.length > 0) {
       const parts = attachments.map((a) =>
-        a.text != null
-          ? `\n\n--- attached: ${a.name} ---\n\`\`\`\n${a.text}\n\`\`\``
-          : `\n\n(attached file: ${a.name}, ${Math.max(1, Math.round(a.size / 1024))} KB — binary, not inlined)`);
+        `\n\n[attachment: ${a.name} (${Math.max(1, Math.round(a.size / 1024))} KB) stored at ${a.path} — read it with your file tools, in chunks if it is large]`);
       full = text + parts.join("");
     }
     // @agent mention hands the message off explicitly; anything else is a

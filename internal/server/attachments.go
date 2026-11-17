@@ -1,7 +1,8 @@
 // Chat attachments: files uploaded from the composer (+ button) are stored
-// under the data dir and inlined into the message text by the client —
-// text-like files come back with a preview the composer appends to the
-// prompt, binary files are referenced by name only.
+// under the data dir; the client passes the stored absolute path to the
+// model, which reads the file itself in chunks. Content is never inlined
+// into the message — large documents would bloat the chat UI and the
+// prompt.
 package server
 
 import (
@@ -11,30 +12,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // maxAttachmentSize caps a single upload at 20 MB.
 const maxAttachmentSize = 20 << 20
 
-// inlinePreviewSize caps how much of a text file is inlined into a message.
-const inlinePreviewSize = 64 << 10
-
-// textExtensions is a pragmatic allowlist for inline preview; anything else
-// is treated as binary and referenced by name.
-var textExtensions = map[string]bool{
-	".txt": true, ".md": true, ".json": true, ".yaml": true, ".yml": true,
-	".toml": true, ".csv": true, ".log": true, ".go": true, ".py": true,
-	".ts": true, ".tsx": true, ".js": true, ".jsx": true, ".rs": true,
-	".sh": true, ".sql": true, ".html": true, ".css": true, ".xml": true,
-	".env": true, ".conf": true, ".ini": true, ".swift": true, ".kt": true,
-}
-
 // handleAttachmentUpload serves POST /api/attachments (multipart form, field
 // "file"). Stores the file under <cfgDir>/attachments and returns its
-// metadata plus a text preview when the type qualifies for inlining.
+// metadata plus the absolute stored path.
 func (s *Server) handleAttachmentUpload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAttachmentSize+1<<20)
 	if err := r.ParseMultipartForm(maxAttachmentSize); err != nil {
@@ -68,17 +54,6 @@ func (s *Server) handleAttachmentUpload(w http.ResponseWriter, r *http.Request) 
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	log.Printf("server: attachment stored user=%s name=%s bytes=%d", s.auth.User(r), name, n)
-
-	res := map[string]any{"name": name, "size": n, "stored": stored}
-	// Text preview for inlining into the prompt — small text-like files only.
-	if n <= inlinePreviewSize && textExtensions[strings.ToLower(filepath.Ext(name))] {
-		if b, err := os.ReadFile(path); err == nil && utf8Valid(b) {
-			res["text"] = string(b)
-		}
-	}
-	writeJSON(w, http.StatusOK, res)
+	log.Printf("server: attachment stored user=%s name=%s bytes=%d path=%s", s.auth.User(r), name, n, path)
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "size": n, "stored": stored, "path": path})
 }
-
-// utf8Valid reports whether b is valid UTF-8 (binary sniffing shorthand).
-func utf8Valid(b []byte) bool { return utf8.Valid(b) }

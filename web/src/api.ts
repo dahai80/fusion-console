@@ -162,7 +162,7 @@ export const api = {
     req<{ enabled: boolean }>("/api/rag/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
   workersStatus: () => req<{ workers: WorkerStatus[] }>("/api/workers/status"),
   uploadAttachment: (file: File) =>
-    req<{ name: string; size: number; stored: string; text?: string }>("/api/attachments", {
+    req<{ name: string; size: number; stored: string; path: string }>("/api/attachments", {
       method: "POST",
       body: (() => { const f = new FormData(); f.append("file", file); return f; })(),
     }),
