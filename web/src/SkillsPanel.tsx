@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderCheck, PenLine, Sparkles, Upload } from "lucide-react";
-import { api, type SkillEntry } from "./api";
+import { FolderCheck, PenLine, ShieldAlert, Sparkles, Upload } from "lucide-react";
+import { api, type SkillDoc, type SkillEntry } from "./api";
 import { Badge, Button, Card, Input, Select, Textarea } from "./components/ui";
 
 // Curated industry skills worth one-click importing. Sources are pinned to
@@ -18,25 +18,9 @@ const CURATED: { label: string; source: string }[] = [
     { label: "writing-plans (superpowers)", source: "obra/superpowers/skills/writing-plans" },
 ];
 
-// parseSkillFile splits a SKILL.md (or draft) into frontmatter fields + body.
-// LLM drafts sometimes come wrapped in one markdown code fence — strip a
-// single wrapping fence only; fences inside the body are preserved.
-export function parseSkillFile(content: string): { name: string; description: string; body: string } {
-    let text = content.trim();
-    const fence = text.match(/^```(?:markdown)?\n([\s\S]*)\n```$/);
-    if (fence) text = fence[1].trim();
-    if (!text.startsWith("---")) return { name: "", description: "", body: text };
-    const end = text.indexOf("\n---", 3);
-    if (end < 0) return { name: "", description: "", body: text };
-    const fm = text.slice(3, end);
-    let name = "", description = "";
-    for (const line of fm.split("\n")) {
-        const t = line.trim();
-        if (t.startsWith("name:")) name = t.slice(5).trim();
-        if (t.startsWith("description:")) description = t.slice(12).trim();
-    }
-    return { name, description, body: text.slice(end + 4).trim() };
-}
+// Review notes shown above the editor for imported or AI-drafted skills:
+// where the content came from and what the server-side audit flagged.
+type SkillReview = { source?: string; warnings: string[]; missing: string[] };
 
 type SkillTab = "installed" | "new" | "draft" | "import";
 
@@ -61,6 +45,8 @@ export function SkillsPanel() {
     const [name, setName] = useState("");
     const [description, setDescription] = useState("");
     const [body, setBody] = useState("");
+    const [extra, setExtra] = useState("");
+    const [review, setReview] = useState<SkillReview | null>(null);
     const [scope, setScope] = useState<"global" | "project">("global");
     const [repo, setRepo] = useState("");
     const [draftHint, setDraftHint] = useState("");
@@ -72,11 +58,16 @@ export function SkillsPanel() {
     }, [repo]);
     useEffect(() => { load(); }, [load]);
 
-    const openEditor = (n = "", description = "", bodyText = "") => {
+    const openEditor = (doc?: Partial<SkillDoc>, opts: { scope?: "global" | "project"; review?: SkillReview } = {}) => {
         setEditing(true);
-        setName(n);
-        setDescription(description);
-        setBody(bodyText);
+        setName(doc?.name ?? "");
+        setDescription(doc?.description ?? "");
+        setExtra(doc?.extra ?? "");
+        setBody(doc?.body ?? "");
+        // Keep the skill's own scope so saving an edit never writes a
+        // project skill into the global directory.
+        if (opts.scope) setScope(opts.scope);
+        setReview(opts.review ?? null);
         setMsg(""); setErr("");
         setTab("new");
     };
@@ -84,9 +75,10 @@ export function SkillsPanel() {
     const save = async () => {
         setBusy(true); setMsg(""); setErr("");
         try {
-            const r = await api.saveSkill({ name, description, body, scope, repo });
+            const r = await api.saveSkill({ name, description, extra, body, scope, repo });
             setMsg(`skill "${name}" saved to ${r.path}`);
             setEditing(false);
+            setReview(null);
             setTab("installed");
             load();
         } catch (ex) {
@@ -111,8 +103,7 @@ export function SkillsPanel() {
         setBusy(true); setMsg(""); setErr("");
         try {
             const r = await api.draftSkill({ hint: draftHint, text: draftText });
-            const p = parseSkillFile(r.content);
-            openEditor(p.name, p.description, p.body);
+            openEditor(r.doc, { review: { source: "AI draft", warnings: r.warnings ?? [], missing: [] } });
             setMsg("draft generated — review and edit before saving");
         } catch (ex) {
             setErr((ex as Error).message);
@@ -126,8 +117,9 @@ export function SkillsPanel() {
         setBusy(true); setMsg(""); setErr("");
         try {
             const r = await api.importSkill(source.trim());
-            const p = parseSkillFile(r.content);
-            openEditor(p.name || source.split("/").pop() || "", p.description, p.body);
+            openEditor({ ...r.doc, name: r.doc.name || source.split("/").pop() || "" }, {
+                review: { source: r.url, warnings: r.warnings ?? [], missing: r.missing_files ?? [] },
+            });
             setMsg(`imported from ${source} — review before saving`);
         } catch (ex) {
             setErr((ex as Error).message);
@@ -146,7 +138,7 @@ export function SkillsPanel() {
 
             <div className="flex flex-wrap gap-1 rounded-xl border border-zinc-200/80 bg-zinc-100/60 p-1 dark:border-zinc-800 dark:bg-zinc-900/60">
                 {TABS.map(({ id, label, icon: Icon }) => (
-                    <button key={id} onClick={() => { setTab(id); if (id !== "new") setEditing(false); }}
+                    <button key={id} onClick={() => { setTab(id); if (id !== "new") { setEditing(false); setReview(null); } }}
                         className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
                             tab === id
                                 ? "bg-white text-indigo-600 shadow-sm dark:bg-zinc-800 dark:text-indigo-400"
@@ -189,6 +181,21 @@ export function SkillsPanel() {
             {tab === "new" && (
                 <Card className="space-y-3 p-4">
                     <h3 className="font-medium">{name ? `Edit skill: ${name}` : "New skill"}</h3>
+                    {review && (review.source || review.warnings.length > 0 || review.missing.length > 0) && (
+                        <div className="space-y-1 rounded-lg border border-amber-300/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-300">
+                            {review.source && <p className="break-all">source: <code>{review.source}</code></p>}
+                            {review.warnings.length > 0 && (
+                                <>
+                                    <p className="flex items-center gap-1 font-medium"><ShieldAlert size={14} /> Review before saving — skills run with the agent's permissions:</p>
+                                    <ul className="list-disc pl-5">{review.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+                                </>
+                            )}
+                            {review.missing.length > 0 && (
+                                <p>Only SKILL.md was imported. It references files that were not fetched: {review.missing.map((f) => <code key={f} className="mr-1">{f}</code>)}</p>
+                            )}
+                            {review.warnings.length === 0 && review.missing.length === 0 && <p>Automatic checks found nothing — still read it before saving.</p>}
+                        </div>
+                    )}
                     <div className="grid grid-cols-2 gap-3">
                         <Input placeholder="name (lowercase-dash)" value={name} onChange={(e) => setName(e.target.value)} />
                         <Input placeholder="description — when should the agent use it" value={description} onChange={(e) => setDescription(e.target.value)} />
@@ -201,9 +208,13 @@ export function SkillsPanel() {
                         )}
                     </div>
                     <Textarea className="min-h-48 font-mono text-xs" placeholder="Skill body — markdown instructions, steps, guardrails" value={body} onChange={(e) => setBody(e.target.value)} />
+                    <details open={extra.trim() !== ""} className="text-xs">
+                        <summary className="cursor-pointer text-zinc-500">Other frontmatter fields (allowed-tools, license, metadata …) — saved as-is</summary>
+                        <Textarea className="mt-2 min-h-16 font-mono text-xs" placeholder={"allowed-tools: Bash, Read\nlicense: MIT"} value={extra} onChange={(e) => setExtra(e.target.value)} />
+                    </details>
                     <div className="flex gap-2">
                         <Button onClick={save} disabled={busy || !name || !body}>Save skill</Button>
-                        <Button variant="ghost" onClick={() => { setEditing(false); setTab("installed"); }}>Cancel</Button>
+                        <Button variant="ghost" onClick={() => { setEditing(false); setReview(null); setTab("installed"); }}>Cancel</Button>
                     </div>
                 </Card>
             )}
@@ -242,8 +253,7 @@ export function SkillsPanel() {
         setMsg(""); setErr("");
         try {
             const r = await api.readSkill(s.path, s.scope === "project" ? repo || undefined : undefined);
-            const p = parseSkillFile(r.content);
-            openEditor(p.name || s.name, p.description || s.description, p.body);
+            openEditor({ ...r.doc, name: r.doc.name || s.name }, { scope: s.scope });
         } catch (ex) {
             setErr((ex as Error).message);
         }

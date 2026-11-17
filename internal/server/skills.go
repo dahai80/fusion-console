@@ -77,20 +77,7 @@ func readSkillFrontmatter(path string) (description string) {
 	if err != nil {
 		return ""
 	}
-	text := string(data)
-	if !strings.HasPrefix(text, "---") {
-		return ""
-	}
-	end := strings.Index(text[3:], "\n---")
-	if end < 0 {
-		return ""
-	}
-	for _, line := range strings.Split(text[3:end], "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "description:") {
-			return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "description:"))
-		}
-	}
-	return ""
+	return parseSkillFile(string(data)).Description
 }
 
 func scanSkillsDir(dir, scope string) []skillEntry {
@@ -136,6 +123,11 @@ func (s *Server) handleSkillsSave(w http.ResponseWriter, r *http.Request) {
 		Body        string `json:"body"`
 		Scope       string `json:"scope"`
 		Repo        string `json:"repo"`
+		// Extra is every other frontmatter line (allowed-tools, license,
+		// metadata, ...), written back verbatim. When the field is absent
+		// (older clients) the existing file's extra frontmatter is kept, so
+		// a save never silently drops fields.
+		Extra *string `json:"extra"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
@@ -156,24 +148,28 @@ func (s *Server) handleSkillsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skillDir := filepath.Join(dir, name)
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	extra := ""
+	if req.Extra != nil {
+		extra = *req.Extra
+	} else if existing, err := os.ReadFile(skillFile); err == nil {
+		extra = parseSkillFile(string(existing)).Extra
+	}
+	if err := validateSkillExtra(extra); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	var b strings.Builder
-	b.WriteString("---\n")
-	b.WriteString("name: " + name + "\n")
-	if strings.TrimSpace(req.Description) != "" {
-		b.WriteString("description: " + strings.ReplaceAll(strings.TrimSpace(req.Description), "\n", " ") + "\n")
-	}
-	b.WriteString("---\n\n")
-	b.WriteString(strings.TrimSpace(req.Body) + "\n")
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(b.String()), 0o644); err != nil {
+	content := renderSkillFile(skillDoc{Name: name, Description: req.Description, Extra: extra, Body: req.Body})
+	if err := os.WriteFile(skillFile, []byte(content), 0o644); err != nil {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
 	log.Printf("server: skill %s saved (%s scope, %s)", name, req.Scope, skillDir)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": filepath.Join(skillDir, "SKILL.md")})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": skillFile})
 }
 
 func (s *Server) handleSkillsDelete(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +222,7 @@ func (s *Server) handleSkillsRead(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"content": string(data)})
+	writeJSON(w, http.StatusOK, map[string]any{"content": string(data), "doc": parseSkillFile(string(data))})
 }
 
 // handleSkillsDraft turns a hint plus optional reference text into a
@@ -284,11 +280,7 @@ func (s *Server) handleSkillsDraft(w http.ResponseWriter, r *http.Request) {
 		prompt += "Skill purpose: " + strings.TrimSpace(req.Hint) + "\n"
 	}
 	if strings.TrimSpace(req.Text) != "" {
-		text := req.Text
-		if len(text) > 12000 {
-			text = text[:12000]
-		}
-		prompt += "\nReference material to distill into the skill:\n" + text + "\n"
+		prompt += "\nReference material to distill into the skill:\n" + truncateUTF8(req.Text, 12000) + "\n"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
@@ -315,11 +307,32 @@ func (s *Server) handleSkillsDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("server: skill draft generated (provider %s, model %s, %d bytes)", prov.ID, prov.Model, len(content))
-	writeJSON(w, http.StatusOK, map[string]any{"content": content})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"content":  content,
+		"doc":      parseSkillFile(content),
+		"warnings": auditSkillContent(content),
+	})
 }
+
+// skillImportSources are tried in order. raw.githubusercontent.com is
+// unreachable from some networks (CN); the gh-proxy mirror (also used by the
+// packaging script) is a third-party fallback, so content fetched through it
+// is flagged in the response for the reviewer. Package-level for tests.
+var skillImportSources = []struct {
+	base   string
+	mirror bool
+}{
+	{"https://raw.githubusercontent.com", false},
+	{"https://gh-proxy.com/https://raw.githubusercontent.com", true},
+}
+
+var skillImportSourceRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?$`)
 
 // handleSkillsImport fetches a SKILL.md from GitHub
 // (source: "owner/repo" or "owner/repo/sub/path") for preview before save.
+// Nothing is written: the response carries the parsed skill, the URL it came
+// from, whether a third-party mirror served it, audit warnings, and the
+// bundled files it references (only SKILL.md itself is fetched).
 func (s *Server) handleSkillsImport(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Source string `json:"source"`
@@ -329,26 +342,24 @@ func (s *Server) handleSkillsImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	src := strings.Trim(strings.TrimSpace(req.Source), "/")
-	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?$`).MatchString(src) {
+	if !skillImportSourceRe.MatchString(src) || strings.Contains(src, "..") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "source must look like owner/repo or owner/repo/path"})
 		return
 	}
 	client := &http.Client{Timeout: 20 * time.Second}
-	var content string
 	// raw URL layout: <base>/<owner>/<repo>/<branch>/<sub path>/SKILL.md.
-	// raw.githubusercontent.com is unreachable from some networks (CN); fall
-	// back to the gh-proxy mirror used by the packaging script.
-	baseURLs := []string{"https://raw.githubusercontent.com", "https://gh-proxy.com/https://raw.githubusercontent.com"}
 	parts := strings.SplitN(src, "/", 3)
 	repoPart := parts[0] + "/" + parts[1]
 	subPath := ""
 	if len(parts) == 3 {
 		subPath = parts[2] + "/"
 	}
+	var content, fromURL string
+	viaMirror := false
 fetch:
-	for _, base := range baseURLs {
+	for _, source := range skillImportSources {
 		for _, branch := range []string{"main", "master"} {
-			url := fmt.Sprintf("%s/%s/%s/%sSKILL.md", base, repoPart, branch, subPath)
+			url := fmt.Sprintf("%s/%s/%s/%sSKILL.md", source.base, repoPart, branch, subPath)
 			resp, err := client.Get(url)
 			if err != nil {
 				continue
@@ -356,7 +367,7 @@ fetch:
 			data, readErr := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 			resp.Body.Close()
 			if readErr == nil && resp.StatusCode == http.StatusOK {
-				content = string(data)
+				content, fromURL, viaMirror = string(data), url, source.mirror
 				break fetch
 			}
 		}
@@ -365,6 +376,17 @@ fetch:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no SKILL.md found at " + src + " (tried main and master)"})
 		return
 	}
-	log.Printf("server: skill imported from %s (%d bytes)", src, len(content))
-	writeJSON(w, http.StatusOK, map[string]any{"content": content})
+	warnings := auditSkillContent(content)
+	if viaMirror {
+		warnings = append([]string{"fetched through the third-party mirror gh-proxy.com, not directly from GitHub — compare with the original before saving"}, warnings...)
+	}
+	log.Printf("server: skill imported from %s (%d bytes, %d warnings)", fromURL, len(content), len(warnings))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"content":       content,
+		"doc":           parseSkillFile(content),
+		"url":           fromURL,
+		"via_mirror":    viaMirror,
+		"warnings":      warnings,
+		"missing_files": bundledFileRefs(content),
+	})
 }

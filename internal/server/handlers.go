@@ -390,22 +390,31 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	user := s.auth.User(r)
 	log.Printf("server: agent=%s conv=%d workdir=%s user=%s", req.Agent, req.ConversationID, workdir, user)
 
+	// Version fingerprint: a silent CLI upgrade is the most common drift
+	// trigger — make the change visible before the run starts.
+	if note := s.versionChangeNotice(cli, agent.CommandFor(settings.Name, settings.Command)); note != "" {
+		send(map[string]any{"type": "notice", "text": note})
+	}
+
 	pEnv, forcedModel := s.providerEnv(cli, wk)
 	budget := settings.MaxBudgetUSD
 	if wk != nil && wk.MaxBudgetUSD > 0 {
 		budget = wk.MaxBudgetUSD
 	}
+	// Model resolution lives in providerEnv (per-agent override > provider
+	// default); empty leaves the CLI's own default.
 	taskText := s.prefixWorkerTask(r.Context(), req.Agent, req.Task, s.workerMemoryModeFor(wk))
 	if brief := s.workerWorkspaceBrief(req.Agent, wk, workdir); brief != "" {
 		taskText = brief + "\n" + taskText
 	}
 	opts := agent.RunOpts{
 		Task: taskText, Workdir: workdir,
-		Model:          forcedModel,
-		PermissionMode: settings.PermissionMode,
-		MaxBudgetUSD:   budget,
-		Command:        settings.Command,
-		Env:            pEnv,
+		Model:           forcedModel,
+		PermissionMode:  settings.PermissionMode,
+		MaxBudgetUSD:    budget,
+		MaxBudgetTokens: settings.MaxBudgetTokens,
+		Command:         settings.Command,
+		Env:             pEnv,
 	}
 	evCh, err := adapter.Run(r.Context(), opts)
 	if err != nil {
@@ -432,7 +441,10 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 			send(map[string]any{"type": "result", "text": ev.Text})
 		case agent.EventUsage:
 			usage = ev
-			send(map[string]any{"type": "usage", "cost_usd": ev.CostUSD, "tokens_in": ev.TokensIn, "tokens_out": ev.TokensOut})
+			send(map[string]any{"type": "usage", "cost_usd": ev.CostUSD, "tokens_in": ev.TokensIn, "tokens_out": ev.TokensOut,
+				"tokens_cache_read": ev.TokensCacheRead, "tokens_cache_write": ev.TokensCacheWrite})
+		case agent.EventNotice:
+			send(map[string]any{"type": "notice", "text": ev.Text})
 		case agent.EventError:
 			send(map[string]any{"type": "error", "text": ev.Text})
 		case agent.EventDone:
@@ -449,6 +461,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		meta, _ := json.Marshal(map[string]any{
 			"agent": req.Agent, "workdir": workdir, "session_id": usage.SessionID,
 			"cost_usd": usage.CostUSD, "tokens_in": usage.TokensIn, "tokens_out": usage.TokensOut,
+			"tokens_cache_read": usage.TokensCacheRead, "tokens_cache_write": usage.TokensCacheWrite,
 		})
 		_, _ = s.store.AppendMessage(req.ConversationID, "assistant", final, string(meta))
 		_ = s.store.LogCost(req.ConversationID, user, "agent:"+req.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
@@ -471,13 +484,17 @@ func (s *Server) agentSettings(name string) config.AgentSettings {
 // handleAgents lists agents with install detection.
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	type agentInfo struct {
-		Name           string  `json:"name"`
-		Command        string  `json:"command"`
-		Detected       bool    `json:"detected"`
-		PermissionMode string  `json:"permission_mode"`
-		MaxBudgetUSD   float64 `json:"max_budget_usd"`
-		Worker         bool    `json:"is_worker"`
-		AgentType      string  `json:"agent_type,omitempty"`
+		Name            string  `json:"name"`
+		Command         string  `json:"command"`
+		Detected        bool    `json:"detected"`
+		PermissionMode  string  `json:"permission_mode"`
+		MaxBudgetUSD    float64 `json:"max_budget_usd"`
+		Model           string  `json:"model,omitempty"`
+		Protocol        string  `json:"protocol,omitempty"`
+		MaxBudgetTokens int     `json:"max_budget_tokens,omitempty"`
+		ProviderID      string  `json:"provider_id,omitempty"`
+		Worker          bool    `json:"is_worker"`
+		AgentType       string  `json:"agent_type,omitempty"`
 	}
 	out := []agentInfo{}
 	for name, ad := range s.agents {
@@ -485,6 +502,8 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		out = append(out, agentInfo{
 			Name: name, Command: ad.Name(), Detected: ad.Detect(),
 			PermissionMode: st.PermissionMode, MaxBudgetUSD: st.MaxBudgetUSD,
+			Model: st.Model, Protocol: st.Protocol, MaxBudgetTokens: st.MaxBudgetTokens,
+			ProviderID: st.ProviderID,
 		})
 	}
 	// Named workers are dispatchable @-mention targets in their own right —
@@ -505,10 +524,20 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		if wk.MaxBudgetUSD > 0 {
 			budget = wk.MaxBudgetUSD
 		}
+		model := wk.Model
+		if model == "" {
+			model = st.Model
+		}
+		providerID := wk.ProviderID
+		if providerID == "" {
+			providerID = st.ProviderID
+		}
 		out = append(out, agentInfo{
 			Name: wk.Name, Command: ad.Name(), Detected: ad.Detect(),
 			PermissionMode: st.PermissionMode, MaxBudgetUSD: budget,
-			Worker: true, AgentType: wk.Agent,
+			Model: model, Protocol: st.Protocol, MaxBudgetTokens: st.MaxBudgetTokens,
+			ProviderID: providerID,
+			Worker:     true, AgentType: wk.Agent,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": out})

@@ -349,7 +349,10 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
             {editing === idx && (
               <div className="space-y-2 border-t border-zinc-200/80 p-3 text-sm dark:border-zinc-800">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Input className="w-36" placeholder="unique name" value={w.name ?? ""} onChange={(e) => setWorker(idx, { name: e.target.value })} />
+                  <label className="flex items-center gap-1 text-xs text-zinc-500" title="Unique name used for @-dispatch">
+                    name
+                    <Input className="w-36" placeholder="unique name" value={w.name ?? ""} onChange={(e) => setWorker(idx, { name: e.target.value })} />
+                  </label>
                   <Select className="w-44" value={w.isolation ?? "worktree"}
                     onChange={(e) => setWorker(idx, { isolation: e.target.value as WorkerSettings["isolation"] })}>
                     <option value="github">source: github</option>
