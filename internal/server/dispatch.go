@@ -27,6 +27,9 @@ type dispatchArgs struct {
 	Task       string `json:"task"`
 	Path       string `json:"path"`
 	Repo       string `json:"repo"`
+	Stored     string `json:"stored"`
+	Offset     int64  `json:"offset"`
+	MaxBytes   int64  `json:"max_bytes"`
 	Background bool   `json:"background"`
 }
 

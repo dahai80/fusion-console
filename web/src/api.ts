@@ -166,6 +166,11 @@ export const api = {
       method: "POST",
       body: (() => { const f = new FormData(); f.append("file", file); return f; })(),
     }),
+  readAttachment: (stored: string, offset: number, maxBytes: number) =>
+    req<{
+      stored: string; total: number; offset: number; bytes_read: number;
+      next_offset: number; encoding: string; content: string; eof: boolean;
+    }>(`/api/attachments/read?stored=${encodeURIComponent(stored)}&offset=${offset}&max_bytes=${maxBytes}`),
   dispatches: () => req<{ dispatches: DispatchRun[]; unread_by_conv: Record<string, number> }>("/api/dispatches"),
   ackDispatches: (conversationId: number) =>
     req<{ ok: boolean }>("/api/dispatches/ack", { method: "POST", body: JSON.stringify({ conversation_id: conversationId }) }),

@@ -40,6 +40,7 @@ Tools:
 - list_agents: see which agents are installed.
 - run_agent: give one agent a concrete, self-contained task. The agent works in its own workspace and returns a result. For tasks expected to take more than a couple of minutes (issue fixes, refactors, test suites) pass background=true — you get a run id immediately, the worker keeps running after your turn ends, and the outcome is posted into this conversation automatically. Reference a finished background run by its id when the user asks about progress.
 - read_artifact: read a file the agent produced, relative to the agents workspace root.
+- read_attachment: read a chat attachment segment by stored name (byte range with next_offset continuation). When the user attaches a document, read it through this tool segment by segment — never request the whole file at once.
 
 Rules:
 - Answer simple questions directly; delegate only real coding/execution work.
@@ -176,6 +177,15 @@ func orchestratorTools() []chat.ToolDecl {
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
 				`"path":{"type":"string","description":"relative path inside the agents root"}` +
 				`},"required":["path"]}`),
+		},
+		{
+			Name:        "read_attachment",
+			Description: "Read one byte-range segment of a chat attachment by its stored name. Returns the segment plus continuation metadata (total size, next_offset, eof) — follow next_offset until eof instead of requesting the whole file at once, so large documents never flood the context.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"stored":{"type":"string","description":"stored attachment name from the [attachment: ...] message reference"},` +
+				`"offset":{"type":"integer","description":"byte offset to start reading from; 0 for the first segment"},` +
+				`"max_bytes":{"type":"integer","description":"segment size in bytes, capped at 256 KB; default 64 KB"}` +
+				`},"required":["stored"]}`),
 		},
 		{
 			Name:        "create_team_member",
@@ -338,6 +348,21 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 			return string(data) + "\n...(truncated at 64 KB)", nil
 		}
 		return string(data), nil
+	case "read_attachment":
+		seg, err := s.readAttachmentSegment(args.Stored, args.Offset, args.MaxBytes)
+		if err != nil {
+			return "", err
+		}
+		header := fmt.Sprintf("[attachment %s: bytes %d-%d of %d]", seg.Stored, seg.Offset, seg.Offset+int64(seg.BytesRead), seg.Total)
+		if seg.EOF {
+			header += " (eof)"
+		} else {
+			header += fmt.Sprintf(" — continue with offset %d", seg.NextOffset)
+		}
+		if seg.Encoding == "base64" {
+			header += " (binary segment, base64)"
+		}
+		return header + "\n" + seg.Content, nil
 	case "create_team_member":
 		if !s.cfg.AgentStudio.Enabled {
 			return "", fmt.Errorf("team view (agent-studio integration) is not enabled in settings")

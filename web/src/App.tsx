@@ -22,6 +22,7 @@ import {
   RefreshCw,
   KeyRound,
   Loader2,
+  Maximize2,
   Mic,
   Network,
   Paperclip,
@@ -490,12 +491,13 @@ function ChatPage() {
     const text = input.trim();
     if (!text || busy) return;
     // Attachments pass the stored file path, never the content: the model
-    // reads the file itself in chunks with its own tools, and the chat
-    // bubble stays small no matter how big the document is.
+    // pulls segments through the read API (byte-range with continuation
+    // metadata), so a single call can never push a whole large document into
+    // the context and the chat bubble stays small.
     let full = text;
     if (attachments.length > 0) {
       const parts = attachments.map((a) =>
-        `\n\n[attachment: ${a.name} (${Math.max(1, Math.round(a.size / 1024))} KB) stored at ${a.path} — read it with your file tools, in chunks if it is large]`);
+        `\n\n[attachment: ${a.name} (${Math.max(1, Math.round(a.size / 1024))} KB) — GET /api/attachments/read?stored=${a.stored}&offset=0&max_bytes=65536; follow next_offset until eof, do not read the whole file at once]`);
       full = text + parts.join("");
     }
     // @agent mention hands the message off explicitly; anything else is a
@@ -880,9 +882,12 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
       await api.dismissDispatch(id);
     } catch { /* next poll restores if delete failed */ }
   };
+  // Expanded card view: a fixed overlay showing the full task / detail /
+  // error / result of one run — cards in the rail stay a fixed small size.
+  const [expanded, setExpanded] = useState<DispatchRun | null>(null);
   const row = (r: DispatchRun) => (
     <div key={r.id} onClick={() => openRun(r)}
-      className={`w-full rounded-xl border p-2.5 text-left transition-colors select-text ${
+      className={`h-[72px] w-full overflow-hidden rounded-xl border p-2.5 text-left transition-colors select-text ${
         r.status === "running"
           ? "border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10"
           : r.status === "done"
@@ -909,6 +914,11 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
             : "error"}
         </span>
         {copyBtn(`run:${r.id}`, () => copyRun(r, "run"))}
+        <button onClick={(e) => { e.stopPropagation(); setExpanded(r); }}
+          className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-600 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
+          title="Maximize — full details">
+          <Maximize2 size={12} />
+        </button>
         {(r.status === "done" || r.status === "error") && (
           <button onClick={(e) => { e.stopPropagation(); dismissRun(r.id); }}
             className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-red-500 dark:hover:bg-zinc-700"
@@ -917,15 +927,9 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
           </button>
         )}
       </div>
-      <p className="mt-1 break-words text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
+      <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
       {(r.status === "running" || r.status === "queued") && r.detail && (
-        <p className="mt-0.5 break-words text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
-      )}
-      {r.status === "error" && r.error && (
-        <p className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-red-500/5 p-1.5 text-[11px] leading-4 text-red-500">{r.error}</p>
-      )}
-      {r.status === "done" && r.result && (
-        <p className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-emerald-500/5 p-1.5 text-[11px] leading-4 text-zinc-600 dark:text-zinc-300">{r.result}</p>
+        <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
       )}
     </div>
   );
@@ -977,6 +981,50 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
       <p className="border-t border-zinc-200/80 px-1 pt-2 text-[11px] leading-4 text-zinc-400 dark:border-zinc-800">
         Finished runs post their outcome into the conversation automatically.
       </p>
+      {expanded && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 p-6" onClick={() => setExpanded(null)}>
+          <div className="flex max-h-[80vh] w-[560px] max-w-full flex-col rounded-2xl border border-zinc-200/80 bg-white shadow-lg shadow-zinc-900/10 dark:border-zinc-700 dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 border-b border-zinc-200/80 px-4 py-2.5 dark:border-zinc-800">
+              {expanded.status === "running" ? <RefreshCw size={14} className="animate-spin text-amber-500" />
+                : expanded.status === "done" ? <CheckCircle size={14} className="text-emerald-500" />
+                : expanded.status === "error" ? <XCircle size={14} className="text-red-500" />
+                : <Clock size={14} className="text-zinc-400" />}
+              <span className="text-sm font-medium">run #{expanded.id} · {expanded.worker}</span>
+              <span className="text-xs text-zinc-400">
+                {expanded.status} · {expanded.elapsed_s}s · ${expanded.cost_usd.toFixed(4)}
+              </span>
+              <button className="ml-auto rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" onClick={() => setExpanded(null)} title="Close">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 space-y-3 overflow-y-auto p-4 text-sm">
+              <section>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Task</p>
+                <p className="select-text whitespace-pre-wrap break-words text-zinc-700 dark:text-zinc-200">{expanded.task}</p>
+              </section>
+              {expanded.detail && (
+                <section>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Detail</p>
+                  <p className="select-text whitespace-pre-wrap break-words text-zinc-500 dark:text-zinc-400">{expanded.detail}</p>
+                </section>
+              )}
+              {expanded.error && (
+                <section>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-400">Error</p>
+                  <pre className="select-text whitespace-pre-wrap break-words rounded-xl bg-red-500/5 p-2.5 text-[12px] leading-5 text-red-600 dark:text-red-400">{expanded.error}</pre>
+                </section>
+              )}
+              {expanded.result && (
+                <section>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-emerald-400">Result</p>
+                  <pre className="select-text whitespace-pre-wrap break-words rounded-xl bg-emerald-500/5 p-2.5 text-[12px] leading-5 text-zinc-700 dark:text-zinc-200">{expanded.result}</pre>
+                </section>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

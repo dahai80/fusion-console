@@ -111,6 +111,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/chat", s.auth.Require(s.handleChat))
 	m.HandleFunc("POST /api/agent/run", s.auth.Require(s.handleAgentRun))
 	m.HandleFunc("POST /api/attachments", s.auth.Require(s.handleAttachmentUpload))
+	m.HandleFunc("GET /api/attachments/read", s.auth.Require(s.handleAttachmentRead))
 	m.HandleFunc("GET /api/agents", s.auth.Require(s.handleAgents))
 
 	m.HandleFunc("GET /api/settings/providers", s.auth.Require(s.handleListProviders))
@@ -162,7 +163,9 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/failures/export", s.auth.Require(s.handleFailureExport))
 	m.HandleFunc("GET /api/team/view", s.auth.Require(s.handleTeamView))
 	m.HandleFunc("GET /api/team/agents", s.auth.Require(s.handleTeamAgents))
+	m.HandleFunc("GET /api/team/teams", s.auth.Require(s.handleTeamTeams))
 	m.HandleFunc("POST /api/team/op", s.auth.Require(s.handleTeamOp))
+	m.HandleFunc("POST /api/team/create", s.auth.Require(s.handleTeamCreate))
 	codeProxyHandler := s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.codeProxy().ServeHTTP(w, r)
 	}))
