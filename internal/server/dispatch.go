@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -221,9 +222,9 @@ func (s *Server) persistRun(run *bgRun) {
 	row := &store.DispatchRunRow{
 		ID: run.ID, ConvID: run.ConversationID, User: run.User,
 		Worker: run.Worker, Agent: run.Agent, Task: run.Task, Status: run.Status,
-		StartedAt: run.StartedAt.UTC().Format(time.RFC3339),
+		StartedAt:  run.StartedAt.UTC().Format(time.RFC3339),
 		FinishedAt: run.FinishedAt.UTC().Format(time.RFC3339),
-		ElapsedS: run.ElapsedS, CostUSD: run.CostUSD,
+		ElapsedS:   run.ElapsedS, CostUSD: run.CostUSD,
 		TokensIn: run.TokensIn, TokensOut: run.TokensOut,
 		Detail: run.Detail, Result: run.Result, Error: run.Err, Read: run.Read,
 	}
@@ -268,6 +269,31 @@ func (r *dispatchRegistry) ack(convID int64) {
 			run.Read = true
 		}
 	}
+}
+
+// dismiss removes one finished run from the registry.
+func (r *dispatchRegistry) dismiss(id int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, run := range r.runs {
+		if run.ID == id {
+			r.runs = append(r.runs[:i], r.runs[i+1:]...)
+			return
+		}
+	}
+}
+
+// clearFinished removes every done/error run from the registry.
+func (r *dispatchRegistry) clearFinished() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	keep := r.runs[:0]
+	for _, run := range r.runs {
+		if run.Status != "done" && run.Status != "error" {
+			keep = append(keep, run)
+		}
+	}
+	r.runs = keep
 }
 
 // unreadCounts returns done-but-unseen run counts per conversation.
@@ -568,5 +594,30 @@ func (s *Server) handleDispatchAck(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.AckDispatchRuns(req.ConversationID); err != nil {
 		log.Printf("dispatch: persist ack conv=%d: %v", req.ConversationID, err)
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleDispatchDismiss removes one finished run (POST /api/dispatches/{id}/dismiss).
+func (s *Server) handleDispatchDismiss(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid run id"})
+		return
+	}
+	s.bg.dismiss(id)
+	if err := s.store.DeleteDispatchRun(id); err != nil {
+		log.Printf("dispatch: dismiss run #%d: %v", id, err)
+	}
+	log.Printf("dispatch: run #%d dismissed", id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleDispatchClear removes every finished run (POST /api/dispatches/clear).
+func (s *Server) handleDispatchClear(w http.ResponseWriter, r *http.Request) {
+	s.bg.clearFinished()
+	if err := s.store.ClearFinishedDispatchRuns(); err != nil {
+		log.Printf("dispatch: clear finished: %v", err)
+	}
+	log.Printf("dispatch: finished runs cleared")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

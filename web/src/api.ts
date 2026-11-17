@@ -169,6 +169,9 @@ export const api = {
   dispatches: () => req<{ dispatches: DispatchRun[]; unread_by_conv: Record<string, number> }>("/api/dispatches"),
   ackDispatches: (conversationId: number) =>
     req<{ ok: boolean }>("/api/dispatches/ack", { method: "POST", body: JSON.stringify({ conversation_id: conversationId }) }),
+  dismissDispatch: (id: number) =>
+    req<{ ok: boolean }>(`/api/dispatches/${id}/dismiss`, { method: "POST" }),
+  clearDispatches: () => req<{ ok: boolean }>("/api/dispatches/clear", { method: "POST" }),
   failuresList: () => req<{ failures: FailureRow[] }>("/api/failures"),
   failuresAdd: (body: { agent?: string; category: string; note: string }) =>
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),

@@ -18,6 +18,7 @@ import {
   Sun,
   Terminal,
   Plus,
+  X,
   RefreshCw,
   KeyRound,
   Loader2,
@@ -868,6 +869,18 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
       {copied === key ? <CheckCircle size={12} className="text-emerald-500" /> : <Copy size={12} />}
     </button>
   );
+  const clearFinished = async () => {
+    try {
+      await api.clearDispatches();
+      setRuns((r) => r.filter((x) => x.status === "running" || x.status === "queued"));
+    } catch { /* keep current view */ }
+  };
+  const dismissRun = async (id: number) => {
+    setRuns((r) => r.filter((x) => x.id !== id));
+    try {
+      await api.dismissDispatch(id);
+    } catch { /* next poll restores if delete failed */ }
+  };
   const row = (r: DispatchRun) => (
     <div key={r.id} onClick={() => openRun(r)}
       className={`w-full rounded-xl border p-2.5 text-left transition-colors select-text ${
@@ -897,6 +910,13 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
             : "error"}
         </span>
         {copyBtn(`run:${r.id}`, () => copyRun(r, "run"))}
+        {(r.status === "done" || r.status === "error") && (
+          <button onClick={(e) => { e.stopPropagation(); dismissRun(r.id); }}
+            className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-red-500 dark:hover:bg-zinc-700"
+            title="Dismiss this card">
+            <X size={12} />
+          </button>
+        )}
       </div>
       <p className="mt-1 break-words text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
       {(r.status === "running" || r.status === "queued") && r.detail && (
@@ -914,9 +934,16 @@ function DispatchPanel({ onOpen }: { onOpen: (c: Conversation) => void }) {
     <aside className="hidden lg:flex w-72 shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40 p-3">
       <div className="flex items-center justify-between px-1 pb-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>
-        <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800">
-          {running.length} running · {queued.length} queued
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800">
+            {running.length} running · {queued.length} queued
+          </span>
+          {(runs.some((r) => r.status === "done" || r.status === "error")) && (
+            <Button variant="ghost" className="px-1.5 py-0.5 text-[11px]" onClick={clearFinished} title="Remove all finished cards">
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto">
         {/* Agent status strip: every worker with a live agent process, even

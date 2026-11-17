@@ -541,3 +541,21 @@ func (s *Store) ListDispatchRuns(limit int) ([]*DispatchRunRow, error) {
 	}
 	return out, rows.Err()
 }
+
+// DeleteDispatchRun removes one run row (dismiss).
+func (s *Store) DeleteDispatchRun(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete dispatch run %d: %w", id, err)
+	}
+	return nil
+}
+
+// ClearFinishedDispatchRuns removes every done/error run row.
+func (s *Store) ClearFinishedDispatchRuns() error {
+	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE status IN ('done','error')`)
+	if err != nil {
+		return fmt.Errorf("store: clear finished dispatch runs: %w", err)
+	}
+	return nil
+}
