@@ -27,7 +27,7 @@ Code2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type Conversation, type Message, type GatewayKey, type GatewayModelItem, type Provider } from "./api";
+import { api, streamPOST, type AgentInfo, type ChatDefault, type Conversation, type Message, type GatewayKey, type ModelCatalogItem, type Provider } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -35,10 +35,11 @@ import Dashboard from "./Dashboard";
 import { SkillsPanel } from "./SkillsPanel";
 import { RagPage } from "./RagPage";
 import { CodePage } from "./CodePage";
+import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "code" | "team" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "models" | "rag" | "code" | "team" | "onboard";
 
 export default function App() {
   return (
@@ -103,7 +104,8 @@ function Shell() {
           <Onboarding onDone={() => setPage("chat")} />
         )}
         {page === "dashboard" && <Dashboard />}
-        {page === "chat" && <ChatPage />}
+        {page === "chat" && <ChatPage onPage={setPage} />}
+        {page === "models" && <ModelsPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
         {page === "rag" && <RagPage />}
@@ -143,6 +145,7 @@ function TopBar({
         <span className="font-semibold tracking-tight">fusion-console</span>
         <nav className="flex gap-1">
           {tab("chat", "Chat", MessageSquare)}
+          {tab("models", "Models", Cpu)}
           {tab("agents", "Agents", Bot)}
           {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("gateway", "Gateway", Network)}
@@ -294,13 +297,17 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
 
 type ChatEntry = { role: string; content: string; meta?: string };
 
-function ChatPage() {
+function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [active, setActive] = useState<Conversation | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
-  const [gwProvider, setGwProvider] = useState<Provider | null>(null);
-  const [gwModels, setGwModels] = useState<GatewayModelItem[]>([]);
-  const [brainModel, setBrainModel] = useState("");
+  const [catalog, setCatalog] = useState<ModelCatalogItem[]>([]);
+  const [chatDefault, setChatDefault] = useState<ChatDefault>({});
+  // Per-conversation model selection (design v2): new conversations inherit
+  // the global default; a switch here applies to this conversation only and
+  // the backend persists it on the conversation row.
+  const [selProv, setSelProv] = useState("");
+  const [selModel, setSelModel] = useState("");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -325,21 +332,11 @@ function ChatPage() {
 
   useEffect(() => {
     refreshConvs().catch(() => {});
+    // Model catalog (design v2 §4): every enabled source's pool, gateway
+    // items annotated + reachability-probed. Direct items are always usable.
+    api.modelCatalog().then((r) => setCatalog(r.items ?? [])).catch(() => setCatalog([]));
     api.providers().then((r) => {
-      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled) ?? null;
-      setGwProvider(gw);
-      if (!gw) return;
-      // Brain selector = model names from the gateway (/v1/models), matching
-      // the Gateway page brain card. Gateway unreachable: fall back to the
-      // provider's stored model so chat still works.
-      api.gatewayModels().then((m) => {
-        const items = m.items ?? [];
-        setGwModels(items);
-        setBrainModel((cur) => cur || (gw.model && items.some((i) => i.value === gw.model) ? gw.model : items[0]?.value || gw.model || ""));
-      }).catch(() => {
-        setGwModels(gw.model ? [{ id: gw.model, backend: "", value: gw.model, local: false }] : []);
-        setBrainModel((cur) => cur || gw.model || "");
-      });
+      setChatDefault((r as { chat_default?: ChatDefault }).chat_default ?? {});
     }).catch(() => {});
     api.agents().then((r) => {
       setAgents(r.agents ?? []);
@@ -387,17 +384,34 @@ function ChatPage() {
     await api.messages(r.id).catch(() => {});
   };
 
-  const changeBrain = async (model: string) => {
-    setBrainModel(model);
-    if (!gwProvider || !model) return;
-    try {
-      const updated = { ...gwProvider, model };
-      await api.saveProvider(updated);
-      setGwProvider(updated);
-    } catch (ex) {
-      setErr((ex as Error).message);
-    }
+  // Per-conversation model switch (design v2). The selection is only local
+  // state here; the backend persists it on the conversation when a message
+  // is sent, so it survives across sessions.
+  const changeModel = (providerID: string, model: string) => {
+    setSelProv(providerID);
+    setSelModel(model);
   };
+
+  // Effective selection: conversation override > user switch this session >
+  // global chat default > first catalog entry.
+  useEffect(() => {
+    if (selModel) return;
+    if (active?.ProviderID && active?.Model) {
+      setSelProv(active.ProviderID);
+      setSelModel(active.Model);
+      return;
+    }
+    if (chatDefault.default_provider_id && chatDefault.default_model) {
+      setSelProv(chatDefault.default_provider_id);
+      setSelModel(chatDefault.default_model);
+      return;
+    }
+    const first = catalog[0];
+    if (first) {
+      setSelProv(first.provider_id);
+      setSelModel(first.model);
+    }
+  }, [active, chatDefault, catalog, selModel]);
 
   const send = async () => {
     const text = input.trim();
@@ -410,8 +424,8 @@ function ChatPage() {
       await runAgentTask(text, mentioned.name);
       return;
     }
-    if (!gwProvider) {
-      setErr("no gateway provider — open the Gateway page and click Create API key first");
+    if (!selProv || !selModel) {
+      setErr("no model source configured — add one on the Models page");
       return;
     }
     setBusy(true);
@@ -427,7 +441,7 @@ function ChatPage() {
       }
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: gwProvider.id, content: text, orchestrate: true }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, provider_id: selProv, model: selModel, content: text, orchestrate: true }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -557,18 +571,28 @@ function ChatPage() {
 
       <div className="flex flex-1 flex-col min-w-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
-          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="The brain model: fusion-gateway routes chat to this model (fed by /v1/models)">
-            <Brain size={14} className="text-indigo-500" /> brain
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="Model for this conversation — switch anytime, it applies to the next message and is remembered per conversation">
+            <Brain size={14} className="text-indigo-500" /> model
           </label>
-          <Select value={brainModel} onChange={(e) => changeBrain(e.target.value)} className="w-48"
-            title="Model served by fusion-gateway — cloud models are pinned to their backend via the qualified backend/model id">
-            {gwModels.length === 0 && brainModel && <option value={brainModel}>{brainModel}</option>}
-            {gwModels.map((m) => (
-              <option key={m.value} value={m.value}>{m.id}{m.backend && !m.local ? ` · ${m.backend}` : ""}</option>
-            ))}
-          </Select>
-          {!gwProvider && (
-            <span className="text-xs text-amber-600 dark:text-amber-400">no gateway provider — create an API key on the Gateway page</span>
+          {catalog.length === 0 ? (
+            <span className="text-xs text-amber-600 dark:text-amber-400">
+              no model source — add one on the <button onClick={() => onPage("models")} className="underline">Models page</button>
+            </span>
+          ) : (
+            <Select value={`${selProv}\u0000${selModel}`}
+              onChange={(e) => {
+                const [pid, ...rest] = e.target.value.split("\u0000");
+                changeModel(pid, rest.join("\u0000"));
+              }}
+              className="w-64"
+              title="Every enabled model source, direct and gateway alike; gateway items are annotated and greyed when unreachable">
+              {catalog.map((m) => (
+                <option key={`${m.provider_id}/${m.model}`} value={`${m.provider_id}\u0000${m.model}`}
+                  disabled={m.kind === "gateway" && !m.reachable}>
+                  {m.model} · {m.provider_name}{m.kind === "gateway" ? (m.reachable ? " · gateway" : " · gateway (unreachable)") : ""}
+                </option>
+              ))}
+            </Select>
           )}
         </div>
 
@@ -733,8 +757,6 @@ function GatewayPage() {
   const [adminPass, setAdminPass] = useState("");
   const [keys, setKeys] = useState<GatewayKey[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [brainModel, setBrainModel] = useState("");
-  const [gwModels, setGwModels] = useState<GatewayModelItem[]>([]);
 
   const load = useCallback(() => {
     api.gatewayStatus().then(setStatus).catch((e) => setErr((e as Error).message));
@@ -744,19 +766,14 @@ function GatewayPage() {
   const loadKeys = useCallback(() => {
     api.gatewayKeys().then((r) => setKeys(r.keys ?? [])).catch(() => setKeys([]));
   }, []);
-  const loadBrainModel = useCallback(() => {
-    api.providers().then((r) => {
-      setProviders(r.providers ?? []);
-      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled);
-      if (gw) setBrainModel(gw.model || "");
-    }).catch(() => {});
-    api.gatewayModels().then((r) => setGwModels(r.items ?? [])).catch(() => setGwModels([]));
+  const loadProviders = useCallback(() => {
+    api.providers().then((r) => setProviders(r.providers ?? [])).catch(() => {});
   }, []);
   useEffect(() => {
     if (!status?.reachable) return;
     loadKeys();
-    loadBrainModel();
-  }, [status?.reachable, loadKeys, loadBrainModel]);
+    loadProviders();
+  }, [status?.reachable, loadKeys, loadProviders]);
 
   const install = async () => {
     setBusy(true);
@@ -808,7 +825,7 @@ function GatewayPage() {
       setRawKey(r.raw_key || "");
       setMsg(`gateway API key ready (${r.key_prefix}...) — stored in the OS keychain`);
       loadKeys();
-      loadBrainModel();
+      loadProviders();
     } catch (ex) {
       setErr((ex as Error).message);
     } finally {
@@ -839,25 +856,31 @@ function GatewayPage() {
     try {
       await api.deleteProvider(p.id);
       setMsg(`provider "${p.id}" deleted from console config`);
-      loadBrainModel();
+      loadProviders();
     } catch (ex) {
       setErr((ex as Error).message);
     }
   };
-  const saveBrainModel = async () => {
-    setMsg(""); setErr("");
+
+  const gwStart = async () => {
+    setBusy(true); setMsg(""); setErr("");
     try {
-      const r = await api.providers();
-      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled);
-      if (!gw) {
-        setErr("no gateway provider configured — create an API key first");
-        return;
-      }
-      await api.saveProvider({ ...gw, model: brainModel });
-      setMsg(`brain model set to ${brainModel}`);
+      const r = await api.gatewayStart();
+      setMsg(`gateway start: ${r.note || "ok"}`);
+      load();
     } catch (ex) {
       setErr((ex as Error).message);
-    }
+    } finally { setBusy(false); }
+  };
+  const gwStop = async () => {
+    setBusy(true); setMsg(""); setErr("");
+    try {
+      const r = await api.gatewayStop();
+      setMsg(`gateway stop: ${r.note || "ok"}`);
+      load();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally { setBusy(false); }
   };
 
   return (
@@ -874,11 +897,20 @@ function GatewayPage() {
               {status?.installed ? `installed: ${status.binary}` : "binary not installed by console"}
             </p>
           </div>
-          {status?.reachable && (
-            <Button onClick={openAdmin}>
-              <ExternalLink size={14} /> Open Admin GUI
-            </Button>
-          )}
+          <span className="ml-auto flex gap-1.5">
+            {status?.reachable ? (
+              <>
+                <Button onClick={openAdmin}>
+                  <ExternalLink size={14} /> Open Admin GUI
+                </Button>
+                <Button variant="outline" onClick={gwStop} disabled={busy}>Stop</Button>
+              </>
+            ) : (
+              status?.installed && (
+                <Button onClick={gwStart} disabled={busy}>Start</Button>
+              )
+            )}
+          </span>
         </div>
       </Card>
 
@@ -889,24 +921,8 @@ function GatewayPage() {
         </Card>
       )}
 
-      {status?.reachable && gwModels.length > 0 && (
-        <Card className="space-y-3 p-4">
-          <h3 className="font-medium flex items-center gap-2"><Cpu size={16} /> Brain model</h3>
-          <p className="text-sm text-zinc-500">
-            Model the brain (chat planner) uses. Requests still go through the gateway —
-            cloud models are pinned to their backend via the qualified <code>backend/model</code> id.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Select className="w-72" value={brainModel} onChange={(e) => setBrainModel(e.target.value)}>
-              {!brainModel && <option value="">choose model...</option>}
-              {gwModels.map((m) => (
-                <option key={m.value} value={m.value}>{m.id}{m.backend && !m.local ? ` · ${m.backend}` : ""}</option>
-              ))}
-            </Select>
-            <Button onClick={saveBrainModel} disabled={!brainModel}>Save</Button>
-          </div>
-        </Card>
-      )}
+      {/* Brain model card removed (design v2): the default chat model lives
+          on the Models page; per-conversation selection lives in chat. */}
 
       {!status?.reachable && (
         <Card className="space-y-3 p-4">
