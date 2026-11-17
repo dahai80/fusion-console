@@ -190,7 +190,13 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		}
 		log.Printf("orchestrator: dispatch worker=%s agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
 			args.Agent, cli, isolationOf(wk), workdir, budget, user)
-		pEnv, forcedModel := s.providerEnv(cli, wk)
+		pEnv, forcedModel, bindNote := s.providerEnv(cli, wk)
+		if bindNote != "" && send != nil {
+			// Design v2 §4.1B: binding fallbacks surface in the chat stream,
+			// not only server logs.
+			send(map[string]any{"type": "tool", "tool": "run_agent", "status": "progress",
+				"detail": "ℹ️ " + bindNote})
+		}
 		taskText := s.prefixWorkerTask(ctx, args.Agent, args.Task)
 		opts := agent.RunOpts{
 			Task: taskText, Workdir: workdir,
@@ -587,7 +593,10 @@ func (s *Server) resolveWorkerTarget(id string) (cli string, wk *config.WorkerCo
 // model override. Anthropic-compatible providers speak the ANTHROPIC_* env
 // family; OpenAI-compatible and gateway providers speak the OPENAI_* family.
 // Empty result = the CLI uses its own default login.
-func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]string, string) {
+// Third return: a human-readable fallback reason (design v2 §4.1B). Empty
+// when the binding resolved; non-empty means the CLI will use its own
+// default and the user should know why.
+func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]string, string, string) {
 	pid := ""
 	agentModel := ""
 	for _, a := range s.cfg.Agent {
@@ -606,7 +615,7 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		agentModel = wk.Model
 	}
 	if pid == "" {
-		return nil, ""
+		return nil, "", ""
 	}
 	var prov *config.Provider
 	for i := range s.cfg.Provider {
@@ -616,12 +625,12 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 	}
 	if prov == nil || !prov.Enabled {
 		log.Printf("orchestrator: worker %s: provider %s not found or disabled, using CLI default", cli, pid)
-		return nil, ""
+		return nil, "", fmt.Sprintf("provider %s is missing or disabled — %s will use its own default login", pid, cli)
 	}
 	key, err := config.GetAPIKey(providerKeyID(prov))
 	if err != nil || key == "" {
 		log.Printf("orchestrator: worker %s: provider %s has no stored key, using CLI default", cli, pid)
-		return nil, ""
+		return nil, "", fmt.Sprintf("provider %s has no stored API key — %s will use its own default login; store the key on the Models page", pid, cli)
 	}
 	// atlascode ignores OPENAI_* env when its settings.json resolves a
 	// provider, so forcing goes through a settings.json merge instead
@@ -631,7 +640,7 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 	if cmdBase == "atlascode" || cmdBase == "atlas" {
 		if prov.Type != "openai_compat" && prov.Type != "gateway" {
 			log.Printf("orchestrator: worker %s: atlascode needs an openai_compat provider, %s is %q", cli, pid, prov.Type)
-			return nil, ""
+			return nil, "", fmt.Sprintf("atlascode needs an OpenAI-compatible source but %s is %q — %s will use its own default login", pid, prov.Type, cli)
 		}
 		modelID := agentModel
 		if modelID == "" {
@@ -640,10 +649,10 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		ref, err := writeAtlasProvider(prov, modelID)
 		if err != nil {
 			log.Printf("orchestrator: worker %s: atlas settings write failed: %v", cli, err)
-			return nil, ""
+			return nil, "", fmt.Sprintf("atlascode settings merge failed: %v — %s will use its own default login", err, cli)
 		}
 		log.Printf("orchestrator: worker %s forced to provider %s via atlas settings (%s)", cli, pid, ref)
-		return map[string]string{"PROVIDER_ID": pid}, ref
+		return map[string]string{"PROVIDER_ID": pid}, ref, ""
 	}
 	env := map[string]string{"PROVIDER_ID": pid}
 	// Model precedence: per-agent override > provider default (pool head).
@@ -661,16 +670,16 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 			env["ANTHROPIC_MODEL"] = model
 		}
 		log.Printf("orchestrator: worker %s forced to provider %s (anthropic_compat) model=%q via env", cli, pid, model)
-		return env, ""
+		return env, "", ""
 	case "openai_compat", "gateway":
 		env["OPENAI_BASE_URL"] = prov.BaseURL
 		env["OPENAI_API_KEY"] = key
 	default:
 		log.Printf("orchestrator: worker %s: provider %s type %q not injectable, using CLI default", cli, pid, prov.Type)
-		return nil, ""
+		return nil, "", fmt.Sprintf("provider %s type %q is not injectable — %s will use its own default login", pid, prov.Type, cli)
 	}
 	log.Printf("orchestrator: worker %s forced to provider %s (%s) model=%q", cli, pid, prov.Type, model)
-	return env, model
+	return env, model, ""
 }
 
 func isolationOf(wk *config.WorkerConfig) string {

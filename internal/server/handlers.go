@@ -395,7 +395,11 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		send(map[string]any{"type": "notice", "text": note})
 	}
 
-	pEnv, forcedModel := s.providerEnv(cli, wk)
+	pEnv, forcedModel, bindNote := s.providerEnv(cli, wk)
+	if bindNote != "" {
+		// Design v2 §4.1B: binding fallbacks are visible, not just server logs.
+		send(map[string]any{"type": "notice", "text": bindNote})
+	}
 	budget := settings.MaxBudgetUSD
 	if wk != nil && wk.MaxBudgetUSD > 0 {
 		budget = wk.MaxBudgetUSD
