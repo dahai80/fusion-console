@@ -41,8 +41,43 @@ func TestReadAttachmentSegmentChunksAndEof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if seg.BytesRead != 60 || seg.NextOffset != -1 || !seg.EOF {
+	if seg.BytesRead != 60 || seg.NextOffset != 100 || !seg.EOF {
 		t.Fatalf("last segment: read=%d next=%d eof=%v", seg.BytesRead, seg.NextOffset, seg.EOF)
+	}
+}
+
+func TestReadAttachmentSegmentUtf8Boundary(t *testing.T) {
+	s := &Server{cfgDir: t.TempDir()}
+	// Chinese text: each char is 3 bytes, so 64-byte chunks split chars at
+	// every segment edge. Segments must come back as text, never base64.
+	content := strings.Repeat("前沿模型注意力机制研究摘要。", 20)
+	writeAttachment(t, s, "5-cn.txt", content)
+
+	total := int64(len(content))
+	offset := int64(0)
+	segments := 0
+	for {
+		seg, err := s.readAttachmentSegment("5-cn.txt", offset, 64)
+		if err != nil {
+			t.Fatalf("read at %d: %v", offset, err)
+		}
+		if seg.Encoding != "text" {
+			t.Fatalf("segment at %d: encoding=%s, want text (utf-8 boundary split)", seg.Offset, seg.Encoding)
+		}
+		segments++
+		if seg.NextOffset <= seg.Offset && !seg.EOF {
+			t.Fatalf("segment at %d: next_offset %d does not advance", seg.Offset, seg.NextOffset)
+		}
+		offset = seg.NextOffset
+		if seg.EOF {
+			break
+		}
+		if segments > 2000 {
+			t.Fatal("segment walk did not terminate")
+		}
+	}
+	if offset != total {
+		t.Fatalf("walk ended at %d, total=%d", offset, total)
 	}
 }
 

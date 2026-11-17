@@ -72,7 +72,7 @@ type attachmentSegment struct {
 	Total      int64  `json:"total"`
 	Offset     int64  `json:"offset"`
 	BytesRead  int    `json:"bytes_read"`
-	NextOffset int64  `json:"next_offset"` // -1 when the file is exhausted
+	NextOffset int64  `json:"next_offset"` // always the next byte to read; EOF says when to stop
 	Encoding   string `json:"encoding"`    // text | base64
 	Content    string `json:"content"`
 	EOF        bool   `json:"eof"`
@@ -103,7 +103,7 @@ func (s *Server) readAttachmentSegment(stored string, offset, maxBytes int64) (*
 		return nil, fmt.Errorf("attachment %s: %v", stored, err)
 	}
 	if offset >= info.Size() {
-		return &attachmentSegment{Stored: stored, Total: info.Size(), Offset: offset, NextOffset: -1, Encoding: "text", EOF: true}, nil
+		return &attachmentSegment{Stored: stored, Total: info.Size(), Offset: offset, NextOffset: offset, Encoding: "text", EOF: true}, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -119,19 +119,29 @@ func (s *Server) readAttachmentSegment(stored string, offset, maxBytes int64) (*
 		return nil, fmt.Errorf("read attachment %s: %v", stored, err)
 	}
 	segment := buf[:n]
+	// A fixed byte range can split a multibyte UTF-8 character at the segment
+	// edge. If the tail is 1-3 continuation bytes and the shorter prefix is
+	// valid UTF-8, hold those bytes back for the next segment instead of
+	// misclassifying the whole segment as binary. Genuinely binary data
+	// (invalid beyond the boundary trim) is base64-encoded in full.
+	valid := n
+	for !utf8.Valid(segment[:valid]) && n-valid < utf8.UTFMax-1 && valid > 0 {
+		valid--
+	}
+	if !utf8.Valid(segment[:valid]) {
+		// Real binary content: encode the full segment, no boundary trim.
+		valid = n
+	}
 	encoding := "text"
-	content := string(segment)
-	if !utf8.Valid(segment) {
+	content := string(segment[:valid])
+	if !utf8.Valid(segment[:valid]) {
 		encoding = "base64"
-		content = base64.StdEncoding.EncodeToString(segment)
+		content = base64.StdEncoding.EncodeToString(segment[:valid])
 	}
-	next := offset + int64(n)
-	if next >= info.Size() {
-		next = -1
-	}
+	next := offset + int64(valid)
 	return &attachmentSegment{
-		Stored: stored, Total: info.Size(), Offset: offset, BytesRead: n,
-		NextOffset: next, Encoding: encoding, Content: content, EOF: next < 0,
+		Stored: stored, Total: info.Size(), Offset: offset, BytesRead: valid,
+		NextOffset: next, Encoding: encoding, Content: content, EOF: next >= info.Size(),
 	}, nil
 }
 
