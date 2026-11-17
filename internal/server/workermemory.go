@@ -63,8 +63,9 @@ func memoryServerURL() string {
 // memoryPost issues one JSON-RPC-over-HTTP call against fm-server with a hard
 // short timeout. fm-server speaks JSON-RPC 2.0 ({"jsonrpc","method","params"},
 // RPC method v1.<name> on pinned /v1/ paths) and enforces Bearer auth (B5);
-// the key comes from the same env var fm-server itself uses, so both
-// processes read one source. Best effort: errors are logged, never propagated.
+// the key resolves from FUSION_MEMORY_API_KEY first, then the OS keychain
+// (account "fusion-memory") — never a config file. Best effort: errors are
+// logged, never propagated.
 func memoryPost(ctx context.Context, method string, params any, out any, timeout time.Duration) error {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -78,7 +79,7 @@ func memoryPost(ctx context.Context, method string, params any, out any, timeout
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if k := os.Getenv("FUSION_MEMORY_API_KEY"); k != "" {
+	if k := memoryAPIKey(); k != "" {
 		req.Header.Set("Authorization", "Bearer "+k)
 	}
 	resp, err := http.DefaultClient.Do(req)
@@ -106,6 +107,20 @@ func memoryPost(ctx context.Context, method string, params any, out any, timeout
 		return json.Unmarshal(*rpc.Result, out)
 	}
 	return nil
+}
+
+// memoryAPIKey resolves the fm-server bearer key: env override first, then
+// the OS keychain. Empty result is fine — fm-server answers 401 and the
+// caller degrades best-effort.
+func memoryAPIKey() string {
+	if k := os.Getenv("FUSION_MEMORY_API_KEY"); k != "" {
+		return k
+	}
+	k, err := config.GetAPIKey("fusion-memory")
+	if err != nil {
+		return ""
+	}
+	return k
 }
 
 // recallWorkerMemory fetches past experience relevant to the task from
