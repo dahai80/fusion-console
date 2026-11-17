@@ -52,10 +52,19 @@ type Skill struct {
 	Category string `json:"category"`
 }
 
+// Profile is a default skill set for one agent family (claude, codex,
+// opencode). Agents pick their family by stream protocol.
+type Profile struct {
+	Title  string   `json:"title"`
+	Agents string   `json:"agents"` // human-readable: which agents use it
+	Skills []string `json:"skills"`
+}
+
 // Manifest is catalog.json.
 type Manifest struct {
-	Sources []Source `json:"sources"`
-	Skills  []Skill  `json:"skills"`
+	Sources  []Source           `json:"sources"`
+	Profiles map[string]Profile `json:"profiles"`
+	Skills   []Skill            `json:"skills"`
 }
 
 // Load parses the embedded manifest.
@@ -167,6 +176,13 @@ func Validate() error {
 		}
 		if _, err := fs.Stat(embedded, path.Join("skills", s.Name, src.LicenseFileName())); err != nil {
 			return fmt.Errorf("skill %q: license file %s missing", s.Name, src.LicenseFileName())
+		}
+	}
+	for family, p := range m.Profiles {
+		for _, name := range p.Skills {
+			if !seen[name] {
+				return fmt.Errorf("profile %q lists %q, which is not in the catalog", family, name)
+			}
 		}
 	}
 	for p := range executables() {

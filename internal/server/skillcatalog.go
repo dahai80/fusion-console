@@ -55,10 +55,15 @@ func (s *Server) handleSkillsCatalog(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
+	layout, err := s.skillLayoutFor(r.URL.Query().Get("agent"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
 	projectDir := ""
 	if repo != "" && filepath.IsAbs(repo) {
-		projectDir = projectSkillsDir(repo)
+		projectDir = filepath.Join(repo, layout.Project)
 	}
 	out := make([]catalogEntry, 0, len(m.Skills))
 	for _, sk := range m.Skills {
@@ -82,7 +87,7 @@ func (s *Server) handleSkillsCatalog(w http.ResponseWriter, r *http.Request) {
 			URL:         src.URL(sk.Name),
 			Files:       len(files),
 			Bytes:       size,
-			Global:      skillInstallStatus(globalSkillsDir(), sk.Name, md),
+			Global:      skillInstallStatus(layout.Global, sk.Name, md),
 		}
 		if projectDir != "" {
 			e.Project = skillInstallStatus(projectDir, sk.Name, md)
@@ -97,6 +102,7 @@ func (s *Server) handleSkillsCatalogInstall(w http.ResponseWriter, r *http.Reque
 		Name      string `json:"name"`
 		Scope     string `json:"scope"`
 		Repo      string `json:"repo"`
+		Agent     string `json:"agent"`
 		Overwrite bool   `json:"overwrite"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -112,7 +118,12 @@ func (s *Server) handleSkillsCatalogInstall(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no catalog skill named " + req.Name})
 		return
 	}
-	dir, err := skillsDirFor(req.Scope, req.Repo)
+	layout, err := s.skillLayoutFor(req.Agent)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	dir, err := layout.skillsDir(req.Scope, req.Repo)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

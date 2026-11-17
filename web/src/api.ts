@@ -65,6 +65,12 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// qs builds a query string from the defined, non-empty values.
+function qs(params: Record<string, string | undefined>): string {
+  const q = Object.entries(params).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v as string)}`);
+  return q.length ? `?${q.join("&")}` : "";
+}
+
 export const api = {
   login: (user: string, password: string) =>
     req<{ user: string }>("/api/login", { method: "POST", body: JSON.stringify({ user, password }) }),
@@ -136,22 +142,28 @@ export const api = {
     req<{ ok: boolean }>(`/api/gateway/keys/${encodeURIComponent(name)}`, { method: "DELETE" }),
   gatewayModels: () =>
     req<{ models: string[]; items: GatewayModelItem[] }>("/api/gateway/models"),
-  skills: (repo?: string) =>
-    req<{ skills: SkillEntry[] }>(`/api/skills${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`),
-  readSkill: (path: string, repo?: string) =>
-    req<{ content: string; doc: SkillDoc }>(`/api/skills/read?path=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`),
-  saveSkill: (s: { name: string; description: string; extra: string; body: string; scope: string; repo?: string }) =>
+  // Skills calls take an optional agent (default claude): each agent CLI
+  // loads skills from its own directories (see GET /api/skills/agents).
+  skills: (repo?: string, agent?: string) =>
+    req<{ skills: SkillEntry[] }>(`/api/skills${qs({ repo, agent })}`),
+  readSkill: (path: string, repo?: string, agent?: string) =>
+    req<{ content: string; doc: SkillDoc }>(`/api/skills/read${qs({ path, repo, agent })}`),
+  saveSkill: (s: { name: string; description: string; extra: string; body: string; scope: string; repo?: string; agent?: string }) =>
     req<{ ok: boolean; path: string }>("/api/skills", { method: "POST", body: JSON.stringify(s) }),
-  deleteSkill: (name: string, scope: string, repo?: string) =>
-    req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}?scope=${scope}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`, { method: "DELETE" }),
+  deleteSkill: (name: string, scope: string, repo?: string, agent?: string) =>
+    req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}${qs({ scope, repo, agent })}`, { method: "DELETE" }),
   draftSkill: (d: { hint: string; text: string }) =>
     req<{ content: string; doc: SkillDoc; warnings: string[] | null }>("/api/skills/draft", { method: "POST", body: JSON.stringify(d) }),
   importSkill: (source: string) =>
     req<SkillImport>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) }),
-  skillsCatalog: (repo?: string) =>
-    req<{ skills: CatalogSkill[] }>(`/api/skills/catalog${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`),
-  installCatalogSkill: (s: { name: string; scope: string; repo?: string; overwrite?: boolean }) =>
+  skillsCatalog: (repo?: string, agent?: string) =>
+    req<{ skills: CatalogSkill[] }>(`/api/skills/catalog${qs({ repo, agent })}`),
+  installCatalogSkill: (s: { name: string; scope: string; repo?: string; agent?: string; overwrite?: boolean }) =>
     req<{ ok: boolean; path: string }>("/api/skills/catalog/install", { method: "POST", body: JSON.stringify(s) }),
+  skillAgents: () =>
+    req<{ agents: AgentSkills[] }>("/api/skills/agents"),
+  installAgentDefaults: (d: { agent: string; scope?: string; repo?: string }) =>
+    req<{ dir: string; installed: string[]; skipped: { name: string; status: string }[] }>("/api/skills/agents/defaults", { method: "POST", body: JSON.stringify(d) }),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>
@@ -337,6 +349,20 @@ export type CatalogSkill = {
   bytes: number;
   global: "" | "installed" | "modified";
   project?: "" | "installed" | "modified";
+};
+
+// AgentSkills is one agent's skill layout plus its default profile status.
+export type AgentSkills = {
+  agent: string;
+  family: string;
+  global: string;
+  project: string;
+  also_reads?: string[];
+  ref: string;
+  enabled: boolean;
+  profile: string;
+  profile_title: string;
+  skills: { name: string; status: "" | "installed" | "modified" }[];
 };
 
 export type DashboardBucket = {
