@@ -109,3 +109,59 @@ func TestSanitizeEnvSuffix(t *testing.T) {
 	_ = filepath.Join // keep import stable across toolchains
 	_ = strings.TrimSpace
 }
+
+func TestValidateProvider(t *testing.T) {
+	base := Provider{ID: "src", Name: "src", Type: ProviderOpenAICompat, BaseURL: "http://h:1/v1", Enabled: true}
+
+	// Normalization: trailing slash trimmed; no note for /v1-terminated URL.
+	p := base
+	note, err := ValidateProvider(&p)
+	if err != nil || p.BaseURL != "http://h:1/v1" || note != "" {
+		t.Fatalf("clean openai provider: note=%q err=%v url=%q", note, err, p.BaseURL)
+	}
+
+	// OpenAI without /v1: allowed with a note.
+	p = base
+	p.BaseURL = "http://h:8999/"
+	note, err = ValidateProvider(&p)
+	if err != nil || note == "" || p.BaseURL != "http://h:8999" {
+		t.Fatalf("openai without /v1: note=%q err=%v", note, err)
+	}
+
+	// Anthropic with /v1 must be rejected (protocol appends the path itself).
+	p = base
+	p.Type = ProviderAnthropic
+	p.BaseURL = "https://api.anthropic.com/v1"
+	if _, err := ValidateProvider(&p); err == nil {
+		t.Fatal("anthropic /v1 suffix must error")
+	}
+
+	// Bad scheme, empty id, bad id charset, duplicate pool entry.
+	p = base
+	p.BaseURL = "ftp://h"
+	if _, err := ValidateProvider(&p); err == nil {
+		t.Fatal("bad scheme must error")
+	}
+	p = base
+	p.ID = ""
+	if _, err := ValidateProvider(&p); err == nil {
+		t.Fatal("empty id must error")
+	}
+	p = base
+	p.ID = "Bad ID"
+	if _, err := ValidateProvider(&p); err == nil {
+		t.Fatal("id charset must error")
+	}
+	p = base
+	p.Models = []string{"m1", "m1"}
+	if _, err := ValidateProvider(&p); err == nil {
+		t.Fatal("duplicate pool entry must error")
+	}
+}
+
+func TestChatDefaultConfig(t *testing.T) {
+	cfg := &Config{Chat: ChatConfig{DefaultProviderID: "iff", DefaultModel: "fabric-small"}}
+	if cfg.Chat.DefaultModel != "fabric-small" {
+		t.Fatal("chat default not stored")
+	}
+}

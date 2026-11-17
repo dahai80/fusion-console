@@ -167,6 +167,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ConversationID int64  `json:"conversation_id"`
 		ProviderID     string `json:"provider_id"`
+		Model          string `json:"model"` // per-conversation chat model (design v2)
 		Content        string `json:"content"`
 		Orchestrate    bool   `json:"orchestrate"` // chat as main brain: allow agent dispatch tools this turn
 	}
@@ -175,24 +176,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Provider resolution: explicit request override > per-conversation
-	// binding > first enabled gateway provider. The resolved model follows
-	// the per-conversation binding when set, else the provider default.
-	// provider.Model itself is never written here (single-owner rule: the
-	// Models page owns the provider default).
+	// binding > first enabled gateway provider. provider.Model itself is
+	// never written here (single-owner rule: the Models page owns the
+	// provider default).
 	user0 := s.auth.User(r)
-	var model string
+	var convProv, convModel string
 	var fallbackNotice string
 	prov, ok := s.providerByID(req.ProviderID)
 	if ok {
-		model = prov.DefaultModel()
+		// Request provider wins; the conversation's stored model still
+		// applies when it was bound to this same provider (design v2).
+		if conv, cerr := s.store.Conversation(user0, req.ConversationID); cerr == nil && conv.ProviderID == prov.ID {
+			convProv, convModel = conv.ProviderID, conv.Model
+		}
 	} else if conv, cerr := s.store.Conversation(user0, req.ConversationID); cerr == nil && conv.ProviderID != "" {
 		log.Printf("server: chat conv=%d request provider %q unusable, trying conversation binding %s", req.ConversationID, req.ProviderID, conv.ProviderID)
 		if p, pok := s.providerByID(conv.ProviderID); pok {
 			prov = p
-			model = conv.Model
-			if strings.TrimSpace(model) == "" {
-				model = prov.DefaultModel()
-			}
+			convProv, convModel = conv.ProviderID, conv.Model
 		} else {
 			fallbackNotice = "conversation bound to provider " + conv.ProviderID + " which is missing or disabled — using the default gateway provider"
 			log.Printf("server: chat conv=%d conversation provider binding %s unusable, falling back", req.ConversationID, conv.ProviderID)
@@ -201,7 +202,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if prov == nil {
 		if gp, gpok := s.firstGatewayProvider(); gpok {
 			prov = gp
-			model = gp.DefaultModel()
 		}
 	}
 	if prov == nil {
@@ -220,6 +220,28 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			"error": "API key unavailable for provider " + prov.Name + " — open the Models page and re-save its API key, then retry. (" + err.Error() + ")",
 		})
 		return
+	}
+
+	// Chat model resolution (design v2): request override > conversation's
+	// stored choice > global chat default > provider default. The resolved
+	// choice is persisted on the conversation so it carries across sessions.
+	model := strings.TrimSpace(req.Model)
+	if model == "" && convModel != "" && (convProv == "" || convProv == prov.ID) {
+		model = strings.TrimSpace(convModel)
+	}
+	if model == "" && (s.cfg.Chat.DefaultProviderID == "" || s.cfg.Chat.DefaultProviderID == prov.ID) {
+		model = strings.TrimSpace(s.cfg.Chat.DefaultModel)
+	}
+	if model == "" {
+		model = prov.DefaultModel()
+	}
+	if model == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "provider " + prov.Name + " has no model — pick one in the Models page"})
+		return
+	}
+	if err := s.store.SetConversationModel(user0, req.ConversationID, prov.ID, model); err != nil {
+		log.Printf("server: persist conversation model failed (non-fatal): %v", err)
 	}
 
 	if _, err := s.store.AppendMessage(req.ConversationID, "user", req.Content, "{}"); err != nil {
@@ -662,7 +684,7 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 			log.Printf("server: gateway provider key heal save failed: %v", err)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"providers": s.cfg.Provider})
+	writeJSON(w, http.StatusOK, map[string]any{"providers": s.cfg.Provider, "chat_default": s.cfg.Chat})
 }
 
 func (s *Server) handleSaveProvider(w http.ResponseWriter, r *http.Request) {
@@ -673,6 +695,14 @@ func (s *Server) handleSaveProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	if prov.ID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider id required"})
+		return
+	}
+	// Design v2 §4.1A: validate + normalize before persisting. Previously only
+	// non-empty ID was checked, which let bad base URLs and nonexistent
+	// default models slip through silently.
+	note, verr := config.ValidateProvider(&prov)
+	if verr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": verr.Error()})
 		return
 	}
 	replaced := false
@@ -689,19 +719,82 @@ func (s *Server) handleSaveProvider(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
+	s.invalidateModelCatalog()
 	log.Printf("server: provider %s saved", prov.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "note": note})
+}
+
+// handleSetChatDefault stores the global default chat model (design v2:
+// new conversations inherit it; the gateway brain card's old role).
+func (s *Server) handleSetChatDefault(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProviderID string `json:"provider_id"`
+		Model      string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	if req.ProviderID != "" {
+		found := false
+		for i := range s.cfg.Provider {
+			if s.cfg.Provider[i].ID == req.ProviderID && s.cfg.Provider[i].Enabled {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled provider " + req.ProviderID})
+			return
+		}
+	}
+	s.cfg.Chat = config.ChatConfig{DefaultProviderID: req.ProviderID, DefaultModel: req.Model}
+	if err := s.cfg.Save(s.cfgDir); err != nil {
+		serverError(w, err, http.StatusInternalServerError)
+		return
+	}
+	log.Printf("server: chat default set provider=%s model=%s", req.ProviderID, req.Model)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleDeleteProvider removes one console provider entry (config.json).
-// Used to clean up zombie direct providers left by the removed providers form.
+// Design v2 §4.1A: refuses when the source is still referenced (agents,
+// workers, chat default, conversations) unless force=1, and cleans the
+// keychain entry so key material does not outlive the source.
 func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Consumer check: agents + workers + chat default + conversations.
+	var consumers []string
+	for _, a := range s.cfg.Agent {
+		if a.ProviderID == id {
+			consumers = append(consumers, "agent "+a.Name)
+		}
+	}
+	for _, o := range s.cfg.Orchestrator.Workers {
+		if o.ProviderID == id {
+			consumers = append(consumers, "worker "+o.Name)
+		}
+	}
+	if s.cfg.Chat.DefaultProviderID == id {
+		consumers = append(consumers, "default chat model")
+	}
+	if ids, err := s.store.ConversationProviderUsers(id); err == nil && len(ids) > 0 {
+		consumers = append(consumers, fmt.Sprintf("%d conversation(s)", len(ids)))
+	}
+	if len(consumers) > 0 && r.URL.Query().Get("force") != "1" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":     "provider " + id + " is still referenced by: " + strings.Join(consumers, ", "),
+			"consumers": consumers,
+		})
+		return
+	}
 	kept := s.cfg.Provider[:0]
 	found := false
+	var deleted config.Provider
 	for _, p := range s.cfg.Provider {
 		if p.ID == id {
 			found = true
+			deleted = p
 			continue
 		}
 		kept = append(kept, p)
@@ -711,11 +804,24 @@ func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cfg.Provider = kept
+	// Clear the chat default when it pointed at the deleted source.
+	if s.cfg.Chat.DefaultProviderID == id {
+		s.cfg.Chat = config.ChatConfig{}
+	}
 	if err := s.cfg.Save(s.cfgDir); err != nil {
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
+	// Keychain cleanup: the key must not outlive its source. Best-effort —
+	// a missing entry is not an error. Gateway keys are shared console-wide
+	// (providerKeyID returns "gateway-key") and are never deleted here.
+	if deleted.Type != config.ProviderGateway {
+		if err := config.DeleteAPIKey(providerKeyID(&deleted)); err != nil {
+			log.Printf("server: provider %s keychain cleanup skipped: %v", id, err)
+		}
+	}
 	log.Printf("server: provider %s deleted", id)
+	s.invalidateModelCatalog()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

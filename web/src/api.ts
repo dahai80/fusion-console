@@ -7,7 +7,19 @@ export type Provider = {
   models?: string[];
   api_key_id: string;
   enabled: boolean;
+  lifecycle?: "fusion-gateway" | "macfabric" | "";
 };
+
+export type ModelCatalogItem = {
+  provider_id: string;
+  provider_name: string;
+  kind: "gateway" | "direct";
+  model: string;
+  reachable: boolean;
+  lifecycle?: string;
+};
+
+export type ChatDefault = { default_provider_id?: string; default_model?: string };
 
 export type AgentInfo = {
   name: string;
@@ -109,6 +121,21 @@ export const api = {
     req<{ ok: boolean }>("/api/settings/apikey", { method: "POST", body: JSON.stringify({ key_id: keyId, secret }) }),
   models: (provider: string) =>
     req<{ models: string[] }>(`/api/settings/models?provider=${encodeURIComponent(provider)}`),
+  modelCatalog: () => req<{ items: ModelCatalogItem[] }>("/api/model-catalog"),
+  setChatDefault: (providerId: string, model: string) =>
+    req<{ ok: boolean }>("/api/settings/chat-default", {
+      method: "POST",
+      body: JSON.stringify({ provider_id: providerId, model }),
+    }),
+  sourceAction: (id: string, action: "start" | "stop" | "install") =>
+    req<{ ok: boolean; note?: string }>(`/api/sources/${encodeURIComponent(id)}/action`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
+  sourceInstallJob: () =>
+    req<{ phase: string; logs: string[]; error: string }>("/api/sources/install-job"),
+  gatewayStart: () => req<{ ok: boolean; note?: string }>("/api/gateway/start", { method: "POST" }),
+  gatewayStop: () => req<{ ok: boolean; note?: string }>("/api/gateway/stop", { method: "POST" }),
   testCall: (provider: string) =>
     req<{ ok: boolean; sample?: string; error?: string; latency_ms?: number }>("/api/settings/testcall", {
       method: "POST",

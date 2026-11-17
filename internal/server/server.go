@@ -41,6 +41,10 @@ type Server struct {
 	verMu       sync.Mutex               // guards verLast + verCache (CLI version fingerprint)
 	verLast     map[string]string        // agent name -> last-seen CLI version
 	verCache    map[string]verCacheEntry // command -> --version result (TTL)
+	catMu       sync.Mutex               // guards catalog cache (model-catalog reachability)
+	catCache    []modelCatalogItem       // nil = cache empty
+	catAt       time.Time                // when the cache was filled
+	srcInstall  ragInstallState          // background source install job (macfabric stage-1)
 	mux         *http.ServeMux
 }
 
@@ -120,6 +124,12 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/settings/providers/{id}", s.auth.Require(s.handleDeleteProvider))
 	m.HandleFunc("POST /api/settings/apikey", s.auth.Require(s.handleStoreAPIKey))
 	m.HandleFunc("GET /api/settings/models", s.auth.Require(s.handleModels))
+	m.HandleFunc("GET /api/model-catalog", s.auth.Require(s.handleModelCatalog))
+	m.HandleFunc("POST /api/settings/chat-default", s.auth.Require(s.handleSetChatDefault))
+	m.HandleFunc("POST /api/sources/{id}/action", s.auth.Require(s.handleSourceAction))
+	m.HandleFunc("GET /api/sources/install-job", s.auth.Require(s.handleSourceInstallJob))
+	m.HandleFunc("POST /api/gateway/start", s.auth.Require(s.handleGatewayStart))
+	m.HandleFunc("POST /api/gateway/stop", s.auth.Require(s.handleGatewayStop))
 	m.HandleFunc("POST /api/settings/testcall", s.auth.Require(s.handleTestCall))
 	m.HandleFunc("POST /api/approvals/{id}", s.auth.Require(s.handleApproval))
 	m.HandleFunc("GET /api/auth/hint", s.handleAuthHint)
