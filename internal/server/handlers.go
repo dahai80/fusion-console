@@ -118,6 +118,39 @@ func (s *Server) providerByID(id string) (*config.Provider, bool) {
 	return nil, false
 }
 
+// handleSetConversationModel persists the per-conversation provider/model
+// binding. Empty provider_id clears the binding so the conversation falls
+// back to the default gateway provider.
+func (s *Server) handleSetConversationModel(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad conversation id"})
+		return
+	}
+	var req struct {
+		ProviderID string `json:"provider_id"`
+		Model      string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	req.ProviderID = strings.TrimSpace(req.ProviderID)
+	req.Model = strings.TrimSpace(req.Model)
+	if req.ProviderID != "" {
+		if _, ok := s.providerByID(req.ProviderID); !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled provider " + req.ProviderID})
+			return
+		}
+	}
+	if err := s.store.SetConversationModel(s.auth.User(r), id, req.ProviderID, req.Model); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	log.Printf("server: conversation %d bound to provider=%q model=%q by %s", id, req.ProviderID, req.Model, s.auth.User(r))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func buildProvider(p *config.Provider) (chat.Provider, error) {
 	switch p.Type {
 	case config.ProviderGateway:
@@ -141,9 +174,38 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
+	// Provider resolution: explicit request override > per-conversation
+	// binding > first enabled gateway provider. The resolved model follows
+	// the per-conversation binding when set, else the provider default.
+	// provider.Model itself is never written here (single-owner rule: the
+	// Models page owns the provider default).
+	user0 := s.auth.User(r)
+	var model string
+	var fallbackNotice string
 	prov, ok := s.providerByID(req.ProviderID)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled provider " + req.ProviderID})
+	if ok {
+		model = prov.DefaultModel()
+	} else if conv, cerr := s.store.Conversation(user0, req.ConversationID); cerr == nil && conv.ProviderID != "" {
+		log.Printf("server: chat conv=%d request provider %q unusable, trying conversation binding %s", req.ConversationID, req.ProviderID, conv.ProviderID)
+		if p, pok := s.providerByID(conv.ProviderID); pok {
+			prov = p
+			model = conv.Model
+			if strings.TrimSpace(model) == "" {
+				model = prov.DefaultModel()
+			}
+		} else {
+			fallbackNotice = "conversation bound to provider " + conv.ProviderID + " which is missing or disabled — using the default gateway provider"
+			log.Printf("server: chat conv=%d conversation provider binding %s unusable, falling back", req.ConversationID, conv.ProviderID)
+		}
+	}
+	if prov == nil {
+		if gp, gpok := s.firstGatewayProvider(); gpok {
+			prov = gp
+			model = gp.DefaultModel()
+		}
+	}
+	if prov == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no usable provider — pass provider_id or enable a provider on the Models page"})
 		return
 	}
 	provider, err := buildProvider(prov)
@@ -155,7 +217,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("server: chat api key unavailable (provider %s, key id %s): %v", prov.ID, prov.APIKeyID, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "API key unavailable for provider " + prov.Name + " — open the Gateway page and click Create API key, then retry. (" + err.Error() + ")",
+			"error": "API key unavailable for provider " + prov.Name + " — open the Models page and re-save its API key, then retry. (" + err.Error() + ")",
 		})
 		return
 	}
@@ -181,7 +243,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		for i, m := range chatMsgs {
 			hMsgs[i] = harness.Message{Role: m.Role, Content: m.Content}
 		}
-		proceed, reason, compacted, err := s.harness.PreLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, prov.Model, hMsgs)
+		proceed, reason, compacted, err := s.harness.PreLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, model, hMsgs)
 		if err != nil {
 			log.Printf("server: harness pre_llm unavailable, proceeding unguarded: %v", err)
 		} else if !proceed {
@@ -208,7 +270,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := s.auth.User(r)
-	log.Printf("server: chat conv=%d provider=%s model=%s user=%s orchestrate=%v", req.ConversationID, prov.ID, prov.Model, user, req.Orchestrate)
+	if fallbackNotice != "" {
+		send(map[string]any{"type": "notice", "text": fallbackNotice})
+	}
+	log.Printf("server: chat conv=%d provider=%s model=%s user=%s orchestrate=%v", req.ConversationID, prov.ID, model, user, req.Orchestrate)
 
 	// Orchestrated turn: chat is the main brain and may dispatch agents via
 	// native tool-calls (bounded loop, harness-guarded dispatch). Mode "off"
@@ -231,11 +296,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			send(map[string]any{"type": "done"})
 			return
 		} else if tp, ok := provider.(chat.ToolProvider); ok {
-			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: prov.Model, user: user}
+			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: model, user: user}
 			full, total := s.runPlannerLoop(r.Context(), tp, &opts, apiKey, chatMsgs, send)
 			if full != "" {
 				meta, _ := json.Marshal(map[string]any{
-					"provider": prov.ID, "model": prov.Model, "orchestrated": true,
+					"provider": prov.ID, "model": model, "orchestrated": true,
 					"tokens_in": total.TokensIn, "tokens_out": total.TokensOut,
 				})
 				_, _ = s.store.AppendMessage(req.ConversationID, "assistant", full, string(meta))
@@ -255,11 +320,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if s.ragEnabled() {
 		if tp, ok := provider.(chat.ToolProvider); ok {
 			log.Printf("server: rag tools active conv=%d", req.ConversationID)
-			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: prov.Model, user: user}
+			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: model, user: user}
 			full, total := s.runRAGChatLoop(r.Context(), tp, &opts, apiKey, chatMsgs, send)
 			if full != "" {
 				meta, _ := json.Marshal(map[string]any{
-					"provider": prov.ID, "model": prov.Model, "rag": true,
+					"provider": prov.ID, "model": model, "rag": true,
 					"tokens_in": total.TokensIn, "tokens_out": total.TokensOut,
 				})
 				_, _ = s.store.AppendMessage(req.ConversationID, "assistant", full, string(meta))
@@ -272,7 +337,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	evCh, err := provider.ChatStream(r.Context(), prov.Model, apiKey, chatMsgs)
+	evCh, err := provider.ChatStream(r.Context(), model, apiKey, chatMsgs)
 	if err != nil {
 		send(map[string]any{"type": "error", "text": err.Error()})
 		return
@@ -297,7 +362,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if full != "" {
 		meta, _ := json.Marshal(map[string]any{
-			"provider": prov.ID, "model": prov.Model,
+			"provider": prov.ID, "model": model,
 			"tokens_in": usage.TokensIn, "tokens_out": usage.TokensOut,
 		})
 		_, _ = s.store.AppendMessage(req.ConversationID, "assistant", full, string(meta))
