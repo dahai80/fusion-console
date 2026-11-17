@@ -494,6 +494,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const [teamWorkers, setTeamWorkers] = useState<WorkerSettings[]>([]);
   const [teamErr, setTeamErr] = useState("");
   const [teamCreating, setTeamCreating] = useState(false);
+  const [teamMode, setTeamMode] = useState("default");
   useEffect(() => {
     if (!teamModalOpen) return;
     api.orchestration().then((r) => setTeamWorkers(r.orchestrator?.workers ?? [])).catch(() => setTeamWorkers([]));
@@ -508,7 +509,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         role: w?.agent || "",
         skills: [] as string[],
         tool_allowlist: [] as string[],
-        permission_mode: w?.permission_mode || "default",
+        permission_mode: teamMode,
         budget_tokens: 50000,
         max_concurrency: 1,
       };
@@ -990,6 +991,16 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           <div className="w-full max-w-md rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Users size={16} /> New team</h3>
             <Input className="mb-3" placeholder="team name" value={teamName} onChange={(e) => setTeamName(e.target.value)} autoFocus />
+            <label className="mb-3 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+              permission mode
+              <Select className="w-40" value={teamMode} onChange={(e) => setTeamMode(e.target.value)}
+                title="Kernel permission mode applied to every member: default (ask), approved (auto-accept edits), bypass (no prompts), plan (read-only until approved)">
+                <option value="default">default — ask on each tool</option>
+                <option value="approved">approved — auto-accept edits</option>
+                <option value="bypass">bypass — no prompts</option>
+                <option value="plan">plan — read-only</option>
+              </Select>
+            </label>
             <p className="mb-2 text-xs font-medium text-zinc-500">Members — pick from configured workers</p>
             {teamWorkers.filter((w) => w.enabled).length === 0 && (
               <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">no workers configured — add one on the Agents page first</p>

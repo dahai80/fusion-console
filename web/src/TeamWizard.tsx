@@ -20,6 +20,14 @@ const STEPS: { id: StepId; label: string; icon: typeof Users }[] = [
 // Kernel _VALID_MODES (fusion_harness/team.py) — the dropdown can only
 // produce valid values, but the check text stays for the review step.
 const PERMISSION_MODES = ["bypass", "approved", "default", "plan"];
+// Console worker modes (claude CLI) map to kernel roster modes.
+const WORKER_MODE_MAP: Record<string, string> = {
+  default: "default",
+  acceptEdits: "approved",
+  bypassPermissions: "bypass",
+  plan: "plan",
+};
+const workerKernelMode = (mode?: string) => (mode && WORKER_MODE_MAP[mode]) || "default";
 const MEMBER_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
 type MemberDraft = {
@@ -211,7 +219,7 @@ export default function TeamWizard({ onCreated, onCancel }: { onCreated: (team: 
         role: w.agent,
         skills: "",
         tool_allowlist: "",
-        permission_mode: w.permission_mode || "default",
+        permission_mode: workerKernelMode(w.permission_mode),
         budget_tokens: 50000,
         max_concurrency: 1,
       },
