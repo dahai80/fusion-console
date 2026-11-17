@@ -91,7 +91,7 @@ func TestProviderEnv(t *testing.T) {
 		{Agent: "fusion-code", Enabled: true},
 	}
 
-	env, model := s.providerEnv("claude", s.workerConfig("claude"))
+	env, model, _ := s.providerEnv("claude", s.workerConfig("claude"))
 	if env == nil || env["ANTHROPIC_BASE_URL"] != "https://anth.example" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-test-anthropic" || env["ANTHROPIC_MODEL"] != "claude-sonnet-5-5" {
 		t.Fatalf("anthropic env wrong: %v", env)
 	}
