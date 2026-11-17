@@ -336,6 +336,7 @@ function ChatPage() {
   // hidden below md/lg — on phones they open as overlay drawers instead.
   const [convDrawer, setConvDrawer] = useState(false);
   const [dispatchDrawer, setDispatchDrawer] = useState(false);
+  const [dispatchActive, setDispatchActive] = useState(0);
 const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -679,10 +680,10 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   return (
     <div className="flex h-full">
       {convDrawer && (
-        <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setConvDrawer(false)} />
+        <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setConvDrawer(false)} />
       )}
       <aside
-        className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white md:static md:flex md:w-64 md:shadow-none md:bg-white/40 dark:bg-zinc-900 dark:md:bg-white/40`}
+        className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-64 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-white/40`}
       >
         <div className="p-3">
           <Button variant="outline" className="w-full" onClick={newChat}>
@@ -735,7 +736,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           <button
             onClick={() => setConvDrawer(true)}
             title="Conversations"
-            className="md:hidden flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+            className="lg:hidden flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
           >
             <Menu size={16} />
           </button>
@@ -773,9 +774,14 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           <button
             onClick={() => setDispatchDrawer(true)}
             title="Dispatches"
-            className="lg:hidden ml-auto flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+            className="md:hidden ml-auto relative flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
           >
             <PanelRight size={16} />
+            {dispatchActive > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
+                {dispatchActive}
+              </span>
+            )}
           </button>
         </div>
 
@@ -904,6 +910,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         </div>
       </div>
       <DispatchPanel
+          onRunningCount={setDispatchActive}
         onOpen={(c) => { setDispatchDrawer(false); openConv(c); }}
         drawerOpen={dispatchDrawer}
         onDrawerClose={() => setDispatchDrawer(false)}
@@ -915,7 +922,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
 // DispatchPanel is the right rail of the chat page: every background run
 // (run_agent background=true) grouped into running / queued / finished.
 // Clicking a finished row opens its conversation.
-function DispatchPanel({ onOpen, drawerOpen, onDrawerClose }: { onOpen: (c: Conversation) => void; drawerOpen?: boolean; onDrawerClose?: () => void }) {
+function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { onOpen: (c: Conversation) => void; drawerOpen?: boolean; onDrawerClose?: () => void; onRunningCount?: (n: number) => void }) {
   const [runs, setRuns] = useState<DispatchRun[]>([]);
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [busyWorkers, setBusyWorkers] = useState<WorkerStatus[]>([]);
@@ -941,6 +948,11 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose }: { onOpen: (c: Conv
   const running = runs.filter((r) => r.status === "running");
   const queued = runs.filter((r) => r.status === "queued");
   const finished = runs.filter((r) => r.status === "done" || r.status === "error").slice(0, 8);
+  // Report active-run count so the mobile toggle button can badge it — the
+  // panel itself is a drawer below md and its cards are not visible there.
+  useEffect(() => {
+    onRunningCount?.(running.length + queued.length);
+  }, [running.length, queued.length, onRunningCount]);
   const openRun = (r: DispatchRun) => {
     const c = convs.find((x) => x.ID === r.conversation_id);
     if (c) onOpen(c);
@@ -1038,10 +1050,10 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose }: { onOpen: (c: Conv
   return (
     <>
       {drawerOpen && (
-        <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={onDrawerClose} />
+        <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onDrawerClose} />
       )}
       <aside
-        className={`${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-72 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-zinc-900/40 p-3`}
+        className={`${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white md:static md:flex md:w-64 lg:w-72 md:shadow-none md:bg-white/40 dark:bg-zinc-900 dark:md:bg-zinc-900/40 p-3`}
       >
       <div className="flex items-center justify-between px-1 pb-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>

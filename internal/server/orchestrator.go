@@ -1078,8 +1078,9 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 		ExtraArgs:      []string{"--mcp-config", mcpFile, "--allowedTools", strings.TrimSuffix(allowed, ",")},
 	}
 	log.Printf("orchestrator: agent-brain turn conv=%d workdir=%s user=%s", convID, workdir, user)
-	s.agentRuns.Lock()
-	defer s.agentRuns.Unlock()
+	// No agentRuns lock here: background dispatches hold it for the whole
+	// run (up to the dispatch timeout), and the interactive brain must stay
+	// responsive while a worker is out. One extra claude process is fine.
 	evCh, err := ad.Run(ctx, opts)
 	if err != nil {
 		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": err.Error()})
