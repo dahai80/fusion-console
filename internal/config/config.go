@@ -465,6 +465,14 @@ func (c *Config) MergeBuiltinAgents() int {
 		found := false
 		for i := range c.Agent {
 			if c.Agent[i].Name == def.Name {
+				// One-time legacy migration: the old fusion-code seed pointed
+				// at the "fusion" CLI wrapper; the current product ships the
+				// "fusion-code" binary (brew/install.sh). Only the untouched
+				// legacy value is rewritten — an explicit user override stays.
+				if def.Name == "fusion-code" && c.Agent[i].Command == "fusion" {
+					c.Agent[i].Command = def.Command
+					log.Printf("config: migrated legacy fusion-code command \"fusion\" to %q", def.Command)
+				}
 				found = true
 				break
 			}

@@ -1429,7 +1429,7 @@ function AgentsPage() {
   // installer for that CLI).
   const installerId = (name: string) => {
     const id = name.toLowerCase();
-    return ["fusion-code", "claude", "codex", "atlascode"].includes(id) ? id : "";
+    return ["fusion-code", "claude", "codex", "opencode", "atlascode"].includes(id) ? id : "";
   };
   const codeRow = (name: string) => codeSt?.agents.find((x) => x.id === installerId(name));
   return (

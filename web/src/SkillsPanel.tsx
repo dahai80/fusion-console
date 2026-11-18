@@ -28,7 +28,7 @@ const TABS: { id: SkillTab; label: string; icon: typeof FolderCheck }[] = [
     { id: "installed", label: "Installed", icon: FolderCheck },
     { id: "new", label: "New Skill", icon: PenLine },
     { id: "draft", label: "AI Draft", icon: Sparkles },
-    { id: "import", label: "Import from GitHub", icon: Upload },
+    { id: "import", label: "Import", icon: Upload },
 ];
 
 // SkillsPanel manages the SKILL.md directories headless workers load:
@@ -54,6 +54,7 @@ export function SkillsPanel() {
     const [importSource, setImportSource] = useState("");
 const [importKind, setImportKind] = useState<"github" | "local">("github");
 const [localPath, setLocalPath] = useState("");
+const [skillQuery, setSkillQuery] = useState("");
 
     const load = useCallback(() => {
         api.skills(repo || undefined).then((r) => setSkills(r.skills ?? [])).catch((e) => setErr((e as Error).message));
@@ -172,9 +173,21 @@ const [localPath, setLocalPath] = useState("");
 
             {tab === "installed" && (
                 <div className="space-y-2">
-                    <p className="text-xs font-medium text-zinc-500">Installed skills ({skills.length})</p>
+                    <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium text-zinc-500">Installed skills ({skills.length})</p>
+                        <Input
+                            value={skillQuery}
+                            onChange={(e) => setSkillQuery(e.target.value)}
+                            placeholder="Filter by name or description"
+                            className="h-8 w-56 text-xs"
+                        />
+                    </div>
                     <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
-                        {skills.map((s) => (
+                        {skills.filter((s) => {
+                            const q = skillQuery.trim().toLowerCase();
+                            if (!q) return true;
+                            return s.name.toLowerCase().includes(q) || (s.description || "").toLowerCase().includes(q) || s.path.toLowerCase().includes(q);
+                        }).map((s) => (
                             <Card key={s.path} className="flex items-center justify-between p-3 text-sm">
                                 <div className="min-w-0">
                                     <p className="font-medium flex items-center gap-2">
@@ -251,8 +264,8 @@ const [localPath, setLocalPath] = useState("");
                 <Card className="space-y-3 p-4">
                     <h3 className="font-medium flex items-center gap-2"><Upload size={16} /> Import skill</h3>
                     <Select value={importKind} onChange={(e) => setImportKind(e.target.value as "github" | "local")} className="w-44">
-                        <option value="github">from GitHub</option>
-                        <option value="local">from local directory</option>
+                        <option value="github">GitHub repo</option>
+                        <option value="local">Local directory</option>
                     </Select>
                     {importKind === "github" ? (
                         <>

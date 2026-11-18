@@ -362,7 +362,7 @@ func (s *Store) UsageDashboard(user, rangeID string) (map[string]any, error) {
 	        CASE WHEN source LIKE 'agent:%' THEN 'worker' ELSE 'brain' END AS role,
 	        COUNT(*) AS calls, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
 	        ROUND(SUM(cost_usd), 4) AS cost_usd
-	      FROM cost_log WHERE user = ?`
+	      FROM cost_log WHERE user = ? OR user = 'mcp-brain'`
 	args := []any{user}
 	if cutoff != "" {
 		q += ` AND substr(created_at, 1, 10) >= ?`
