@@ -179,12 +179,21 @@ func (s *Server) handleTeamOp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	// The daemon's teams.* dispatchers return {"status":"error","message":...}
-	// as a successful RPC result — surface it as a failure, never silent.
-	if res["status"] == "error" {
-		msg, _ := res["message"].(string)
-		log.Printf("server: team op %s rejected: %s", in.Op, msg)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": msg})
+	// The daemon's teams.* dispatchers return {"status":"error", ...} with a
+	// structured reason_code payload (issue #747) as a successful RPC result
+	// — surface it as a failure with the code intact, never silent.
+	res, err = teamResult(res)
+	if err != nil {
+		te := err.(*teamRPCError)
+		log.Printf("server: team op %s rejected (%s): %s", in.Op, te.Code, te.Message)
+		body := map[string]any{"error": te.Message}
+		if te.Code != "" {
+			body["reason_code"] = te.Code
+		}
+		if te.Hint != "" {
+			body["hint"] = te.Hint
+		}
+		writeJSON(w, http.StatusBadGateway, body)
 		return
 	}
 	log.Printf("server: team op %s executed (team=%s task=%s)", in.Op, in.Team, in.TaskID)
@@ -220,9 +229,9 @@ func (s *Server) teamSend(team, from, to, body, msgType, replyTo string, mention
 	if err != nil {
 		return "", "", err
 	}
-	if res["status"] == "error" {
-		msg, _ := res["message"].(string)
-		return "", "", fmt.Errorf("%s", msg)
+	res, err = teamResult(res)
+	if err != nil {
+		return "", "", err
 	}
 	msgID, _ := res["msg_id"].(string)
 	return msgID, to, nil
@@ -242,9 +251,9 @@ func (s *Server) teamInbox(team, member string) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res["status"] == "error" {
-		msg, _ := res["message"].(string)
-		return nil, fmt.Errorf("%s", msg)
+	res, err = teamResult(res)
+	if err != nil {
+		return nil, err
 	}
 	raw, ok := res["messages"].([]any)
 	if !ok {

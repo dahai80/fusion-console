@@ -99,6 +99,35 @@ func teamRPC(socketPath, jwt, method string, params map[string]any) (map[string]
 	return resp.Result, nil
 }
 
+// teamRPCError carries the daemon's structured error payload (issue #747):
+// a stable reason_code, the internal message, and the operator-facing hint.
+// Code is empty for legacy daemons that only return {"status":"error"}.
+type teamRPCError struct {
+	Code    string
+	Message string
+	Hint    string
+}
+
+func (e *teamRPCError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("%s: %s", e.Code, e.Message)
+	}
+	return e.Message
+}
+
+// teamResult inspects a daemon result map: the teams.* dispatchers return
+// {"status":"error", ...} as a *successful* RPC result, so every caller must
+// route results through here to have failures surfaced as *teamRPCError.
+func teamResult(res map[string]any) (map[string]any, error) {
+	if res == nil || res["status"] != "error" {
+		return res, nil
+	}
+	msg, _ := res["message"].(string)
+	code, _ := res["reason_code"].(string)
+	hint, _ := res["hint"].(string)
+	return res, &teamRPCError{Code: code, Message: msg, Hint: hint}
+}
+
 // teamEnsureJWT exchanges the configured apikey for a daemon JWT (cached).
 func (s *Server) teamEnsureJWT() (string, error) {
 	s.team.mu.Lock()
