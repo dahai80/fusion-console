@@ -28,7 +28,7 @@ const TABS: { id: SkillTab; label: string; icon: typeof FolderCheck }[] = [
     { id: "installed", label: "Installed", icon: FolderCheck },
     { id: "new", label: "New Skill", icon: PenLine },
     { id: "draft", label: "AI Draft", icon: Sparkles },
-    { id: "import", label: "Import from GitHub", icon: Upload },
+    { id: "import", label: "Import", icon: Upload },
 ];
 
 // SkillsPanel manages the SKILL.md directories headless workers load:
@@ -264,8 +264,8 @@ const [skillQuery, setSkillQuery] = useState("");
                 <Card className="space-y-3 p-4">
                     <h3 className="font-medium flex items-center gap-2"><Upload size={16} /> Import skill</h3>
                     <Select value={importKind} onChange={(e) => setImportKind(e.target.value as "github" | "local")} className="w-44">
-                        <option value="github">from GitHub</option>
-                        <option value="local">from local directory</option>
+                        <option value="github">GitHub repo</option>
+                        <option value="local">Local directory</option>
                     </Select>
                     {importKind === "github" ? (
                         <>
