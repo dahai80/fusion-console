@@ -193,6 +193,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	user0 := s.auth.User(r)
 	var convProv, convModel string
 	var fallbackNotice string
+	var model string
 	prov, ok := s.providerByID(req.ProviderID)
 	if ok {
 		model = prov.DefaultModel()
@@ -239,10 +240,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Chat model resolution (design v2): request override > conversation's
-	// stored choice > global chat default > provider default. The resolved
-	// choice is persisted on the conversation so it carries across sessions.
-	model := strings.TrimSpace(req.Model)
+	// Chat model resolution (design v2): request override > brain default
+	// (already seeded above) > conversation's stored choice > global chat
+	// default > provider default. The resolved choice is persisted on the
+	// conversation so it carries across sessions.
+	if m := strings.TrimSpace(req.Model); m != "" {
+		model = m
+	}
 	if model == "" && convModel != "" && (convProv == "" || convProv == prov.ID) {
 		model = strings.TrimSpace(convModel)
 	}
