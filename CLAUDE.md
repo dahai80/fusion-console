@@ -25,7 +25,8 @@ make vet / fmt    # go vet / gofmt
 
 ./scripts/build-web.sh   # SPA only (required before go build; embed needs webdist)
 ./scripts/package.sh vNX # release packages; bundle the matching fusion-gateway binary
-./scripts/start.sh       # start gateway+console, open default browser with one-time auto-login
+./scripts/start.sh       # console service lifecycle: start|stop|status|restart [--open]
+./scripts/startup.sh     # release/bootstrap: gateway+console, browser auto-login
 ```
 
 Run: `./bin/fusion-console` → `http://127.0.0.1:11480` (port registered in
