@@ -470,6 +470,64 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     return () => clearInterval(t);
   }, [active?.ID, active?.Kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Team banner: roster of the open team conversation + the daemon's
+  // registered agents for the add-member picker. Reloads on switch/edit.
+  const [teamRoster, setTeamRoster] = useState<string[]>([]);
+  const [teamPanelOpen, setTeamPanelOpen] = useState(false);
+  const [teamAgentList, setTeamAgentList] = useState<Record<string, any>[]>([]);
+  const [teamAddPick, setTeamAddPick] = useState("");
+  const [teamPanelBusy, setTeamPanelBusy] = useState(false);
+  const loadTeamRoster = useCallback(async (name: string) => {
+    try {
+      const r = await api.teamView(name);
+      setTeamRoster((r.roster ?? []).map((m) => String(m.name || m.agent_id || "")).filter(Boolean));
+    } catch { setTeamRoster([]); }
+  }, []);
+  useEffect(() => {
+    setTeamPanelOpen(false);
+    if (active?.Kind !== "team" || !active.AgentName) { setTeamRoster([]); return; }
+    loadTeamRoster(active.AgentName);
+  }, [active?.ID, active?.Kind, active?.AgentName, loadTeamRoster]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Brain indicator chip: read-only view of the chat brain configured under
+  // Agents -> Workers -> Brain. Editing lives there (single owner).
+  const [brainLabel, setBrainLabel] = useState("");
+  useEffect(() => {
+    api.orchestration().then((r) => {
+      const o = r.orchestrator ?? {};
+      const prov = String(o.brain_provider_id || "gateway default");
+      const mdl = String(o.brain_model || "");
+      setBrainLabel(mdl ? `${prov} · ${mdl}` : prov);
+    }).catch(() => setBrainLabel(""));
+  }, []);
+  const openTeamPanel = async () => {
+    setTeamPanelOpen((v) => !v);
+    if (!teamPanelOpen) {
+      api.teamAgents().then((r) => setTeamAgentList(r.agents ?? [])).catch(() => setTeamAgentList([]));
+    }
+  };
+  const addTeamMember = async () => {
+    if (!teamAddPick || !active?.AgentName) return;
+    const a = teamAgentList.find((x) => String(x.agent_id || x.name || "") === teamAddPick);
+    const nm = String(a?.name || teamAddPick);
+    setTeamPanelBusy(true);
+    try {
+      await api.teamOp({
+        op: "register_member",
+        agent_id: teamAddPick,
+        name: nm,
+        team: active.AgentName,
+        status: "idle",
+        capabilities: Array.isArray(a?.capabilities) ? a.capabilities.map(String) : [],
+      });
+      setTeamAddPick("");
+      await loadTeamRoster(active.AgentName);
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setTeamPanelBusy(false);
+    }
+  };
+
   const openTeamChat = async (name: string) => {
     setConvDrawer(false);
     const existing = convs.find((c) => c.Kind === "team" && c.AgentName === name);
@@ -719,24 +777,36 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       {convDrawer && (
         <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setConvDrawer(false)} />
       )}
+      {/* Leftmost vertical rail: Chats / Teams switcher. Clicking an icon
+          swaps the history column beside it — no top tabs. */}
+      <div className="flex w-12 shrink-0 flex-col items-center gap-1.5 border-r border-zinc-200/80 bg-zinc-100/60 py-3 dark:border-zinc-800 dark:bg-zinc-900/60">
+        <button
+          onClick={() => setSideTab("chat")}
+          title="Chats"
+          className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
+            sideTab === "chat"
+              ? "bg-indigo-600 text-white shadow-sm"
+              : "text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-600 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-300"
+          }`}
+        >
+          <MessageSquare size={17} />
+        </button>
+        <button
+          onClick={() => setSideTab("team")}
+          title="Teams"
+          className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
+            sideTab === "team"
+              ? "bg-indigo-600 text-white shadow-sm"
+              : "text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-600 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-300"
+          }`}
+        >
+          <Users size={17} />
+        </button>
+      </div>
       <aside
         className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-64 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-zinc-900/40`}
       >
-        <div className="p-3 space-y-2">
-          <div className="grid grid-cols-2 gap-1 rounded-xl bg-zinc-200/60 p-1 text-xs dark:bg-zinc-800/60">
-            <button
-              onClick={() => setSideTab("chat")}
-              className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 ${sideTab === "chat" ? "bg-white shadow-sm text-indigo-600 dark:bg-zinc-900 dark:text-indigo-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
-            >
-              <MessageSquare size={13} /> Chats
-            </button>
-            <button
-              onClick={() => setSideTab("team")}
-              className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 ${sideTab === "team" ? "bg-white shadow-sm text-indigo-600 dark:bg-zinc-900 dark:text-indigo-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
-            >
-              <Users size={13} /> Teams
-            </button>
-          </div>
+        <div className="p-3">
           {sideTab === "chat" ? (
             <Button variant="outline" className="w-full" onClick={newChat}>
               <Plus size={14} /> New chat
@@ -822,6 +892,54 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       </aside>
 
       <div className="flex flex-1 flex-col min-w-0">
+        {active?.Kind === "team" && (
+          <div className="border-b border-zinc-200/80 dark:border-zinc-800 bg-indigo-500/5 px-4 py-2">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400" title="Team conversation — each message assigns a task to the team; replies appear here via inbox polling">
+                <Users size={15} /> team: {active.AgentName}
+              </span>
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                {teamRoster.map((m) => (
+                  <span key={m} className="rounded-lg border border-zinc-200/80 bg-white px-2 py-0.5 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">{m}</span>
+                ))}
+                {teamRoster.length === 0 && <span className="text-xs text-zinc-400">no roster yet</span>}
+              </div>
+              <button
+                onClick={openTeamPanel}
+                title="Manage members"
+                className="ml-auto flex items-center gap-1 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 hover:text-indigo-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-indigo-400"
+              >
+                <Pencil size={13} /> members
+              </button>
+            </div>
+            {teamPanelOpen && (
+              <div className="mt-2 space-y-2 rounded-xl border border-zinc-200/80 bg-white p-3 text-sm dark:border-zinc-700 dark:bg-zinc-900">
+                <p className="text-xs font-medium text-zinc-500">Members ({teamRoster.length})</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {teamRoster.map((m) => (
+                    <span key={m} className="rounded-lg bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">{m}</span>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={teamAddPick}
+                    onChange={(e) => setTeamAddPick(e.target.value)}
+                    className="rounded-lg border border-zinc-200/80 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+                  >
+                    <option value="">add member from daemon agents…</option>
+                    {teamAgentList.map((a) => {
+                      const id = String(a.agent_id || a.name || "");
+                      return <option key={id} value={id}>{String(a.name || id)} ({id})</option>;
+                    })}
+                  </select>
+                  <Button onClick={addTeamMember} disabled={!teamAddPick || teamPanelBusy}>
+                    {teamPanelBusy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Add
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
           <button
             onClick={() => setConvDrawer(true)}
@@ -830,11 +948,6 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           >
             <Menu size={16} />
           </button>
-          {active?.Kind === "team" && (
-            <span className="flex items-center gap-1.5 rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-2.5 py-1.5 text-xs text-indigo-500" title="Team conversation — each message assigns a task to the team; replies appear here via inbox polling">
-              <Users size={14} /> team: {active.AgentName}
-            </span>
-          )}
           <button
             onClick={() => setOrchestrate((v) => !v)}
             title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
@@ -846,6 +959,14 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           >
             <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
           </button>
+          {brainLabel && (
+            <span
+              title={`Chat brain: ${brainLabel} — change it under Agents > Workers > Brain`}
+              className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+            >
+              <Brain size={14} className="text-indigo-500" /> Brain
+            </span>
+          )}
           <button
             onClick={() => setDispatchDrawer(true)}
             title="Dispatches"
