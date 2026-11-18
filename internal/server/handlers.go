@@ -615,10 +615,21 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		AgentType       string  `json:"agent_type,omitempty"`
 	}
 	out := []agentInfo{}
+	// Detect() probes a subprocess per call; dozens of workers share one
+	// CLI, so cache per agent type for this request.
+	detectCache := map[string]bool{}
+	detectOnce := func(agentType string, ad agent.Adapter) bool {
+		if v, ok := detectCache[agentType]; ok {
+			return v
+		}
+		v := ad.Detect()
+		detectCache[agentType] = v
+		return v
+	}
 	for name, ad := range s.agents {
 		st := s.agentSettings(name)
 		out = append(out, agentInfo{
-			Name: name, Command: ad.Name(), Detected: ad.Detect(),
+			Name: name, Command: ad.Name(), Detected: detectOnce(name, ad),
 			PermissionMode: st.PermissionMode, MaxBudgetUSD: st.MaxBudgetUSD,
 			Model: st.Model, Protocol: st.Protocol, MaxBudgetTokens: st.MaxBudgetTokens,
 			ProviderID: st.ProviderID,
@@ -651,7 +662,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			providerID = st.ProviderID
 		}
 		out = append(out, agentInfo{
-			Name: wk.Name, Command: ad.Name(), Detected: ad.Detect(),
+			Name: wk.Name, Command: ad.Name(), Detected: detectOnce(wk.Agent, ad),
 			PermissionMode: st.PermissionMode, MaxBudgetUSD: budget,
 			Model: model, Protocol: st.Protocol, MaxBudgetTokens: st.MaxBudgetTokens,
 			ProviderID: providerID,
@@ -1036,14 +1047,21 @@ func (s *Server) handleWorkersStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []map[string]any{}
+	// Detect() spawns a `--version` subprocess per call; with one CLI shared
+	// by dozens of workers that dominated the request latency. Cache per
+	// agent type for this request.
+	detectedCache := map[string]bool{}
 	for _, w := range s.cfg.Orchestrator.Workers {
 		id := w.Name
 		if id == "" {
 			id = w.Agent // legacy entries are cost-tracked under the agent type
 		}
-		detected := false
-		if ad, ok := s.agents[w.Agent]; ok {
-			detected = ad.Detect()
+		detected, cached := detectedCache[w.Agent]
+		if !cached {
+			if ad, ok := s.agents[w.Agent]; ok {
+				detected = ad.Detect()
+			}
+			detectedCache[w.Agent] = detected
 		}
 		row := map[string]any{
 			"name": id, "agent": w.Agent, "enabled": w.Enabled, "detected": detected,
