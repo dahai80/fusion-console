@@ -52,6 +52,8 @@ export function SkillsPanel() {
     const [draftHint, setDraftHint] = useState("");
     const [draftText, setDraftText] = useState("");
     const [importSource, setImportSource] = useState("");
+const [importKind, setImportKind] = useState<"github" | "local">("github");
+const [localPath, setLocalPath] = useState("");
 
     const load = useCallback(() => {
         api.skills(repo || undefined).then((r) => setSkills(r.skills ?? [])).catch((e) => setErr((e as Error).message));
@@ -121,6 +123,22 @@ export function SkillsPanel() {
                 review: { source: r.url, warnings: r.warnings ?? [], missing: r.missing_files ?? [] },
             });
             setMsg(`imported from ${source} — review before saving`);
+        } catch (ex) {
+            setErr((ex as Error).message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const importLocal = async (path: string) => {
+        if (!path.trim()) return;
+        setBusy(true); setMsg(""); setErr("");
+        try {
+            const r = await api.localImportSkill(path.trim());
+            openEditor({ ...r.doc, name: r.doc.name || path.trim().split("/").filter(Boolean).pop() || "" }, {
+                review: { source: r.url, warnings: r.warnings ?? [], missing: r.missing_files ?? [] },
+            });
+            setMsg(`read from ${path.trim()} — review before saving`);
         } catch (ex) {
             setErr((ex as Error).message);
         } finally {
@@ -231,19 +249,35 @@ export function SkillsPanel() {
 
             {tab === "import" && (
                 <Card className="space-y-3 p-4">
-                    <h3 className="font-medium flex items-center gap-2"><Upload size={16} /> Import from GitHub</h3>
-                    <div className="flex gap-2">
-                        <Input className="flex-1" placeholder="owner/repo or owner/repo/path (SKILL.md is fetched)" value={importSource} onChange={(e) => setImportSource(e.target.value)} />
-                        <Button onClick={() => importSkill(importSource)} disabled={busy || !importSource.trim()}>Fetch</Button>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                        {CURATED.map((c) => (
-                            <button key={c.source} onClick={() => { setImportSource(c.source); importSkill(c.source); }} disabled={busy}
-                                className="rounded-lg border border-zinc-200/80 px-2 py-1 text-xs text-zinc-500 hover:border-indigo-400 hover:text-indigo-600 dark:border-zinc-800 dark:hover:text-indigo-400">
-                                {c.label}
-                            </button>
-                        ))}
-                    </div>
+                    <h3 className="font-medium flex items-center gap-2"><Upload size={16} /> Import skill</h3>
+                    <Select value={importKind} onChange={(e) => setImportKind(e.target.value as "github" | "local")} className="w-44">
+                        <option value="github">from GitHub</option>
+                        <option value="local">from local directory</option>
+                    </Select>
+                    {importKind === "github" ? (
+                        <>
+                            <div className="flex gap-2">
+                                <Input className="flex-1" placeholder="owner/repo or owner/repo/path (SKILL.md is fetched)" value={importSource} onChange={(e) => setImportSource(e.target.value)} />
+                                <Button onClick={() => importSkill(importSource)} disabled={busy || !importSource.trim()}>Fetch</Button>
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                                {CURATED.map((c) => (
+                                    <button key={c.source} onClick={() => { setImportSource(c.source); importSkill(c.source); }} disabled={busy}
+                                        className="rounded-lg border border-zinc-200/80 px-2 py-1 text-xs text-zinc-500 hover:border-indigo-400 hover:text-indigo-600 dark:border-zinc-800 dark:hover:text-indigo-400">
+                                        {c.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <p className="text-xs text-zinc-500">Reads <code>SKILL.md</code> from an absolute directory on this host — review, then save to install.</p>
+                            <div className="flex gap-2">
+                                <Input className="flex-1" placeholder="/absolute/path/to/skill-directory" value={localPath} onChange={(e) => setLocalPath(e.target.value)} />
+                                <Button onClick={() => importLocal(localPath)} disabled={busy || !localPath.trim()}>Read &amp; review</Button>
+                            </div>
+                        </>
+                    )}
                 </Card>
             )}
         </div>
