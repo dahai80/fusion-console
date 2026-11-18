@@ -9,6 +9,7 @@ import {
   Cpu,
   Brain,
   ChevronDown,
+  ChevronRight,
   XCircle,
   LayoutDashboard,
   LogOut,
@@ -34,6 +35,7 @@ import {
   Download,
   ExternalLink,
   Database,
+  FileText,
   Users,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -484,6 +486,42 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     if (active?.Kind !== "team" || !active.AgentName) { setTeamRoster([]); return; }
     loadTeamRoster(active.AgentName);
   }, [active?.ID, active?.Kind, active?.AgentName, loadTeamRoster]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Team SPEC panel (issue #41): the group-chat entry point for the shared
+  // SPEC.md. Read via teams.spec_read; edits persist through teams.spec_write
+  // (human-direct write path, v1). A failed read (no SPEC yet) still allows
+  // writing the first version.
+  const [specPanelOpen, setSpecPanelOpen] = useState(false);
+  const [specText, setSpecText] = useState("");
+  const [specBusy, setSpecBusy] = useState(false);
+  const [specErr, setSpecErr] = useState("");
+  const openSpecPanel = async () => {
+    if (!active?.AgentName) return;
+    setSpecPanelOpen(true);
+    setSpecBusy(true);
+    setSpecErr("");
+    try {
+      const r = await api.teamOp({ op: "spec_read", team: active.AgentName });
+      setSpecText(String(r.spec ?? ""));
+    } catch (e) {
+      setSpecText("");
+      setSpecErr((e as Error).message);
+    } finally {
+      setSpecBusy(false);
+    }
+  };
+  const saveSpec = async () => {
+    if (!active?.AgentName || !specText.trim()) return;
+    setSpecBusy(true);
+    setSpecErr("");
+    try {
+      await api.teamOp({ op: "spec_write", team: active.AgentName, text: specText });
+      setSpecPanelOpen(false);
+    } catch (e) {
+      setSpecErr((e as Error).message);
+    } finally {
+      setSpecBusy(false);
+    }
+  };
   // Brain indicator chip: read-only view of the chat brain configured under
   // Agents -> Workers -> Brain. Editing lives there (single owner).
   const [brainLabel, setBrainLabel] = useState("");
@@ -560,10 +598,27 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const [teamErr, setTeamErr] = useState("");
   const [teamCreating, setTeamCreating] = useState(false);
   const [teamMode, setTeamMode] = useState("default");
+  // Initial SPEC (issue #41): optional textarea, collapsed by default —
+  // passed through to teams.register, the daemon seeds SPEC.md with it.
+  const [teamSpec, setTeamSpec] = useState("");
+  const [teamSpecOpen, setTeamSpecOpen] = useState(false);
   useEffect(() => {
     if (!teamModalOpen) return;
     api.orchestration().then((r) => setTeamWorkers(r.orchestrator?.workers ?? [])).catch(() => setTeamWorkers([]));
   }, [teamModalOpen]);
+  // Member context mapping (issue #41): the register payload carries a
+  // resident per-member context derived from the worker config (role
+  // description + key conventions). Console never reads filesystems for
+  // this — workers have no per-worker AGENTS.md semantics.
+  const workerContext = (w: WorkerSettings | undefined, wn: string): string =>
+    [
+      w?.agent ? `Role: ${w.agent} worker (${wn})` : `Role: team member (${wn})`,
+      w?.model ? `Model: ${w.model}` : "",
+      w?.repo ? `Repo: ${w.repo}${w.repo_branch ? ` @ ${w.repo_branch}` : ""}` : "",
+      w?.isolation ? `Isolation: ${w.isolation}` : "",
+      w?.memory ? `Memory: ${w.memory}` : "",
+      w?.work_dir ? `Workdir: ${w.work_dir}` : "",
+    ].filter(Boolean).join("\n");
   const createTeam = async () => {
     const nm = teamName.trim();
     if (!nm) { setTeamErr("team name required"); return; }
@@ -573,10 +628,13 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         name: (w?.name || w?.agent || wn).replace(/[^A-Za-z0-9_-]/g, "-"),
         role: w?.agent || "",
         skills: [] as string[],
-        tool_allowlist: [] as string[],
+        // file_read by default (issue #41): members without it cannot read
+        // the full SPEC.md and degrade to the injected section only.
+        tool_allowlist: ["file_read"] as string[],
         permission_mode: teamMode,
         budget_tokens: 50000,
         max_concurrency: 1,
+        context: workerContext(w, wn),
       };
     });
     if (members.length === 0) { setTeamErr("pick at least one worker"); return; }
@@ -586,10 +644,13 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       await api.teamCreate({
         team: { name: nm, namespace_key: nm, members, lead_budget_tokens: 200000, playbook: false, max_depth: 2, metadata: {} },
         tasks: [], lead_start: false, lead_goal: "",
+        spec: teamSpec.trim(),
       });
       setTeamModalOpen(false);
       setTeamName("");
       setTeamPicked([]);
+      setTeamSpec("");
+      setTeamSpecOpen(false);
       await openTeamChat(nm);
     } catch (ex) {
       setTeamErr((ex as Error).message);
@@ -947,9 +1008,16 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                 {teamRoster.length === 0 && <span className="text-xs text-zinc-400">no roster yet</span>}
               </div>
               <button
+                onClick={openSpecPanel}
+                title="View / edit the team SPEC.md (shared conventions injected into every member turn)"
+                className="ml-auto flex items-center gap-1 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 hover:text-indigo-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-indigo-400"
+              >
+                <FileText size={13} /> SPEC
+              </button>
+              <button
                 onClick={openTeamPanel}
                 title="Manage members"
-                className="ml-auto flex items-center gap-1 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 hover:text-indigo-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-indigo-400"
+                className="flex items-center gap-1 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 hover:text-indigo-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-indigo-400"
               >
                 <Pencil size={13} /> members
               </button>
@@ -988,6 +1056,27 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                     <Button onClick={addTeamMembers} disabled={teamPickAdd.length === 0 || teamPanelBusy}>
                       {teamPanelBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
                       Add {teamPickAdd.length > 0 ? `${teamPicked.length} member${teamPicked.length > 1 ? "s" : ""}` : "members"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {specPanelOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !specBusy && setSpecPanelOpen(false)}>
+                <div className="w-full max-w-2xl rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+                  <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold"><FileText size={16} /> Team SPEC — {active.AgentName}</h3>
+                  <p className="mb-3 text-xs text-zinc-400">Shared conventions injected into every member turn; members also read the full file with file_read. Saving writes SPEC.md on the daemon.</p>
+                  {specErr && <p className="mb-2 text-sm text-red-500">{specErr}</p>}
+                  {specBusy && !specText ? (
+                    <p className="mb-3 flex items-center gap-1.5 text-sm text-zinc-400"><Loader2 size={14} className="animate-spin" /> loading…</p>
+                  ) : (
+                    <Textarea rows={14} value={specText} onChange={(e) => setSpecText(e.target.value)}
+                      className="font-mono text-xs" placeholder="# SPEC" />
+                  )}
+                  <div className="mt-3 flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setSpecPanelOpen(false)} disabled={specBusy}>Cancel</Button>
+                    <Button onClick={saveSpec} disabled={specBusy || !specText.trim()}>
+                      {specBusy ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} Save SPEC
                     </Button>
                   </div>
                 </div>
@@ -1175,6 +1264,22 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                 <option value="plan">plan — read-only</option>
               </Select>
             </label>
+            <div className="mb-3">
+              <button
+                onClick={() => setTeamSpecOpen(!teamSpecOpen)}
+                className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-indigo-600 dark:text-zinc-400 dark:hover:text-indigo-400"
+              >
+                {teamSpecOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                Initial SPEC (optional)
+              </button>
+              {teamSpecOpen && (
+                <>
+                  <p className="mb-1 mt-1 text-xs text-zinc-400">Team conventions seeded into SPEC.md at creation — role boundaries, interfaces, delivery norms. Members read it every turn.</p>
+                  <Textarea rows={4} value={teamSpec} onChange={(e) => setTeamSpec(e.target.value)}
+                    placeholder="# SPEC&#10;## Roles&#10;## Conventions&#10;## Interfaces" />
+                </>
+              )}
+            </div>
             <p className="mb-2 text-xs font-medium text-zinc-500">Members — pick from configured workers</p>
             {teamWorkers.filter((w) => w.enabled).length === 0 && (
               <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">no workers configured — add one on the Agents page first</p>

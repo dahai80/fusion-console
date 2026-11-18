@@ -16,7 +16,10 @@ import (
 )
 
 // teamCreateMember mirrors the kernel TeamMember field names exactly — the
-// wizard's review step shows this payload verbatim.
+// wizard's review step shows this payload verbatim. Context is the resident
+// per-member brief (issue #41): the harness injects it as [member context]
+// into every member turn, so it carries the worker's role description and
+// key conventions instead of relying on the lead restating them each round.
 type teamCreateMember struct {
 	Name           string   `json:"name"`
 	Role           string   `json:"role"`
@@ -25,7 +28,16 @@ type teamCreateMember struct {
 	PermissionMode string   `json:"permission_mode"`
 	BudgetTokens   int64    `json:"budget_tokens"`
 	MaxConcurrency int64    `json:"max_concurrency"`
+	Context        string   `json:"context"`
 }
+
+// defaultToolAllowlist is applied to members registered without an explicit
+// allowlist (issue #41): the subagent tool registry is built only from
+// spec.tools, so an empty allowlist means no tools at all — members would
+// degrade to the injected [team spec] section with no way to read the full
+// SPEC.md. file_read is the minimum useful set (read the SPEC on demand);
+// callers can always pass a richer allowlist explicitly.
+var defaultToolAllowlist = []string{"file_read"}
 
 // teamCreateDefinition mirrors the kernel TeamDefinition field names.
 type teamCreateDefinition struct {
@@ -44,12 +56,15 @@ type teamCreateTask struct {
 	Detail string `json:"detail"`
 }
 
-// teamCreateReq is the POST /api/team/create body.
+// teamCreateReq is the POST /api/team/create body. Spec is the optional
+// initial SPEC.md text (issue #41): passed through to teams.register, the
+// daemon seeds <team state_dir>/SPEC.md with it (skeleton when empty).
 type teamCreateReq struct {
 	Team      teamCreateDefinition `json:"team"`
 	Tasks     []teamCreateTask     `json:"tasks"`
 	LeadStart bool                 `json:"lead_start"`
 	LeadGoal  string               `json:"lead_goal"`
+	Spec      string               `json:"spec"`
 }
 
 // teamTaskResult reports one add_task outcome — a rejected task is an entry
@@ -109,7 +124,8 @@ func (s *Server) teamCreateCore(in teamCreateReq) (*teamCreateRes, int, error) {
 	}
 
 	// Step 1: teams.register — the kernel validates the definition and owns
-	// the error text; the console never weakens or rewords it.
+	// the error text; the console never weakens or rewords it. Spec rides the
+	// register params (issue #41): the daemon seeds SPEC.md exactly once.
 	def := in.Team
 	if def.NamespaceKey == "" {
 		def.NamespaceKey = def.Name
@@ -117,7 +133,13 @@ func (s *Server) teamCreateCore(in teamCreateReq) (*teamCreateRes, int, error) {
 	if def.Metadata == nil {
 		def.Metadata = map[string]any{}
 	}
-	regRes, err := teamRPC(studioSocketPath(), jwt, "teams.register", map[string]any{"definition": def})
+	for i := range def.Members {
+		if len(def.Members[i].ToolAllowlist) == 0 {
+			def.Members[i].ToolAllowlist = defaultToolAllowlist
+			log.Printf("server: team create member %s/%s: empty allowlist, defaulting to file_read", def.Name, def.Members[i].Name)
+		}
+	}
+	regRes, err := teamRPC(studioSocketPath(), jwt, "teams.register", map[string]any{"definition": def, "spec": in.Spec})
 	if err != nil {
 		log.Printf("server: team create register %s: %v", def.Name, err)
 		return nil, http.StatusBadGateway, err

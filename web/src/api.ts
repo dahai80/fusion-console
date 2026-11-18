@@ -236,7 +236,7 @@ export const api = {
   teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
   teamCreate: (body: TeamCreateReq) =>
     req<TeamCreateRes>("/api/team/create", { method: "POST", body: JSON.stringify(body) }),
-  teamOp: (body: { op: string; task_id?: string; entry_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean }) =>
+  teamOp: (body: { op: string; task_id?: string; entry_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean; text?: string }) =>
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
   codeInstall: (agent: string) =>
@@ -282,6 +282,9 @@ export type TeamCreateMember = {
   permission_mode: string;
   budget_tokens: number;
   max_concurrency: number;
+  // Resident member context (issue #41): role description + key worker
+  // conventions, injected into every member turn by the harness.
+  context?: string;
 };
 
 export type TeamCreateReq = {
@@ -297,6 +300,8 @@ export type TeamCreateReq = {
   tasks: { title: string; detail: string }[];
   lead_start: boolean;
   lead_goal: string;
+  // Optional initial SPEC.md body — seeded by the daemon at register time.
+  spec?: string;
 };
 
 // One queued task's outcome — a rejected task is an entry with an error,
