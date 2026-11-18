@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team Ops — prototype</title>
+<style>
+:root {
+    --bg: #09090b; --panel: #18181b; --panel2: #1f1f23; --line: #27272a;
+    --txt: #e4e4e7; --dim: #71717a; --dim2: #a1a1aa;
+    --acc: #6366f1; --acc-soft: rgba(99,102,241,.12);
+    --ok: #34d399; --ok-soft: rgba(52,211,153,.12);
+    --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12);
+    --bad: #f87171; --bad-soft: rgba(248,113,113,.12);
+    --r: 12px;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--txt); font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; padding: 24px; }
+.wrap { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.row { display: flex; gap: 16px; flex-wrap: wrap; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+.card h3 { font-size: 13px; font-weight: 600; color: var(--dim2); display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+.grow { flex: 1 1 320px; }
+h2 { font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.badge { font-size: 11px; padding: 2px 8px; border-radius: 8px; }
+.badge.live { background: var(--ok-soft); color: var(--ok); }
+.badge.paused { background: var(--warn-soft); color: var(--warn); }
+.badge.off { background: var(--panel2); color: var(--dim); }
+.badge.acc { background: var(--acc-soft); color: var(--acc); }
+.badge.bad { background: var(--bad-soft); color: var(--bad); }
+select, input[type=text] { background: var(--panel2); color: var(--txt); border: 1px solid var(--line); border-radius: var(--r); padding: 7px 10px; font: inherit; outline: none; }
+input[type=text]:focus { border-color: var(--acc); }
+button { background: var(--acc); color: #fff; border: 0; border-radius: var(--r); padding: 7px 14px; font: inherit; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+button.ghost { background: transparent; color: var(--dim2); border: 1px solid var(--line); }
+button.ghost:hover { color: var(--txt); border-color: var(--dim); }
+button.danger { background: transparent; color: var(--bad); border: 1px solid var(--line); }
+button:disabled { opacity: .45; cursor: default; }
+.chip { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 2px 8px; font-size: 12px; color: var(--dim2); }
+.chip b { color: var(--txt); font-weight: 500; }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.dot.ok { background: var(--ok); } .dot.busy { background: var(--warn); } .dot.idle { background: var(--dim); }
+/* board */
+.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.col { background: var(--panel2); border-radius: var(--r); padding: 10px; min-height: 140px; }
+.col h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin-bottom: 8px; display: flex; justify-content: space-between; }
+.col h4 span { background: var(--panel); border-radius: 6px; padding: 0 6px; }
+.task { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px; margin-bottom: 8px; }
+.task .t { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+.task .meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--dim); }
+.task .ops { display: flex; gap: 6px; margin-top: 8px; }
+.task .ops button { padding: 3px 8px; font-size: 11px; border-radius: 8px; }
+.bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--acc); width: 42%; }
+/* stats */
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.stat { background: var(--panel2); border-radius: var(--r); padding: 8px 10px; }
+.stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+.stat .v { font-size: 16px; font-weight: 600; margin-top: 2px; }
+.stat .v.warn { color: var(--warn); } .stat .v.ok { color: var(--ok); }
+/* playbook */
+.entry { border: 1px solid var(--line); border-radius: var(--r); padding: 10px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+.entry .id { font-family: ui-monospace, monospace; font-size: 11px; color: var(--dim); }
+.entry .title { flex: 1; font-size: 13px; color: var(--dim2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.link { background: none; border: 0; color: var(--acc); padding: 0; font-size: 12px; }
+.note { font-size: 11px; color: var(--dim); }
+.proto-banner { background: var(--acc-soft); border: 1px solid var(--acc); border-radius: var(--r); padding: 8px 12px; font-size: 12px; color: var(--acc); }
+/* master-detail */
+.cols { display: flex; gap: 16px; align-items: flex-start; }
+.side { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; }
+.grp { font-size: 11px; font-weight: 600; color: var(--dim2); padding: 8px 4px 6px; cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none; }
+.grp .caret { color: var(--dim); font-size: 9px; width: 10px; }
+.grp .cnt { margin-left: auto; font-size: 10px; color: var(--dim); background: var(--panel2); border-radius: 6px; padding: 0 6px; }
+.kids { margin: 0 0 4px 9px; padding-left: 10px; border-left: 1px solid var(--line); }
+.trow { border-radius: 8px; padding: 7px 10px; margin-bottom: 2px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.trow:hover { background: var(--panel2); }
+.trow.sel { border-color: var(--acc); background: var(--acc-soft); }
+.trow b { font-size: 13px; flex: 1; }
+.detail { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <p class="proto-banner">PROTOTYPE — Teams page redesign (ops + observability only). Creation and member management live in the chat sidebar. Static mockup, no live data.</p>
+
+    <div class="head">
+        <h2>👥 Teams</h2>
+        <div style="display:flex;gap:10px;align-items:center;">
+            <span class="badge live">● live</span>
+            <span class="note">15:32:04</span>
+            <button class="ghost">↻ Refresh</button>
+        </div>
+    </div>
+
+    <div class="cols">
+    <div class="card side">
+        <h3>Teams <span class="badge off">2 live</span></h3>
+        <div class="grp"><span class="caret">▼</span><span class="dot ok"></span>Active<span class="cnt">1</span></div>
+        <div class="kids">
+            <div class="trow sel">
+                <b>ttest</b>
+                <span class="note">1▸1</span>
+            </div>
+        </div>
+        <div class="grp"><span class="caret">▼</span><span class="dot idle"></span>Paused<span class="cnt">1</span></div>
+        <div class="kids">
+            <div class="trow">
+                <b>release-crew</b>
+                <span class="note">0▸3</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="detail">
+    <div class="row">
+        <div class="card grow">
+            <h3>Health <span class="badge off">ttest</span></h3>
+            <div class="stats">
+                <div class="stat"><div class="k">budget left</div><div class="v warn">$0</div></div>
+                <div class="stat"><div class="k">running</div><div class="v">1</div></div>
+                <div class="stat"><div class="k">pending</div><div class="v">1</div></div>
+                <div class="stat"><div class="k">failures 1h</div><div class="v ok">0</div></div>
+                <div class="stat"><div class="k">queue depth</div><div class="v">0</div></div>
+                <div class="stat"><div class="k">concurrency</div><div class="v">5</div></div>
+            </div>
+        </div>
+        <div class="card grow">
+            <h3>Limits <span class="badge off">ttest</span></h3>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                <label class="note">max_concurrent <input type="text" value="5" style="width:56px;margin-left:4px"></label>
+                <label class="note">max_depth <input type="text" value="10" style="width:56px;margin-left:4px"></label>
+                <button class="ghost">Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="card grow">
+            <h3>Lifecycle &amp; roster</h3>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+                <span class="badge live">active</span>
+                <span style="flex:1"></span>
+                <button class="ghost">⏸ Pause</button>
+                <button class="danger">✕ Disband</button>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <span class="chip"><span class="dot ok"></span><b>fusion-agent-studio</b> · claude · available</span>
+                <span class="chip"><span class="dot busy"></span><b>fusion-autotest</b> · claude · working</span>
+                <span class="chip"><span class="dot idle"></span><b>fusion-bench</b> · claude · idle</span>
+                <span class="chip note" style="border-style:dashed">manage members in chat sidebar ↗</span>
+            </div>
+        </div>
+        <div class="card grow">
+            <h3>Lead loop</h3>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span class="badge acc">running · round 3</span>
+                <span class="note" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="last verdict">last verdict: ready to dispatch next task…</span>
+                <button class="ghost">■ Stop</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:10px;">
+                <input type="text" style="flex:1" placeholder="goal for the lead loop…">
+                <button>▶ Start</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Task board <span class="badge off">auto-refresh 5s</span></h3>
+        <div class="board">
+            <div class="col">
+                <h4>Pending <span>1</span></h4>
+                <div class="task">
+                    <div class="t">Fix flaky auth test in fusion-identity</div>
+                    <div class="meta"><span class="badge off">fusion-bench</span> budget $5.00</div>
+                </div>
+            </div>
+            <div class="col">
+                <h4>Running <span>1</span></h4>
+                <div class="task">
+                    <div class="t">Implement issue #48 harness comparison bench</div>
+                    <div class="meta"><span class="badge acc">fusion-bench</span> 6m12s · $0.83</div>
+                    <div class="bar"><i></i></div>
+                    <div class="ops"><button class="ghost">Cancel</button><button class="ghost">Log</button></div>
+                </div>
+            </div>
+            <div class="col">
+                <h4>Failed <span>1</span></h4>
+                <div class="task">
+                    <div class="t">Migrate legacy config keys</div>
+                    <div class="meta"><span class="badge bad">fusion-console</span> budget cap hit</div>
+                    <div class="ops"><button>↻ Rerun</button><button class="ghost">Log</button></div>
+                </div>
+            </div>
+            <div class="col">
+                <h4>Done <span>1</span></h4>
+                <div class="task">
+                    <div class="t">Fix issue #84 module-mode rewrite loop</div>
+                    <div class="meta"><span class="badge live">merged</span> 12m40s · $1.24</div>
+                    <div class="ops"><button class="ghost">Log</button></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Playbook <span class="badge off">3 entries</span></h3>
+        <div class="entry">
+            <span class="id">pb-001</span>
+            <span class="title">Always sync repo before dispatch; stale checkout caused 2 failed runs</span>
+            <button class="link">Trace</button>
+        </div>
+        <div class="entry">
+            <span class="id">pb-002</span>
+            <span class="title">Budget cap $5 too low for benchmark tasks — raise per worker type</span>
+            <button class="link">Trace</button>
+        </div>
+        <div class="entry">
+            <span class="id">pb-003</span>
+            <span class="title">Issue comments go in English; PR body needs the acceptance criteria table</span>
+            <button class="link">Trace</button>
+        </div>
+    </div>
+    </div>
+    </div>
+</div>
+</body>
+</html>
