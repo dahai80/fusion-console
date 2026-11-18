@@ -498,13 +498,22 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const openTeamPanel = async () => {
     setTeamPicked([]);
     setTeamPanelOpen(true);
-    api.teamAgents().then((r) => setTeamAgentList(r.agents ?? [])).catch(() => setTeamAgentList([]));
+    // Member picks come from the console fleet (orchestrator workers) — the
+    // same source the team-creation modal uses, so create and modify always
+    // offer the same roster candidates (never the daemon's raw agents).
+    api.orchestration()
+      .then((r) => setTeamAgentList((r.orchestrator?.workers ?? []).map((w: Record<string, any>) => ({
+        agent_id: String(w.name || w.agent),
+        name: String(w.name || w.agent),
+        enabled: w.enabled,
+      }))))
+      .catch(() => setTeamAgentList([]));
   };
   const addTeamMembers = async () => {
     if (teamPickAdd.length === 0 || !active?.AgentName) return;
     setTeamPanelBusy(true);
     try {
-      // One roster_register call per picked agent — partial failures stay
+      // One roster_register call per picked worker — partial failures stay
       // visible, the roster reloads from the daemon afterwards.
       for (const id of teamPickAdd) {
         const a = teamAgentList.find((x) => String(x.agent_id || x.name || "") === id);
@@ -923,12 +932,12 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                     ))}
                     {teamRoster.length === 0 && <span className="text-xs text-zinc-400">no roster yet</span>}
                   </div>
-                  <p className="mb-2 text-xs font-medium text-zinc-500">Agents — check to add to the team</p>
+                  <p className="mb-2 text-xs font-medium text-zinc-500">Workers — check to add to the team</p>
                   {teamAgentList.length === 0 && (
-                    <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">no agents registered on the daemon yet</p>
+                    <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">no workers configured — add them on the Dashboard Workers tab</p>
                   )}
                   <div className="mb-3 max-h-56 space-y-1 overflow-y-auto">
-                    {teamAgentList.map((a) => {
+                    {teamAgentList.filter((a) => a.enabled !== false && !teamRoster.includes(String(a.agent_id || a.name || ""))).map((a) => {
                       const id = String(a.agent_id || a.name || "");
                       const on = teamPickAdd.includes(id);
                       return (
