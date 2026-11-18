@@ -26,6 +26,7 @@ type teamOpReq struct {
 	Name           string   `json:"name"`
 	Team           string   `json:"team"`
 	Status         string   `json:"status"`
+	Text           string   `json:"text"`
 	Capabilities   []string `json:"capabilities"`
 	Goal           string   `json:"goal"`
 	MaxRounds      int      `json:"max_rounds"`
@@ -85,6 +86,19 @@ func teamOpMethod(req teamOpReq, defTeam string) (string, map[string]any, error)
 		return "teams.lead_stop", map[string]any{"team": team}, nil
 	case "lead_status":
 		return "teams.lead_status", map[string]any{"team": team}, nil
+	case "supplement":
+		// Mid-run steering (#748, issue #45 F3): the console always sends
+		// origin=operator — member-originated supplements are rejected by the
+		// daemon. Cap errors arrive as reason_code supplement_cap_reached.
+		if req.TaskID == "" {
+			return "", nil, errTeamOp("task_id required")
+		}
+		if strings.TrimSpace(req.Text) == "" {
+			return "", nil, errTeamOp("content required")
+		}
+		return "teams.supplement", map[string]any{
+			"team": team, "task_id": req.TaskID, "content": req.Text, "origin": "operator",
+		}, nil
 	case "playbook_render":
 		// Read-only playbook surface (issue #14, upstream agent-studio#733).
 		// The daemon reports "playbook disabled" / "no playbook store" via the

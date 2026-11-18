@@ -82,6 +82,19 @@ func TestTeamOpMethodMapping(t *testing.T) {
 			name: "playbook_trace missing entry", req: teamOpReq{Op: "playbook_trace"}, wantErr: "entry_id required",
 		},
 		{
+			// Mid-run steering (#748 / issue #45 F3): operator origin is fixed
+			// console-side — members can never steer, the daemon enforces roles.
+			name: "supplement", req: teamOpReq{Op: "supplement", Team: "beta", TaskID: "t1", Text: "tests only"},
+			wantMethod: "teams.supplement",
+			wantParams: map[string]any{"team": "beta", "task_id": "t1", "content": "tests only", "origin": "operator"},
+		},
+		{
+			name: "supplement missing content", req: teamOpReq{Op: "supplement", TaskID: "t1"}, wantErr: "content required",
+		},
+		{
+			name: "supplement missing task", req: teamOpReq{Op: "supplement", Text: "x"}, wantErr: "task_id required",
+		},
+		{
 			name: "cancel missing task", req: teamOpReq{Op: "cancel"}, wantErr: "task_id required",
 		},
 		{
