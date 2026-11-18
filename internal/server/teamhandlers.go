@@ -134,6 +134,17 @@ func teamOpMethod(req teamOpReq, defTeam string) (string, map[string]any, error)
 			return "", nil, errTeamOp("entry_id required")
 		}
 		return "teams.playbook_trace", map[string]any{"team": team, "entry_id": req.EntryID}, nil
+	case "spec_read":
+		// Team SPEC.md view (issue #41) — the group-chat SPEC entry point
+		// reads through here; a missing file surfaces as the daemon's error.
+		return "teams.spec_read", map[string]any{"team": team}, nil
+	case "spec_write":
+		// Human/console SPEC edit (v1 write path): text is the full new
+		// SPEC.md body; the daemon refuses writes on non-ACTIVE teams.
+		if strings.TrimSpace(req.Text) == "" {
+			return "", nil, errTeamOp("text required")
+		}
+		return "teams.spec_write", map[string]any{"team": team, "text": req.Text}, nil
 	default:
 		return "", nil, errTeamOp("unknown op: " + req.Op)
 	}
@@ -173,11 +184,15 @@ func (s *Server) handleTeamAgents(w http.ResponseWriter, r *http.Request) {
 // handleTeamOp serves POST /api/team/op — pass-through operations to the
 // daemon. Body: {"op": "cancel"|"rerun", "task_id": "..."},
 // {"op": "set_limits", "max_concurrent": N, "max_depth": N},
-// {"op": "pause"|"resume"|"disband"|"lead_stop"|"lead_status", "team": "..."}
-// or {"op": "lead_start", "team": "...", "goal": "..."}.
+// {"op": "pause"|"resume"|"disband"|"lead_stop"|"lead_status", "team": "..."},
+// {"op": "lead_start", "team": "...", "goal": "..."} or
+// {"op": "spec_read"|"spec_write", "team": "...", "text": "..."} (issue #41).
 func (s *Server) handleTeamOp(w http.ResponseWriter, r *http.Request) {
 	var in teamOpReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&in); err != nil {
+	// 256KB: spec_write carries the full SPEC.md body (issue #41) — the old
+	// 8KB op budget would truncate legit specs. Ops other than spec_write
+	// never come close; the daemon still bounds what it accepts.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}

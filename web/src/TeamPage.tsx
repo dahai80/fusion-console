@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
-import { AlarmClock, AlertTriangle, Ban, BookOpen, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
+import { AlarmClock, AlertTriangle, Ban, BookOpen, ChevronDown, ChevronRight, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
 import { api, ApiError, type LeadStatus, type TeamSnapshot } from "./api";
 import { Button, Card, Select } from "./components/ui";
 import ReasonCard from "./components/ReasonCard";
 import RunDrawer from "./components/RunDrawer";
 
-// Team view (T4b, issue #6): pure observer over the agent-studio daemon.
-// Board columns by task status, roster, health/limits, alerts, brief warnings.
-// Ops: cancel / rerun / set_limits plus lifecycle pause/resume/disband and the
-// lead loop start/stop (upstream RPCs landed in fusion-agent-studio). The
-// playbook panel (issue #14) renders from teams.playbook_render/trace and
-// hides itself for playbook:false teams. Team creation and member management
-// live in the chat sidebar team panel; this page is ops + observability only.
+// Teams view (T4b, issue #6): pure observer over the agent-studio daemon.
+// Master-detail layout (prototype docs/prototype-team-ops.html): grouped tree
+// of live teams on the left (active/paused/other, collapsible), focused team
+// ops on the right — health/limits first, then lifecycle+lead loop, roster,
+// playbook, alerts, task board. Team creation and member management live in
+// the chat sidebar team panel; this page is ops + observability only.
 const COLUMNS: { id: string; label: string }[] = [
   { id: "pending", label: "Pending" },
   { id: "running", label: "Running" },
@@ -146,7 +145,10 @@ export default function TeamPage() {
   // new team (?team= in the URL keeps the view linkable). Empty = the
   // configured default team from the cached poller snapshot.
   const [focusTeam, setFocusTeam] = useState(() => new URLSearchParams(window.location.search).get("team") || "");
-  const [liveTeams, setLiveTeams] = useState<string[]>([]);
+  // Tree nav entries: name + lifecycle for grouping. Empty name = the daemon's
+  // configured default team.
+  const [liveTeams, setLiveTeams] = useState<{ name: string; lifecycle: string }[]>([]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   // Run drawer (issue #45 F2): open over one task's replay RPCs. Hidden for
   // good once the daemon reports the run RPCs unavailable (degraded path).
   const [runDrawer, setRunDrawer] = useState<string | null>(null);
@@ -177,12 +179,14 @@ export default function TeamPage() {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, [focusTeam]);
-  // Team switcher options — the daemon's live teams (teams.list). Chat-created
-  // teams land here with the next refresh, same as wizard-created ones.
+  // Tree nav options — the daemon's live teams (teams.list) with lifecycle for
+  // grouping. Chat-created teams land here with the next refresh.
   useEffect(() => {
     const read = () =>
       api.teamTeams()
-        .then((r) => setLiveTeams((r.teams ?? []).map((x: Record<string, any>) => String(x.name || "")).filter(Boolean)))
+        .then((r) => setLiveTeams((r.teams ?? [])
+          .map((x: Record<string, any>) => ({ name: String(x.name || ""), lifecycle: String(x.lifecycle || x.status || "").toLowerCase() }))
+          .filter((t: { name: string }) => t.name)))
         .catch(() => setLiveTeams([]));
     read();
     const t = setInterval(read, 15000);
@@ -264,11 +268,20 @@ export default function TeamPage() {
     const capacity = Number(rosterRow?.max_concurrency ?? rosterRow?.concurrency ?? 0);
     return { running, queued, capacity };
   };
+  // Tree grouping: default team (focusTeam === "") rides the focused
+  // snapshot's lifecycle; listed teams carry their own.
+  const treeTeams = [{ name: "", lifecycle: (snap?.lifecycle || "").toLowerCase() }, ...liveTeams];
+  const groupOf = (lc: string) => (lc === "active" ? "active" : lc === "paused" ? "paused" : "other");
+  const GROUPS: { id: string; label: string; dot: string }[] = [
+    { id: "active", label: "Active", dot: "bg-emerald-500" },
+    { id: "paused", label: "Paused", dot: "bg-amber-500" },
+    { id: "other", label: "Other", dot: "bg-zinc-400" },
+  ];
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-6">
+    <div className="mx-auto max-w-6xl space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold flex items-center gap-2"><Users size={18} /> Team</h2>
+        <h2 className="text-lg font-semibold flex items-center gap-2"><Users size={18} /> Teams</h2>
         <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
           {snap?.connected ? (
             <span className="rounded-lg bg-emerald-500/10 px-2 py-0.5 text-emerald-600 dark:text-emerald-400">live</span>
@@ -282,34 +295,79 @@ export default function TeamPage() {
         </div>
       </div>
 
-      {/* Team switcher — every live team on the daemon (wizard- or chat-created).
-          Selection deep-links via ?team= so the view stays linkable. */}
-      {liveTeams.length > 0 && (
-        <div className="flex items-center gap-2 text-sm">
-          <label className="text-zinc-500 dark:text-zinc-400">Team</label>
-          <select
-            value={focusTeam}
-            onChange={(e) => applyFocus(e.target.value)}
-            className="rounded-xl border border-zinc-200/80 bg-white px-3 py-1.5 text-sm shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
-          >
-            <option value="">(default team)</option>
-            {liveTeams.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
       {err && <ReasonCard error={err} />}
 
-      {focusTeam && (
-        <div className="flex items-center gap-2 rounded-xl bg-indigo-500/10 px-3 py-1.5 text-sm text-indigo-600 dark:text-indigo-400">
-          <Eye size={14} /> observing <span className="font-mono">{focusTeam}</span>
-          <button onClick={() => applyFocus("")} className="ml-1 rounded p-0.5 hover:bg-indigo-500/20" title="Back to the default team">
-            <X size={12} />
-          </button>
-        </div>
-      )}
+      <div className="flex items-start gap-4">
+        {/* Left: grouped tree of live teams. Selection deep-links via ?team=
+            so the view stays linkable; groups collapse independently. */}
+        <Card className="w-60 shrink-0 p-3">
+          <h3 className="mb-1 text-sm font-medium">Teams</h3>
+          <p className="mb-1 text-xs text-zinc-400">{liveTeams.length} live</p>
+          {GROUPS.map((g) => {
+            const members = treeTeams.filter((t) => groupOf(t.lifecycle) === g.id);
+            if (members.length === 0) return null;
+            const open = !collapsed[g.id];
+            return (
+              <div key={g.id} className="mb-1">
+                <button
+                  onClick={() => setCollapsed((c) => ({ ...c, [g.id]: !!open }))}
+                  className="flex w-full items-center gap-1.5 rounded-lg px-1 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                >
+                  {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  <span className={`h-1.5 w-1.5 rounded-full ${g.dot}`} />
+                  {g.label}
+                  <span className="ml-auto tabular-nums text-zinc-400">{members.length}</span>
+                </button>
+                {open && (
+                  <div className="ml-2.5 space-y-0.5 border-l border-zinc-200/60 pl-2 dark:border-zinc-800">
+                    {members.map((t) => (
+                      <button
+                        key={t.name}
+                        onClick={() => applyFocus(t.name)}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
+                          focusTeam === t.name ? "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" : ""
+                        }`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${g.dot}`} />
+                        <span className="flex-1 truncate">{t.name || "(default team)"}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </Card>
+
+        {/* Right: focused team detail (health/limits first, per prototype). */}
+        <div className="min-w-0 flex-1 space-y-4">
+
+      {/* Health + limits */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Card className="p-4">
+          <h3 className="mb-2 text-sm font-medium">Health</h3>
+          {snap?.health ? (
+            <dl className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {Object.entries(snap.health).filter(([, v]) => typeof v !== "object").slice(0, 8).map(([k, v]) => (
+                <div key={k} className="flex gap-2"><dt className="w-32 shrink-0">{k}</dt><dd className="tabular-nums">{String(v)}</dd></div>
+              ))}
+            </dl>
+          ) : <p className="text-sm text-zinc-400">—</p>}
+        </Card>
+        <Card className="p-4">
+          <h3 className="mb-2 text-sm font-medium">Limits</h3>
+          {snap?.limits ? (
+            <dl className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {Object.entries(snap.limits).filter(([, v]) => typeof v !== "object").map(([k, v]) => (
+                <div key={k} className="flex gap-2"><dt className="w-32 shrink-0">{k}</dt><dd className="tabular-nums">{String(v)}</dd></div>
+              ))}
+            </dl>
+          ) : <p className="text-sm text-zinc-400">—</p>}
+          <Button variant="ghost" className="mt-2" onClick={() => op("set_limits")} disabled={busy !== ""}>
+            <RotateCcw size={12} /> Re-apply defaults
+          </Button>
+        </Card>
+      </div>
 
       {/* Lifecycle + lead loop controls (issue #17). Disband is the only
           destructive one — it confirms with member/open-task counts first. */}
@@ -532,31 +590,7 @@ export default function TeamPage() {
         })}
       </div>
 
-      {/* Health + limits */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Card className="p-4">
-          <h3 className="mb-2 text-sm font-medium">Health</h3>
-          {snap?.health ? (
-            <dl className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-              {Object.entries(snap.health).filter(([, v]) => typeof v !== "object").slice(0, 8).map(([k, v]) => (
-                <div key={k} className="flex gap-2"><dt className="w-32 shrink-0">{k}</dt><dd className="tabular-nums">{String(v)}</dd></div>
-              ))}
-            </dl>
-          ) : <p className="text-sm text-zinc-400">—</p>}
-        </Card>
-        <Card className="p-4">
-          <h3 className="mb-2 text-sm font-medium">Limits</h3>
-          {snap?.limits ? (
-            <dl className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-              {Object.entries(snap.limits).filter(([, v]) => typeof v !== "object").map(([k, v]) => (
-                <div key={k} className="flex gap-2"><dt className="w-32 shrink-0">{k}</dt><dd className="tabular-nums">{String(v)}</dd></div>
-              ))}
-            </dl>
-          ) : <p className="text-sm text-zinc-400">—</p>}
-          <Button variant="ghost" className="mt-2" onClick={() => op("set_limits")} disabled={busy !== ""}>
-            <RotateCcw size={12} /> Re-apply defaults
-          </Button>
-        </Card>
+      </div>
       </div>
 
       {runDrawer && (
