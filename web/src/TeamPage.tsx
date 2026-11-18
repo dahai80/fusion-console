@@ -215,8 +215,6 @@ export default function TeamPage() {
     }
   };
 
-  const lifecycle = (snap?.lifecycle || "").toUpperCase();
-
   // Deep-linkable focus: ?team=<name> in the URL mirrors the state so a
   // fresh load (or a shared link) observes the same non-default team.
   const applyFocus = (team: string) => {
@@ -248,6 +246,24 @@ export default function TeamPage() {
   const tasks = snap?.tasks ?? [];
   const alerts = snap?.alerts ?? [];
   const brief = snap?.brief_warnings ?? {};
+
+  const lifecycle = (snap?.lifecycle || "").toUpperCase();
+
+  // Workload axis (issue #45 F5): open tasks per assignee, split by running
+  // vs queued, with the member's concurrency cap when the roster carries one.
+  const workloadFor = (name: string, all: Record<string, any>[]) => {
+    let running = 0;
+    let queued = 0;
+    for (const t of all) {
+      if (String(t.assignee || "") !== name) continue;
+      const s = String(t.status || "").toLowerCase();
+      if (s === "running") running += 1;
+      else if (s === "queued") queued += 1;
+    }
+    const rosterRow = (snap?.roster ?? []).find((m) => String(m.name || m.member_id || "") === name);
+    const capacity = Number(rosterRow?.max_concurrency ?? rosterRow?.concurrency ?? 0);
+    return { running, queued, capacity };
+  };
 
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-6">
@@ -351,7 +367,9 @@ export default function TeamPage() {
       </Card>
 
       {/* Roster is read-only here: adding/removing members happens in the
-          chat sidebar team panel (Manage members), the single entry point. */}
+          chat sidebar team panel (Manage members), the single entry point.
+          Badges are dual-axis (issue #45 F5): availability x workload, with
+          "offline + queued" as a distinct red stuck state. */}
       <Card className="p-4">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h3 className="text-sm font-medium">Members</h3>
@@ -361,13 +379,34 @@ export default function TeamPage() {
           <p className="text-sm text-zinc-400">No roster reported by the daemon.</p>
         ) : (
           <div className="space-y-1.5">
-            {snap!.roster.map((m, i) => (
-              <div key={m.member_id || m.name || i} className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="font-medium">{m.name || m.member_id}</span>
-                {m.role && <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{m.role}</span>}
-                {m.status && <span className="text-xs text-zinc-400">{m.status}</span>}
-              </div>
-            ))}
+            {snap!.roster.map((m, i) => {
+              const name = String(m.name || m.member_id || "");
+              const wl = workloadFor(name, tasks);
+              const stuck = (m.presence || "").toLowerCase() !== "available" && (wl.queued > 0 || wl.running > 0);
+              return (
+                <div key={m.member_id || m.name || i} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="font-medium">{name}</span>
+                  {m.role && <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{m.role}</span>}
+                  {stuck ? (
+                    <span className="rounded-lg bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-600 dark:text-red-400">
+                      stuck · {(m.presence || "offline").toLowerCase()} · {wl.queued + wl.running} open
+                    </span>
+                  ) : (
+                    <>
+                      <span className={`rounded-lg px-2 py-0.5 text-xs ${
+                        (m.presence || "").toLowerCase() === "available"
+                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"}`}>
+                        {(m.presence || m.status || "unknown").toLowerCase()}
+                      </span>
+                      <span className="text-xs text-zinc-400">
+                        {wl.running > 0 ? `working ${wl.running}${wl.capacity > 0 ? `/${wl.capacity}` : ""}` : wl.queued > 0 ? `${wl.queued} queued` : "idle"}
+                      </span>
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>

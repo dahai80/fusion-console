@@ -288,6 +288,9 @@ func (s *Server) pollTeam(team string) *teamSnapshot {
 			}
 		}
 	}
+	// Presence stuck state (issue #45 F5): offline/paused members with open
+	// work are listed as alerts so "offline + queued" is never silent.
+	snap.Alerts = append(snap.Alerts, presenceStuckAlerts(snap.Tasks, snap.Roster)...)
 	return snap
 }
 
@@ -299,6 +302,50 @@ func (s *Server) teamView() *teamSnapshot {
 		return &teamSnapshot{Tasks: []map[string]any{}, Roster: []map[string]any{}, Brief: map[string][]briefWarning{}, Alerts: []string{}}
 	}
 	return s.team.snap
+}
+
+// presenceStuckAlerts derives the dual-axis stuck state (issue #45 F5):
+// a member whose presence is not "available" while open (queued/running)
+// tasks are assigned to them is stuck — the work will never be picked up,
+// so it surfaces as an alert instead of silently rendering as idle.
+func presenceStuckAlerts(tasks, roster []map[string]any) []string {
+	open := map[string]int{}
+	for _, t := range tasks {
+		status, _ := t["status"].(string)
+		switch strings.ToLower(status) {
+		case "queued", "running", "blocked":
+			assignee, _ := t["assignee"].(string)
+			if assignee != "" {
+				open[assignee]++
+			}
+		}
+	}
+	alerts := []string{}
+	for _, m := range roster {
+		name, _ := m["name"].(string)
+		if name == "" {
+			name, _ = m["member_id"].(string)
+		}
+		if name == "" || open[name] == 0 {
+			continue
+		}
+		presence, _ := m["presence"].(string)
+		if presence == "available" {
+			continue
+		}
+		if presence == "" {
+			// Legacy daemon without presence: only flag the explicit paused
+			// lifecycle status the roster does carry.
+			if status, _ := m["status"].(string); status != "paused" {
+				continue
+			}
+		}
+		if presence == "" {
+			presence = "paused"
+		}
+		alerts = append(alerts, fmt.Sprintf("member %s stuck: presence %s, %d queued/running task(s)", name, presence, open[name]))
+	}
+	return alerts
 }
 
 // teamRegisterMember passes a team.roster_register call through to the
