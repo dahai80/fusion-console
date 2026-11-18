@@ -194,6 +194,11 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/team/agents", s.auth.Require(s.handleTeamAgents))
 	m.HandleFunc("GET /api/team/chat_poll", s.auth.Require(s.handleTeamChatPoll))
 	m.HandleFunc("GET /api/team/teams", s.auth.Require(s.handleTeamTeams))
+	// Run replay (issue #45 F2): read-only proxies over the daemon's
+	// teams.runs_list / run_messages / run_usage.
+	m.HandleFunc("GET /api/team/runs", s.auth.Require(s.handleTeamRuns))
+	m.HandleFunc("GET /api/team/run_messages", s.auth.Require(s.handleTeamRunMessages))
+	m.HandleFunc("GET /api/team/run_usage", s.auth.Require(s.handleTeamRunUsage))
 	m.HandleFunc("POST /api/team/op", s.auth.Require(s.handleTeamOp))
 	m.HandleFunc("POST /api/team/create", s.auth.Require(s.handleTeamCreate))
 	codeProxyHandler := s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

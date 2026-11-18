@@ -247,6 +247,13 @@ export const api = {
     teamChatPoll: (id: number) =>
     req<{ messages: { role: string; content: string; meta?: string }[] }>(`/api/team/chat_poll?conversation_id=${id}`),
   teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
+  // Run replay (issue #45 F2): read-only proxies over the daemon RPCs.
+  teamRuns: (team: string | undefined, taskId: string) =>
+    req<Record<string, any>>(`/api/team/runs?task_id=${encodeURIComponent(taskId)}${team ? `&team=${encodeURIComponent(team)}` : ""}`),
+  teamRunMessages: (team: string | undefined, taskId: string, attempt: number) =>
+    req<Record<string, any>>(`/api/team/run_messages?task_id=${encodeURIComponent(taskId)}&attempt=${attempt}${team ? `&team=${encodeURIComponent(team)}` : ""}`),
+  teamRunUsage: (team: string | undefined, taskId: string) =>
+    req<Record<string, any>>(`/api/team/run_usage?task_id=${encodeURIComponent(taskId)}${team ? `&team=${encodeURIComponent(team)}` : ""}`),
   teamCreate: (body: TeamCreateReq) =>
     req<TeamCreateRes>("/api/team/create", { method: "POST", body: JSON.stringify(body) }),
   teamOp: (body: { op: string; task_id?: string; entry_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean }) =>

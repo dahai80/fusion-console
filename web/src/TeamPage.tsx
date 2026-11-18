@@ -3,6 +3,7 @@ import { AlertTriangle, Ban, BookOpen, Eye, Pause, Play, RefreshCw, RotateCcw, S
 import { api, ApiError, type LeadStatus, type TeamSnapshot } from "./api";
 import { Button, Card } from "./components/ui";
 import ReasonCard from "./components/ReasonCard";
+import RunDrawer from "./components/RunDrawer";
 
 // Team view (T4b, issue #6): pure observer over the agent-studio daemon.
 // Board columns by task status, roster, health/limits, alerts, brief warnings.
@@ -45,6 +46,10 @@ export default function TeamPage() {
   // configured default team from the cached poller snapshot.
   const [focusTeam, setFocusTeam] = useState(() => new URLSearchParams(window.location.search).get("team") || "");
   const [liveTeams, setLiveTeams] = useState<string[]>([]);
+  // Run drawer (issue #45 F2): open over one task's replay RPCs. Hidden for
+  // good once the daemon reports the run RPCs unavailable (degraded path).
+  const [runDrawer, setRunDrawer] = useState<string | null>(null);
+  const [runsUnavailable, setRunsUnavailable] = useState(false);
   const load = () => {
     setErr(null);
     api.teamView(focusTeam || undefined).then(setSnap).catch((e) => setErr(e as ApiError));
@@ -345,6 +350,11 @@ export default function TeamPage() {
                   <Card key={t.task_id || t.id} className="p-2.5">
                     <p className="break-words text-sm font-medium">{t.title || t.description || t.task_id || t.id}</p>
                     <p className="mt-1 truncate text-xs text-zinc-400" title={t.agent_id || ""}>{t.agent_id || ""}</p>
+                    {!runsUnavailable && (
+                      <Button variant="ghost" className="mt-1 px-2 py-1 text-xs" onClick={() => setRunDrawer(String(t.task_id || t.id))}>
+                        <Eye size={12} /> View run
+                      </Button>
+                    )}
                     {brief[t.task_id || t.id] && (
                       <p className="mt-1 text-xs text-amber-500">
                         brief: {brief[t.task_id || t.id].length} contract item(s) missing
@@ -397,6 +407,15 @@ export default function TeamPage() {
           </Button>
         </Card>
       </div>
+
+      {runDrawer && (
+        <RunDrawer
+          team={focusTeam || undefined}
+          taskId={runDrawer}
+          onClose={() => setRunDrawer(null)}
+          onUnavailable={() => setRunsUnavailable(true)}
+        />
+      )}
     </div>
   );
 }

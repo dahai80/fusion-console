@@ -48,6 +48,7 @@ import { RagPage } from "./RagPage";
 import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
+import RunDrawer from "./components/RunDrawer";
 
 type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "onboard";
 
@@ -335,6 +336,10 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [dispatchActive, setDispatchActive] = useState(0);
 const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Run drawer (issue #45 F2): "View run" on team-chat bubbles whose meta
+  // carries a task_id. Hidden for good once the daemon lacks the run RPCs.
+  const [runDrawerTask, setRunDrawerTask] = useState<string | null>(null);
+  const [teamRunsHidden, setTeamRunsHidden] = useState(false);
 
   const resolveApproval = async (ok: boolean) => {
     if (!approval) return;
@@ -1066,6 +1071,14 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                         {j.cost_usd ? `$${Number(j.cost_usd).toFixed(4)} · ` : ""}
                         {j.tokens_in ? `${j.tokens_in}→${j.tokens_out} tok` : ""}
                         {j.model ? ` · ${j.model}` : ""}
+                        {j.task_id && active?.Kind === "team" && !teamRunsHidden && (
+                          <button
+                            className="ml-1 text-indigo-500 hover:underline"
+                            onClick={() => setRunDrawerTask(String(j.task_id))}
+                          >
+                            · View run
+                          </button>
+                        )}
                       </p>
                     );
                   } catch { return null; }
@@ -1209,6 +1222,14 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         drawerOpen={dispatchDrawer}
         onDrawerClose={() => setDispatchDrawer(false)}
       />
+      {runDrawerTask && active?.Kind === "team" && (
+        <RunDrawer
+          team={active.AgentName}
+          taskId={runDrawerTask}
+          onClose={() => setRunDrawerTask(null)}
+          onUnavailable={() => setTeamRunsHidden(true)}
+        />
+      )}
     </div>
   );
 }
