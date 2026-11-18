@@ -38,14 +38,13 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type ChatDefault, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
+import { api, streamPOST, type AgentInfo, type ChatDefault, type CodeStatus, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
 import Dashboard from "./Dashboard";
 import { SkillsPanel } from "./SkillsPanel";
 import { RagPage } from "./RagPage";
-import { CodePage } from "./CodePage";
 import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
@@ -1405,9 +1404,34 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
 
 function AgentsPage() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [tab, setTab] = useState<"tools" | "workers" | "skills" | "code">("tools");
+  const [tab, setTab] = useState<"tools" | "workers" | "skills">("tools");
+  const [codeSt, setCodeSt] = useState<CodeStatus | null>(null);
+  const [installing, setInstalling] = useState("");
+  const [rowErr, setRowErr] = useState("");
   const load = () => api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
+  const loadCode = useCallback(() => api.codeStatus().then(setCodeSt).catch(() => setCodeSt(null)), []);
   useEffect(() => { load(); }, []);
+  useEffect(() => { loadCode(); }, [loadCode]);
+  // While an install job streams, poll its status so the inline log moves
+  // and the row flips to installed when the job lands.
+  useEffect(() => {
+    if (!installing) return;
+    const t = setInterval(() => api.codeStatus().then((s) => {
+      setCodeSt(s);
+      if (s.fusion.phase !== "downloading" && s.fusion.phase !== "extracting" && s.fusion.phase !== "installing") {
+        setInstalling("");
+        load();
+      }
+    }).catch(() => {}), 1500);
+    return () => clearInterval(t);
+  }, [installing, load]);
+  // Map a configured agent name to a console installer id (empty = no
+  // installer for that CLI).
+  const installerId = (name: string) => {
+    const id = name.toLowerCase();
+    return ["fusion-code", "claude", "codex", "atlascode"].includes(id) ? id : "";
+  };
+  const codeRow = (name: string) => codeSt?.agents.find((x) => x.id === installerId(name));
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
       <div className="flex items-center justify-between">
@@ -1420,7 +1444,6 @@ function AgentsPage() {
             ["tools", "Agents (tools)"],
             ["workers", "Workers"],
             ["skills", "Skills"],
-            ["code", "Coding Agent"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -1439,8 +1462,12 @@ function AgentsPage() {
           <p className="text-sm text-zinc-500">
             Headless adapters only — each run is one task in the chosen workdir. Agents missing from PATH are grayed out.
           </p>
-          {agents.filter((a) => !a.is_worker).map((a) => (
-            <Card key={a.name} className={`flex items-center justify-between p-4 ${!a.detected ? "opacity-50" : ""}`}>
+          {rowErr && <p className="rounded-xl bg-red-500/10 px-3 py-2 text-sm text-red-500">{rowErr}</p>}
+          {agents.filter((a) => !a.is_worker).map((a) => {
+            const row = codeRow(a.name);
+            const canInstall = !!installerId(a.name) && row && !row.installed && !a.detected;
+            return (
+            <Card key={a.name} className={`flex items-center justify-between p-4 ${!a.detected ? "opacity-80" : ""}`}>
               <div>
                 <p className="font-medium flex items-center gap-2">
                   <Terminal size={16} /> {a.name}
@@ -1449,9 +1476,32 @@ function AgentsPage() {
                 <p className="text-xs text-zinc-500 mt-1">
                   command: {a.command} · permission mode: {a.permission_mode} · budget cap ${a.max_budget_usd.toFixed(2)}
                 </p>
+                {installing === a.name && (codeSt?.fusion.logs ?? []).length > 0 && (
+                  <pre className="mt-2 max-h-32 overflow-auto rounded-lg bg-zinc-950 p-2 text-[10px] leading-4 text-zinc-300">
+                    {(codeSt?.fusion.logs ?? []).slice(-6).join("\n")}
+                  </pre>
+                )}
               </div>
+              {canInstall && (
+                <Button
+                  variant="outline"
+                  disabled={installing !== ""}
+                  onClick={async () => {
+                    setRowErr("");
+                    try {
+                      setInstalling(a.name);
+                      await api.codeInstall(installerId(a.name));
+                      await loadCode();
+                      await load();
+                    } catch (ex) { setRowErr((ex as Error).message); setInstalling(""); }
+                  }}
+                >
+                  <Download size={14} /> Install
+                </Button>
+              )}
             </Card>
-          ))}
+            );
+          })}
         </>
       )}
       {tab === "workers" && (
@@ -1460,7 +1510,6 @@ function AgentsPage() {
         </Card>
       )}
       {tab === "skills" && <SkillsPanel />}
-      {tab === "code" && <CodePage />}
     </div>
   );
 }
