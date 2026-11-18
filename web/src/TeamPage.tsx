@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Ban, BookOpen, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
-import { api, type LeadStatus, type TeamSnapshot } from "./api";
+import { api, ApiError, type LeadStatus, type TeamSnapshot } from "./api";
 import { Button, Card } from "./components/ui";
+import ReasonCard from "./components/ReasonCard";
 
 // Team view (T4b, issue #6): pure observer over the agent-studio daemon.
 // Board columns by task status, roster, health/limits, alerts, brief warnings.
@@ -26,7 +27,7 @@ function columnFor(status: string): string {
 
 export default function TeamPage() {
   const [snap, setSnap] = useState<TeamSnapshot | null>(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState("");
   const [lead, setLead] = useState<LeadStatus | null>(null);
   const [goal, setGoal] = useState("");
@@ -45,8 +46,8 @@ export default function TeamPage() {
   const [focusTeam, setFocusTeam] = useState(() => new URLSearchParams(window.location.search).get("team") || "");
   const [liveTeams, setLiveTeams] = useState<string[]>([]);
   const load = () => {
-    setErr("");
-    api.teamView(focusTeam || undefined).then(setSnap).catch((e) => setErr((e as Error).message));
+    setErr(null);
+    api.teamView(focusTeam || undefined).then(setSnap).catch((e) => setErr(e as ApiError));
     // Lead loop status rides the same poll; an unregistered team (or daemon
     // without the RPC) just means "no lead" — never a visible error here.
     api.teamOp({ op: "lead_status", team: focusTeam || undefined }).then((r) => setLead(r as LeadStatus)).catch(() => setLead(null));
@@ -87,7 +88,7 @@ export default function TeamPage() {
       await api.teamOp({ op, task_id });
       load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(e as ApiError);
     } finally {
       setBusy("");
     }
@@ -102,7 +103,7 @@ export default function TeamPage() {
       await api.teamOp({ op, team: focusTeam || undefined, ...extra });
       load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(e as ApiError);
     } finally {
       setBusy("");
     }
@@ -177,7 +178,7 @@ export default function TeamPage() {
         </div>
       )}
 
-      {err && <p className="text-sm text-red-500">{err}</p>}
+      {err && <ReasonCard error={err} />}
 
       {focusTeam && (
         <div className="flex items-center gap-2 rounded-xl bg-indigo-500/10 px-3 py-1.5 text-sm text-indigo-600 dark:text-indigo-400">

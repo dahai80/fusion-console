@@ -56,6 +56,20 @@ export type Message = {
   CreatedAt: string;
 };
 
+// ApiError carries the daemon's structured reason_code (issue #45 F1) when
+// the backend classified the failure; plain Error otherwise.
+export class ApiError extends Error {
+  reason_code?: string;
+  hint?: string;
+}
+
+function toApiError(status: number, body: { error?: string; reason_code?: string; hint?: string } | null): ApiError {
+  const err = new ApiError(body?.error || `HTTP ${status}`);
+  err.reason_code = body?.reason_code;
+  err.hint = body?.hint;
+  return err;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   // FormData bodies must keep the browser-generated multipart Content-Type.
   const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData;
@@ -69,14 +83,13 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error("unauthorized");
   }
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
+    let body: { error?: string; reason_code?: string; hint?: string } | null = null;
     try {
-      const body = await res.json();
-      if (body.error) msg = body.error;
+      body = await res.json();
     } catch {
       /* keep default */
     }
-    throw new Error(msg);
+    throw toApiError(res.status, body);
   }
   return res.json() as Promise<T>;
 }
@@ -534,14 +547,13 @@ export async function streamPOST(
     throw new Error("unauthorized");
   }
   if (!res.ok || !res.body) {
-    let msg = `HTTP ${res.status}`;
+    let body: { error?: string; reason_code?: string; hint?: string } | null = null;
     try {
-      const j = await res.json();
-      if (j.error) msg = j.error;
+      body = await res.json();
     } catch {
       /* keep default */
     }
-    throw new Error(msg);
+    throw toApiError(res.status, body);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
