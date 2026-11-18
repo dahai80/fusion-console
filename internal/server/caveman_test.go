@@ -232,10 +232,10 @@ func TestCavemanStatusEndpoint(t *testing.T) {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
 	var out struct {
-		Enabled bool   `json:"enabled"`
-		Level   string `json:"level"`
-		Source  string `json:"source"`
-		Bytes   int    `json:"ruleset_bytes"`
+		Enabled bool     `json:"enabled"`
+		Level   string   `json:"level"`
+		Source  string   `json:"source"`
+		Bytes   int      `json:"ruleset_bytes"`
 		Targets []string `json:"targets"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
