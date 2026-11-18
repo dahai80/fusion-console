@@ -47,3 +47,19 @@ func TestClaudeArgsFullComposition(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeArgsResume(t *testing.T) {
+	args := claudeArgs("claude", RunOpts{
+		Task: "t", PermissionMode: "bypassPermissions", ResumeSessionID: "abc-123",
+	})
+	want := []string{"-p", "t", "--output-format", "stream-json", "--verbose",
+		"--resume", "abc-123", "--permission-mode", "bypassPermissions"}
+	if len(args) != len(want) {
+		t.Fatalf("arg count mismatch: %v", args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("args[%d] = %q, want %q", i, args[i], want[i])
+		}
+	}
+}

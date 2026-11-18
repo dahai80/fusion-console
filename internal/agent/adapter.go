@@ -112,6 +112,11 @@ type RunOpts struct {
 	// Timeout caps one agent run. 0 = the 30-minute default; the server
 	// passes the configured dispatch timeout so long briefs survive.
 	Timeout time.Duration
+	// ResumeSessionID continues a prior claude session via --resume. The
+	// permission mode / model flags of THIS invocation apply to the resumed
+	// process — a session started in another mode can be resumed into
+	// bypass/plan. claude-family only; other adapters ignore it.
+	ResumeSessionID string
 }
 
 // Adapter is one coding-agent CLI integration.

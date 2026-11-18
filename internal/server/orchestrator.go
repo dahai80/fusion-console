@@ -1084,33 +1084,66 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 		Command:        settings.Command,
 		ExtraArgs:      []string{"--mcp-config", mcpFile, "--allowedTools", strings.TrimSuffix(allowed, ",")},
 	}
+	s.brainMu.Lock()
+	resumeSid := s.brainSessions[convID]
+	s.brainMu.Unlock()
+	if resumeSid != "" {
+		opts.ResumeSessionID = resumeSid
+		log.Printf("orchestrator: agent-brain conv=%d resuming claude session %s (mode %s applies to this run)", convID, resumeSid, settings.PermissionMode)
+	}
 	log.Printf("orchestrator: agent-brain turn conv=%d workdir=%s user=%s", convID, workdir, user)
 	// No agentRuns lock here: background dispatches hold it for the whole
 	// run (up to the dispatch timeout), and the interactive brain must stay
 	// responsive while a worker is out. One extra claude process is fine.
-	evCh, err := ad.Run(ctx, opts)
-	if err != nil {
-		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": err.Error()})
-		return
-	}
-	full := ""
-	var usage agent.Event
-	for ev := range evCh {
-		switch ev.Type {
-		case agent.EventText:
-			full += ev.Text
-			send(map[string]any{"type": "delta", "text": ev.Text})
-		case agent.EventTool:
-			send(map[string]any{"type": "tool", "tool": "brain", "status": "progress", "detail": ev.ToolDetail})
-		case agent.EventResult:
-			if ev.Text != "" {
-				full = ev.Text
-			}
-		case agent.EventUsage:
-			usage = ev
-		case agent.EventError:
-			send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": ev.Text})
+	// runOne streams one claude run: returns the turn text, usage and the
+	// first error text ("" = clean). Result events refresh the saved session
+	// id so the next turn can --resume it.
+	runOne := func(o agent.RunOpts) (string, agent.Event, string) {
+		evCh, err := ad.Run(ctx, o)
+		if err != nil {
+			return "", agent.Event{}, err.Error()
 		}
+		var text string
+		var usage agent.Event
+		for ev := range evCh {
+			switch ev.Type {
+			case agent.EventText:
+				text += ev.Text
+				send(map[string]any{"type": "delta", "text": ev.Text})
+			case agent.EventTool:
+				send(map[string]any{"type": "tool", "tool": "brain", "status": "progress", "detail": ev.ToolDetail})
+			case agent.EventResult:
+				if ev.Text != "" {
+					text = ev.Text
+				}
+				if ev.SessionID != "" {
+					s.brainMu.Lock()
+					s.brainSessions[convID] = ev.SessionID
+					s.brainMu.Unlock()
+				}
+			case agent.EventUsage:
+				usage = ev
+			case agent.EventError:
+				send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": ev.Text})
+				return text, usage, ev.Text
+			}
+		}
+		return text, usage, ""
+	}
+	full, usage, runErr := runOne(opts)
+	// A stale saved session (claude prunes old ones) must not wedge the
+	// brain: drop the id and retry the same turn fresh — the prompt already
+	// carries everything needed for one turn.
+	if runErr != "" && resumeSid != "" {
+		log.Printf("orchestrator: agent-brain conv=%d resume of %s failed (%s) — retrying fresh session", convID, resumeSid, runErr)
+		s.brainMu.Lock()
+		delete(s.brainSessions, convID)
+		s.brainMu.Unlock()
+		opts.ResumeSessionID = ""
+		full, usage, runErr = runOne(opts)
+	}
+	if runErr != "" && full == "" {
+		return
 	}
 	if full != "" {
 		meta, _ := json.Marshal(map[string]any{

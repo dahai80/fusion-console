@@ -38,6 +38,8 @@ type Server struct {
 	bg            dispatchRegistry         // background dispatch runs (queued/running/done)
 	autoMu        sync.Mutex               // guards autoDepth (auto-continue chain depth per conversation)
 	autoDepth     map[int64]int            // conversation id -> consecutive auto-continues since last human message
+	brainMu       sync.Mutex               // guards brainSessions (claude --resume handoff per conversation)
+	brainSessions map[int64]string         // conversation id -> last agent-brain claude session id
 	dispatchTok   string                   // loopback secret for MCP background-dispatch handoff
 	mcpMode       bool                     // true when serving the MCP stdio sidecar (ephemeral process)
 	team          teamDialer               // agent-studio team observer (poller + snapshot cache)
@@ -61,15 +63,16 @@ type verCacheEntry struct {
 func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	s := &Server{
 		cfg: cfg, cfgDir: cfgDir,
-		auth:        auth.NewManager(),
-		store:       st,
-		models:      chat.NewModelList(),
-		agents:      map[string]agent.Adapter{},
-		harness:     harness.New(),
-		verLast:     map[string]string{},
-		verCache:    map[string]verCacheEntry{},
-		autoDepth:   map[int64]int{},
-		dispatchTok: dispatchToken(cfgDir),
+		auth:          auth.NewManager(),
+		store:         st,
+		models:        chat.NewModelList(),
+		agents:        map[string]agent.Adapter{},
+		harness:       harness.New(),
+		verLast:       map[string]string{},
+		verCache:      map[string]verCacheEntry{},
+		autoDepth:     map[int64]int{},
+		brainSessions: map[int64]string{},
+		dispatchTok:   dispatchToken(cfgDir),
 	}
 	// Protocol-driven agent registry: one adapter per enabled agent settings
 	// entry, resolved by protocol family (legacy entries fall back to a
