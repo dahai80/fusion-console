@@ -39,7 +39,7 @@ export type Conversation = {
   ID: number;
   User: string;
   Title: string;
-  Kind: "chat" | "agent";
+  Kind: "chat" | "agent" | "team";
   AgentName: string;
   Workdir: string;
   ProviderID?: string;
@@ -92,7 +92,7 @@ export const api = {
     req<{ ok: boolean; key_id: string; key_prefix: string; raw_key: string }>("/api/gateway/key", { method: "POST" }),
   me: () => req<{ user: string }>("/api/me"),
   conversations: () => req<{ conversations: Conversation[] }>("/api/conversations"),
-  createConversation: (title: string, kind: "chat" | "agent", agentName = "", workdir = "") =>
+  createConversation: (title: string, kind: "chat" | "agent" | "team", agentName = "", workdir = "") =>
     req<{ id: number }>("/api/conversations", {
       method: "POST",
       body: JSON.stringify({ title, kind, agent_name: agentName, workdir }),
@@ -192,6 +192,12 @@ export const api = {
   saveOrchestration: (o: Orchestrator) =>
     req<{ ok: boolean }>("/api/settings/orchestration", { method: "POST", body: JSON.stringify(o) }),
   ragStatus: () => req<RagStatus>("/api/rag/status"),
+  studioStatus: () =>
+    req<{
+      installed: boolean; daemon_running: boolean; enabled: boolean;
+      dir: string; socket: string; phase: string; logs?: string[]; error?: string;
+    }>("/api/studio/status"),
+  studioInstall: () => req<{ status: string }>("/api/studio/install", { method: "POST" }),
   ragInstall: () => req<{ status: string }>("/api/rag/install", { method: "POST" }),
   ragStart: () => req<{ running: boolean }>("/api/rag/start", { method: "POST" }),
   ragStop: () => req<{ running: boolean }>("/api/rag/stop", { method: "POST" }),
@@ -220,6 +226,8 @@ export const api = {
   teamView: (team?: string) =>
     req<TeamSnapshot>(`/api/team/view${team ? `?team=${encodeURIComponent(team)}` : ""}`),
   teamAgents: () => req<{ agents: Record<string, any>[] }>("/api/team/agents"),
+  teamChatPoll: (id: number) =>
+    req<{ messages: { role: string; content: string; meta?: string }[] }>(`/api/team/chat_poll?conversation_id=${id}`),
   teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
   teamCreate: (body: TeamCreateReq) =>
     req<TeamCreateRes>("/api/team/create", { method: "POST", body: JSON.stringify(body) }),
@@ -490,6 +498,8 @@ export type Orchestrator = {
   brain_repo_branch?: string;
   brain_mode?: "chat" | "agent";
   brain_context_files?: string[];
+  brain_provider_id?: string;
+  brain_model?: string;
 };
 
 // streamPOST performs a POST that yields SSE "data:" JSON events.

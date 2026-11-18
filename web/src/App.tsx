@@ -27,6 +27,7 @@ import {
   Maximize2,
   Mic,
   Network,
+  Rocket,
   Paperclip,
   Pencil,
   Trash2,
@@ -38,7 +39,7 @@ Code2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type ChatDefault, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type ModelCatalogItem, type Provider, type WorkerStatus } from "./api";
+import { api, streamPOST, type AgentInfo, type ChatDefault, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -50,7 +51,7 @@ import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "models" | "rag" | "code" | "team" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "code" | "team" | "onboard";
 
 export default function App() {
   return (
@@ -112,16 +113,14 @@ function Shell() {
       <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} onWizard={() => setPage("onboard")} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
-          <Onboarding onDone={() => setPage("models")} />
+          <Onboarding onDone={() => setPage("gateway")} />
         )}
         {page === "dashboard" && <Dashboard />}
         {page === "chat" && <ChatPage onPage={setPage} />}
-        {page === "models" && <ModelsPage />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
-        {page === "models" && <ModelsPage />}
         {page === "rag" && <RagPage />}
-{page === "code" && <CodePage />}
+        {page === "code" && <CodePage />}
         {page === "team" && <TeamPage />}
       </main>
     </div>
@@ -158,13 +157,11 @@ function TopBar({
         <span className="hidden shrink-0 font-semibold tracking-tight sm:inline">fusion-console</span>
         <nav className="flex gap-1 overflow-x-auto">
           {tab("chat", "Chat", MessageSquare)}
-          {tab("models", "Models", Cpu)}
           {tab("agents", "Agents", Bot)}
           {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("gateway", "Gateway", Network)}
-          {tab("models", "Models", Cpu)}
           {tab("rag", "Knowledge Base", Database)}
-{tab("code", "Coding Agent", Code2)}
+          {tab("code", "Coding Agent", Code2)}
           {tab("team", "Team", Users)}
         </nav>
       </div>
@@ -313,15 +310,16 @@ type ChatEntry = { role: string; content: string; meta?: string };
 
 function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [convs, setConvs] = useState<Conversation[]>([]);
+  // Sidebar history tabs: chats vs teams. The Teams tab bootstraps the
+  // agent-studio integration (status + consented install) and lists live
+  // teams as conversation-like entry points.
+  const [sideTab, setSideTab] = useState<"chat" | "team">("chat");
+  const [teamsLive, setTeamsLive] = useState<{ name: string }[]>([]);
+  const [studio, setStudio] = useState<{ installed: boolean; daemon_running: boolean; dir: string; phase: string; logs?: string[]; error?: string } | null>(null);
   const [active, setActive] = useState<Conversation | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
-  const [catalog, setCatalog] = useState<ModelCatalogItem[]>([]);
-  const [chatDefault, setChatDefault] = useState<ChatDefault>({});
-  // Per-conversation model selection (design v2): new conversations inherit
-  // the global default; a switch here applies to this conversation only and
-  // the backend persists it on the conversation row.
-  const [selProv, setSelProv] = useState("");
-  const [selModel, setSelModel] = useState("");
+  const [gwProvider, setGwProvider] = useState<Provider | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<{ name: string; size: number; stored: string; path: string }[]>([]);
@@ -359,11 +357,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
 
   useEffect(() => {
     refreshConvs().catch(() => {});
-    // Model catalog (design v2 §4): every enabled source's pool, gateway
-    // items annotated + reachability-probed. Direct items are always usable.
-    api.modelCatalog().then((r) => setCatalog(r.items ?? [])).catch(() => setCatalog([]));
     api.providers().then((r) => {
-      setChatDefault((r as { chat_default?: ChatDefault }).chat_default ?? {});
+      const list = (r.providers ?? []).filter((p) => p.enabled);
+      setProviders(list);
+      const gw = list.find((p) => p.type === "gateway") ?? null;
+      setGwProvider(gw);
     }).catch(() => {});
     api.agents().then((r) => {
       setAgents(r.agents ?? []);
@@ -437,6 +435,104 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     }
   };
 
+  // Studio bootstrap + live teams polling for the Teams sidebar tab.
+  useEffect(() => {
+    const read = () => api.studioStatus().then(setStudio).catch(() => setStudio(null));
+    read();
+    const busy = studio?.phase === "installing" || studio?.phase === "starting";
+    const t = setInterval(read, busy ? 2000 : 30000);
+    return () => clearInterval(t);
+  }, [studio?.phase]);
+  useEffect(() => {
+    if (sideTab !== "team") return;
+    const read = () => api.teamTeams().then((r) => setTeamsLive((r.teams ?? []).map((x: Record<string, any>) => ({ name: String(x.name || "") })))).catch(() => setTeamsLive([]));
+    read();
+    const t = setInterval(read, 10000);
+    return () => clearInterval(t);
+  }, [sideTab]);
+  // Team group chat: clicking a team row opens (or creates) a conversation
+  // bound to that team — no page navigation. Each message there assigns a
+  // task to the team; replies come back via inbox polling.
+  // Team replies: poll the operator inbox while a team conversation is open
+  // and append new messages (server dedupes by msg_id).
+  useEffect(() => {
+    if (active?.Kind !== "team") return;
+    const pull = async () => {
+      try {
+        const r = await api.teamChatPoll(active.ID);
+        if ((r.messages ?? []).length) {
+          setEntries((e) => [...e, ...r.messages.map((m) => ({ role: m.role, content: m.content, meta: m.meta }))]);
+        }
+      } catch { /* daemon offline — next tick retries */ }
+    };
+    pull();
+    const t = setInterval(pull, 5000);
+    return () => clearInterval(t);
+  }, [active?.ID, active?.Kind]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openTeamChat = async (name: string) => {
+    setConvDrawer(false);
+    const existing = convs.find((c) => c.Kind === "team" && c.AgentName === name);
+    if (existing) { await openConv(existing); return; }
+    try {
+      const r = await api.createConversation(`team: ${name}`, "team", name);
+      await refreshConvs();
+      setActive({ ID: r.id, Title: `team: ${name}`, Kind: "team", User: "", AgentName: name, Workdir: "", CreatedAt: "" });
+      setEntries([]);
+      setErr("");
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+
+  // New team modal: name + worker selection, created in place.
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
+  const [teamName, setTeamName] = useState("");
+  const [teamPicked, setTeamPicked] = useState<string[]>([]);
+  const [teamWorkers, setTeamWorkers] = useState<WorkerSettings[]>([]);
+  const [teamErr, setTeamErr] = useState("");
+  const [teamCreating, setTeamCreating] = useState(false);
+  const [teamMode, setTeamMode] = useState("default");
+  useEffect(() => {
+    if (!teamModalOpen) return;
+    api.orchestration().then((r) => setTeamWorkers(r.orchestrator?.workers ?? [])).catch(() => setTeamWorkers([]));
+  }, [teamModalOpen]);
+  const createTeam = async () => {
+    const nm = teamName.trim();
+    if (!nm) { setTeamErr("team name required"); return; }
+    const members = teamPicked.map((wn) => {
+      const w = teamWorkers.find((x) => (x.name || x.agent) === wn);
+      return {
+        name: (w?.name || w?.agent || wn).replace(/[^A-Za-z0-9_-]/g, "-"),
+        role: w?.agent || "",
+        skills: [] as string[],
+        tool_allowlist: [] as string[],
+        permission_mode: teamMode,
+        budget_tokens: 50000,
+        max_concurrency: 1,
+      };
+    });
+    if (members.length === 0) { setTeamErr("pick at least one worker"); return; }
+    setTeamCreating(true);
+    setTeamErr("");
+    try {
+      await api.teamCreate({
+        team: { name: nm, namespace_key: nm, members, lead_budget_tokens: 200000, playbook: false, max_depth: 2, metadata: {} },
+        tasks: [], lead_start: false, lead_goal: "",
+      });
+      setTeamModalOpen(false);
+      setTeamName("");
+      setTeamPicked([]);
+      await openTeamChat(nm);
+    } catch (ex) {
+      setTeamErr((ex as Error).message);
+    } finally {
+      setTeamCreating(false);
+    }
+  };
+  const studioInstalling = studio?.phase === "installing" || studio?.phase === "starting";
+  const studioReady = studio?.daemon_running || studio?.installed;
+
   const newChat = async () => {
     const r = await api.createConversation("chat " + new Date().toLocaleString(), "chat");
     await refreshConvs();
@@ -444,43 +540,6 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     setEntries([]);
     await api.messages(r.id).catch(() => {});
   };
-
-  // Per-conversation model switch (design v2): the picker persists the
-  // binding explicitly (PUT /conversations/{id}/model) so the choice is
-  // authoritative immediately, and the backend re-persists on send.
-  const changeModel = async (providerID: string, model: string) => {
-    setSelProv(providerID);
-    setSelModel(model);
-    if (active) {
-      try {
-        await api.setConversationModel(active.ID, providerID, model);
-        await refreshConvs();
-      } catch (ex) {
-        setErr((ex as Error).message);
-      }
-    }
-  };
-
-  // Effective selection: conversation override > user switch this session >
-  // global chat default > first catalog entry.
-  useEffect(() => {
-    if (selModel) return;
-    if (active?.ProviderID && active?.Model) {
-      setSelProv(active.ProviderID);
-      setSelModel(active.Model);
-      return;
-    }
-    if (chatDefault.default_provider_id && chatDefault.default_model) {
-      setSelProv(chatDefault.default_provider_id);
-      setSelModel(chatDefault.default_model);
-      return;
-    }
-    const first = catalog[0];
-    if (first) {
-      setSelProv(first.provider_id);
-      setSelModel(first.model);
-    }
-  }, [active, chatDefault, catalog, selModel]);
 
   const pickFiles = () => fileInputRef.current?.click();
   const onFiles = async (files: FileList | null) => {
@@ -552,8 +611,8 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       await runAgentTask(text, mentioned.name);
       return;
     }
-    if (!selProv || !selModel) {
-      setErr("no model source configured — add one on the Models page");
+    if (active?.Kind !== "team" && !gwProvider && providers.length === 0) {
+      setErr("no enabled provider — set one up on the Models page first");
       return;
     }
     setBusy(true);
@@ -570,7 +629,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       }
       setEntries((e) => [...e, { role: "user", content: full }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
-      await streamPOST("/api/chat", { conversation_id: idx, provider_id: selProv, model: selModel, content: full, orchestrate }, (ev) => {
+      await streamPOST("/api/chat", { conversation_id: idx, content: full, orchestrate }, (ev) => {
         const type = ev.type as string;
         setEntries((e) => {
           const copy = e.slice();
@@ -663,13 +722,66 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       <aside
         className={`${convDrawer ? "fixed inset-y-0 left-0 z-40 flex w-72 shadow-xl" : "hidden"} flex-col border-r border-zinc-200/80 dark:border-zinc-800 bg-white lg:static lg:flex lg:w-64 lg:shadow-none lg:bg-white/40 dark:bg-zinc-900 dark:lg:bg-zinc-900/40`}
       >
-        <div className="p-3">
-          <Button variant="outline" className="w-full" onClick={newChat}>
-            <Plus size={14} /> New chat
-          </Button>
+        <div className="p-3 space-y-2">
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-zinc-200/60 p-1 text-xs dark:bg-zinc-800/60">
+            <button
+              onClick={() => setSideTab("chat")}
+              className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 ${sideTab === "chat" ? "bg-white shadow-sm text-indigo-600 dark:bg-zinc-900 dark:text-indigo-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
+            >
+              <MessageSquare size={13} /> Chats
+            </button>
+            <button
+              onClick={() => setSideTab("team")}
+              className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 ${sideTab === "team" ? "bg-white shadow-sm text-indigo-600 dark:bg-zinc-900 dark:text-indigo-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
+            >
+              <Users size={13} /> Teams
+            </button>
+          </div>
+          {sideTab === "chat" ? (
+            <Button variant="outline" className="w-full" onClick={newChat}>
+              <Plus size={14} /> New chat
+            </Button>
+          ) : (
+            <Button variant="outline" className="w-full" onClick={() => setTeamModalOpen(true)} disabled={!studioReady}>
+              <Plus size={14} /> New team
+            </Button>
+          )}
         </div>
+        {sideTab === "team" && studio && !studioReady && (
+          <div className="mx-3 mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+            <p className="font-medium">Team needs fusion-agent-studio</p>
+            <p className="mt-1 opacity-80">The daemon is not running and the package is not installed yet. Install it into the workspace venv via pip (editable), then the daemon starts automatically.</p>
+            {studioInstalling ? (
+              <p className="mt-2 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase}: installing…</p>
+            ) : (
+              <button
+                onClick={() => api.studioInstall().then(() => api.studioStatus().then(setStudio)).catch(() => {})}
+                className="mt-2 rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
+              >
+                Install fusion-agent-studio (pip)
+              </button>
+            )}
+            {studio.error && <p className="mt-2 font-mono text-[10px] opacity-80">{studio.error}</p>}
+            {(studio.logs ?? []).length > 0 && (
+              <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] opacity-70">{(studio.logs ?? []).slice(-8).join("\n")}</pre>
+            )}
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-1">
-          {convs.map((c) => (
+          {sideTab === "team" && studioReady && teamsLive.map((t) => (
+            <button
+              key={String(t.name)}
+              onClick={() => openTeamChat(String(t.name))}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
+            >
+              <Users size={14} className="shrink-0 text-indigo-500" />
+              <span className="truncate">{String(t.name)}</span>
+            </button>
+          ))}
+          {sideTab === "team" && studioReady && teamsLive.length === 0 && (
+            <p className="px-3 py-2 text-xs text-zinc-400">No live teams yet — create one from chat (orchestrate on) or with New team.</p>
+          )}
+          {sideTab === "chat" && convs.map((c) => (
             <div
               key={c.ID}
               className={`group flex w-full items-center gap-1 rounded-xl pr-1 text-sm ${
@@ -718,6 +830,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           >
             <Menu size={16} />
           </button>
+          {active?.Kind === "team" && (
+            <span className="flex items-center gap-1.5 rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-2.5 py-1.5 text-xs text-indigo-500" title="Team conversation — each message assigns a task to the team; replies appear here via inbox polling">
+              <Users size={14} /> team: {active.AgentName}
+            </span>
+          )}
           <button
             onClick={() => setOrchestrate((v) => !v)}
             title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
@@ -729,29 +846,6 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           >
             <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
           </button>
-          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400" title="Model for this conversation — switch anytime, it applies to the next message and is remembered per conversation">
-            <Brain size={14} className="text-indigo-500" /> model
-          </label>
-          {catalog.length === 0 ? (
-            <span className="text-xs text-amber-600 dark:text-amber-400">
-              no model source — add one on the <button onClick={() => onPage("models")} className="underline">Models page</button>
-            </span>
-          ) : (
-            <Select value={`${selProv}\u0000${selModel}`}
-              onChange={(e) => {
-                const [pid, ...rest] = e.target.value.split("\u0000");
-                changeModel(pid, rest.join("\u0000"));
-              }}
-              className="w-64"
-              title="Every enabled model source, direct and gateway alike; gateway items are annotated and greyed when unreachable">
-              {catalog.map((m) => (
-                <option key={`${m.provider_id}/${m.model}`} value={`${m.provider_id}\u0000${m.model}`}
-                  disabled={m.kind === "gateway" && !m.reachable}>
-                  {m.model} · {m.provider_name}{m.kind === "gateway" ? (m.reachable ? " · gateway" : " · gateway (unreachable)") : ""}
-                </option>
-              ))}
-            </Select>
-          )}
           <button
             onClick={() => setDispatchDrawer(true)}
             title="Dispatches"
@@ -890,6 +984,49 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           </div>
         </div>
       </div>
+      {teamModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !teamCreating && setTeamModalOpen(false)}>
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Users size={16} /> New team</h3>
+            <Input className="mb-3" placeholder="team name" value={teamName} onChange={(e) => setTeamName(e.target.value)} autoFocus />
+            <label className="mb-3 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+              permission mode
+              <Select className="w-40" value={teamMode} onChange={(e) => setTeamMode(e.target.value)}
+                title="Kernel permission mode applied to every member: default (ask), approved (auto-accept edits), bypass (no prompts), plan (read-only until approved)">
+                <option value="default">default — ask on each tool</option>
+                <option value="approved">approved — auto-accept edits</option>
+                <option value="bypass">bypass — no prompts</option>
+                <option value="plan">plan — read-only</option>
+              </Select>
+            </label>
+            <p className="mb-2 text-xs font-medium text-zinc-500">Members — pick from configured workers</p>
+            {teamWorkers.filter((w) => w.enabled).length === 0 && (
+              <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">no workers configured — add one on the Agents page first</p>
+            )}
+            <div className="mb-3 max-h-56 space-y-1 overflow-y-auto">
+              {teamWorkers.filter((w) => w.enabled).map((w) => {
+                const wn = w.name || w.agent;
+                const on = teamPicked.includes(wn);
+                return (
+                  <label key={wn} className="flex cursor-pointer items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
+                    <input type="checkbox" checked={on} className="h-4 w-4 rounded border-zinc-300 text-indigo-600"
+                      onChange={() => setTeamPicked(on ? teamPicked.filter((x) => x !== wn) : [...teamPicked, wn])} />
+                    <span className="font-medium">{wn}</span>
+                    <span className="text-xs text-zinc-500">{w.agent}{w.model ? ` · ${w.model}` : ""}</span>
+                  </label>
+                );
+              })}
+            </div>
+            {teamErr && <p className="mb-2 text-sm text-red-500">{teamErr}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setTeamModalOpen(false)} disabled={teamCreating}>Cancel</Button>
+              <Button onClick={createTeam} disabled={teamCreating}>
+                <Rocket size={14} /> {teamCreating ? "Creating…" : "Create team"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       <DispatchPanel
           onRunningCount={setDispatchActive}
         onOpen={(c) => { setDispatchDrawer(false); openConv(c); }}
@@ -1192,6 +1329,7 @@ function AgentsPage() {
 }
 
 function GatewayPage() {
+  const [tab, setTab] = useState<"gateway" | "models">("gateway");
   const [status, setStatus] = useState<Awaited<ReturnType<typeof api.gatewayStatus>> | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -1200,6 +1338,8 @@ function GatewayPage() {
   const [adminPass, setAdminPass] = useState("");
   const [keys, setKeys] = useState<GatewayKey[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [brainModel, setBrainModel] = useState("");
+  const [gwModels, setGwModels] = useState<GatewayModelItem[]>([]);
 
   const load = useCallback(() => {
     api.gatewayStatus().then(setStatus).catch((e) => setErr((e as Error).message));
@@ -1209,14 +1349,19 @@ function GatewayPage() {
   const loadKeys = useCallback(() => {
     api.gatewayKeys().then((r) => setKeys(r.keys ?? [])).catch(() => setKeys([]));
   }, []);
-  const loadProviders = useCallback(() => {
-    api.providers().then((r) => setProviders(r.providers ?? [])).catch(() => {});
+  const loadBrainModel = useCallback(() => {
+    api.providers().then((r) => {
+      setProviders(r.providers ?? []);
+      const gw = (r.providers ?? []).find((p) => p.type === "gateway" && p.enabled);
+      if (gw) setBrainModel(gw.model || "");
+    }).catch(() => {});
+    api.gatewayModels().then((r) => setGwModels(r.items ?? [])).catch(() => setGwModels([]));
   }, []);
   useEffect(() => {
     if (!status?.reachable) return;
     loadKeys();
-    loadProviders();
-  }, [status?.reachable, loadKeys, loadProviders]);
+    loadBrainModel();
+  }, [status?.reachable, loadKeys, loadBrainModel]);
 
   const install = async () => {
     setBusy(true);
@@ -1268,7 +1413,7 @@ function GatewayPage() {
       setRawKey(r.raw_key || "");
       setMsg(`gateway API key ready (${r.key_prefix}...) — stored in the OS keychain`);
       loadKeys();
-      loadProviders();
+      loadBrainModel();
     } catch (ex) {
       setErr((ex as Error).message);
     } finally {
@@ -1299,7 +1444,7 @@ function GatewayPage() {
     try {
       await api.deleteProvider(p.id);
       setMsg(`provider "${p.id}" deleted from console config`);
-      loadProviders();
+      loadBrainModel();
     } catch (ex) {
       setErr((ex as Error).message);
     }
@@ -1326,9 +1471,45 @@ function GatewayPage() {
     } finally { setBusy(false); }
   };
 
+  const tabBar = (
+    <div className="flex gap-2">
+      {(
+        [
+          ["gateway", "Gateway"],
+          ["models", "Models"],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          onClick={() => setTab(id)}
+          className={`rounded-xl border px-3 py-1.5 text-sm transition-colors ${
+            tab === id
+              ? "border-indigo-300 bg-indigo-50 text-indigo-600 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300"
+              : "border-zinc-200/80 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  // Models live under the Gateway tab — full-width page of its own.
+  if (tab === "models") {
+    return (
+      <div>
+        <div className="mx-auto max-w-4xl px-6 pt-6">{tabBar}</div>
+        <ModelsPage />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
-      <h2 className="text-lg font-semibold">Gateway</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Gateway</h2>
+        {tabBar}
+      </div>
       <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between">
           <div>
@@ -1364,8 +1545,17 @@ function GatewayPage() {
         </Card>
       )}
 
-      {/* Brain model card removed (design v2): the default chat model lives
-          on the Models page; per-conversation selection lives in chat. */}
+      {status?.reachable && gwModels.length > 0 && (
+        <Card className="space-y-3 p-4">
+          <h3 className="font-medium flex items-center gap-2"><Cpu size={16} /> Brain model</h3>
+          <p className="text-sm text-zinc-500">
+            The gateway provider's default model: <span className="font-medium text-zinc-700 dark:text-zinc-200">{brainModel || "not set"}</span>.
+            Chat reads it per conversation — change the default in the Gateway tab {'>'} Models (single owner
+            of provider.Model), or set the brain provider/model under Agents {'>'} Workers {'>'} Brain.
+            Cloud models are pinned to their backend via the qualified <code>backend/model</code> id.
+          </p>
+        </Card>
+      )}
 
       {!status?.reachable && (
         <Card className="space-y-3 p-4">

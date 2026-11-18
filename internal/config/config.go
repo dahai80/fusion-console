@@ -198,6 +198,8 @@ type OrchestratorConfig struct {
 	BrainRepo         string         `json:"brain_repo"`          // brain code source: GitHub URL (synced) or local repo path (used as-is)
 	BrainRepoBranch   string         `json:"brain_repo_branch"`   // branch for a GitHub brain repo; empty = remote HEAD
 	BrainContextFiles []string       `json:"brain_context_files"` // local files (working conventions, repo inventory) injected into the planner prompt
+	BrainProviderID   string         `json:"brain_provider_id"`   // provider the chat brain talks to; empty = first enabled gateway provider
+	BrainModel        string         `json:"brain_model"`         // model the chat brain uses; empty = the provider default
 	// DispatchTimeoutMinutes caps one dispatched agent run (foreground and
 	// background). 0 = 30 minutes; raise it for long multi-step briefs.
 	DispatchTimeoutMinutes int `json:"dispatch_timeout_minutes"`

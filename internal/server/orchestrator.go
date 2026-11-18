@@ -212,7 +212,7 @@ func orchestratorTools() []chat.ToolDecl {
 		},
 		{
 			Name:        "create_team",
-			Description: "Create a full team on the agent-studio daemon from chat: definition (name + members), queued tasks, optional lead-loop start. Use this when the user asks to set up or build a team mid-conversation; afterwards use team_send/team_inbox to converse within the team.",
+			Description: "Create a full team on the agent-studio daemon from chat: definition (name + members), queued tasks, optional lead-loop start. Use this when the user asks to set up or build a team mid-conversation; afterwards use team_send/team_inbox to converse within the team. Each task title/detail must be a contract-style brief or the briefcheck flags it: state the objective, the expected output format (e.g. 'produce a markdown report'), the tools/sources to use, the boundaries ('only ... do not ...'), and a budget (steps/tokens/time).",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
 				`"team":{"type":"object","description":"team definition","properties":{` +
 				`"name":{"type":"string","description":"team name"},` +

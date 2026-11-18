@@ -69,6 +69,16 @@ export default function TeamPage() {
         else { setPb(null); setPbError(msg); }
       });
   };
+  // Sidebar "New team" lands here with ?new=1 — open the wizard once and
+  // strip the param so a refresh does not re-trigger it.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("new") === "1") {
+      setWizard(true);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("new");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
   useEffect(() => { load(); }, [focusTeam]);
   useEffect(() => {
     const t = setInterval(load, 5000);
@@ -85,10 +95,12 @@ export default function TeamPage() {
     const t = setInterval(read, 15000);
     return () => clearInterval(t);
   }, []);
-  // Pick-list source: the daemon's real agents — tasks dispatched to a roster
-  // id that is not a real agent fail with "agent not found".
+  // Pick-list source: the console fleet (orchestrator workers) — team
+  // members are staffed from configured workers, not raw daemon agents.
   useEffect(() => {
-    api.teamAgents().then((r) => setAgents(r.agents ?? [])).catch(() => setAgents([]));
+    api.orchestration()
+      .then((r) => setAgents((r.orchestrator?.workers ?? []).map((w: any) => ({ id: w.name || w.agent, name: w.name || w.agent, agent: w.agent, enabled: w.enabled }))))
+      .catch(() => setAgents([]));
   }, []);
 
   const op = async (op: string, task_id?: string) => {
@@ -173,7 +185,7 @@ export default function TeamPage() {
 
   // Only offer agents not already on the roster.
   const rosterIds = new Set((snap?.roster ?? []).map((m) => String(m.member_id || m.agent_id || m.name || "")));
-  const candidates = agents.filter((a) => !rosterIds.has(String(a.id)));
+  const candidates = agents.filter((a: any) => a.enabled !== false && !rosterIds.has(String(a.id)));
 
   const tasks = snap?.tasks ?? [];
   const alerts = snap?.alerts ?? [];

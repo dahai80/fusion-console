@@ -42,6 +42,9 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
   const [brainBranch, setBrainBranch] = useState("");
   const [brainMode, setBrainMode] = useState<"chat" | "agent">("chat");
   const [brainContext, setBrainContext] = useState("");
+  const [brainProvider, setBrainProvider] = useState("");
+  const [brainModel, setBrainModel] = useState("");
+  const [brainModelOpts, setBrainModelOpts] = useState<string[]>([]);
   useEffect(() => {
     api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
     api.providers().then((r) => setProviders((r.providers ?? []).filter((p) => p.enabled))).catch(() => {});
@@ -54,8 +57,27 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
       setBrainSource(!repo ? "none" : repo.startsWith("http") || repo.startsWith("git@") || repo.startsWith("ssh://") ? "github" : "local");
       setBrainMode(r.orchestrator?.brain_mode === "agent" ? "agent" : "chat");
       setBrainContext((r.orchestrator?.brain_context_files ?? []).join("\n"));
+      setBrainProvider(r.orchestrator?.brain_provider_id ?? "");
+      setBrainModel(r.orchestrator?.brain_model ?? "");
     }).catch(() => {});
   }, []);
+
+  // Brain model options follow the brain provider's /v1/models; fall back to
+  // the stored value when the endpoint is unreachable.
+  useEffect(() => {
+    if (!brainProvider) { setBrainModelOpts([]); return; }
+    let stop = false;
+    api.models(brainProvider).then((r) => {
+      if (stop) return;
+      const opts = r.models ?? [];
+      setBrainModelOpts(opts);
+      setBrainModel((cur) => (opts.includes(cur) ? cur : opts[0] || cur));
+    }).catch(() => {
+      if (stop) return;
+      setBrainModelOpts([]);
+    });
+    return () => { stop = true; };
+  }, [brainProvider]);
 
   const detected = (name: string) => agents.find((a) => a.name === name)?.detected ?? false;
   const setWorker = (idx: number, patch: Partial<WorkerSettings>) => {
@@ -170,6 +192,21 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
             <option value="chat">brain: chat model (planner)</option>
             <option value="agent">brain: claude code (agent)</option>
           </Select>
+          <Select className="w-48" value={brainProvider} onChange={(e) => setBrainProvider(e.target.value)}
+            title="Provider the chat brain talks to — chat picks this up automatically, no per-message choice">
+            <option value="">provider: auto (gateway default)</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name || p.id}{p.type === "gateway" ? " · gateway" : ""}</option>
+            ))}
+          </Select>
+          <Select className="w-48" value={brainModel} onChange={(e) => setBrainModel(e.target.value)}
+            title="Model the chat brain uses — served by the selected provider (fed by its /v1/models)">
+            <option value="">model: provider default</option>
+            {brainModelOpts.length === 0 && brainModel && <option value={brainModel}>{brainModel}</option>}
+            {brainModelOpts.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </Select>
           <Select className="w-48" value={brainSource} onChange={(e) => setBrainSource(e.target.value as BrainSource)}>
             <option value="none">code source: none</option>
             <option value="github">code source: github</option>
@@ -198,6 +235,8 @@ export function WorkersPanel({ onSaved }: { onSaved?: () => void }) {
               brain_repo: brainSource === "none" ? "" : brainRepo.trim(),
               brain_repo_branch: brainSource === "github" ? brainBranch.trim() : "",
               brain_context_files: brainContext.split("\n").map((s) => s.trim()).filter(Boolean),
+              brain_provider_id: brainProvider,
+              brain_model: brainModel,
             })}>
             <Save size={14} /> Save
           </Button>

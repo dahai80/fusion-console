@@ -244,6 +244,9 @@ func (s *Server) pollTeam(team string) *teamSnapshot {
 		if status == "failed" {
 			updated, _ := t["updated_at"].(float64)
 			errMsg, _ := t["error"].(string)
+			if errMsg == "" {
+				errMsg = "no error recorded"
+			}
 			if updated == 0 || now-int64(updated) <= 86400 {
 				snap.Alerts = append(snap.Alerts, fmt.Sprintf("task %s failed: %s", id, errMsg))
 			}

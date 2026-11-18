@@ -175,19 +175,36 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	// Provider resolution: explicit request override > per-conversation
-	// binding > first enabled gateway provider. provider.Model itself is
-	// never written here (single-owner rule: the Models page owns the
-	// provider default).
+	// Team group chat: a conversation bound to a team (kind "team") turns
+	// each message into a task assignment — no LLM provider involved.
+	if req.ConversationID > 0 {
+		if conv, cerr := s.store.Conversation(s.auth.User(r), req.ConversationID); cerr == nil && conv.Kind == "team" {
+			s.handleTeamChatTurn(w, r, conv, req.Content)
+			return
+		}
+	}
+
+	// Provider resolution: explicit request override > brain config
+	// (Agents -> Workers -> Brain) > per-conversation binding > first enabled
+	// gateway provider. The brain setting is the everyday default so chat
+	// never has to pick a model per message; provider.Model itself is never
+	// written here (single-owner rule: the Models page owns the provider
+	// default).
 	user0 := s.auth.User(r)
 	var convProv, convModel string
 	var fallbackNotice string
 	prov, ok := s.providerByID(req.ProviderID)
 	if ok {
-		// Request provider wins; the conversation's stored model still
-		// applies when it was bound to this same provider (design v2).
-		if conv, cerr := s.store.Conversation(user0, req.ConversationID); cerr == nil && conv.ProviderID == prov.ID {
-			convProv, convModel = conv.ProviderID, conv.Model
+		model = prov.DefaultModel()
+	} else if bp := strings.TrimSpace(s.cfg.Orchestrator.BrainProviderID); bp != "" {
+		if p, pok := s.providerByID(bp); pok {
+			prov = p
+			model = strings.TrimSpace(s.cfg.Orchestrator.BrainModel)
+			if model == "" {
+				model = p.DefaultModel()
+			}
+		} else {
+			log.Printf("server: chat brain provider %q unusable, falling back to gateway default", bp)
 		}
 	} else if conv, cerr := s.store.Conversation(user0, req.ConversationID); cerr == nil && conv.ProviderID != "" {
 		log.Printf("server: chat conv=%d request provider %q unusable, trying conversation binding %s", req.ConversationID, req.ProviderID, conv.ProviderID)
@@ -1141,6 +1158,12 @@ func (s *Server) handleSaveOrchestration(w http.ResponseWriter, r *http.Request)
 	if orch.BrainAgent != "" {
 		if _, ok := s.agents[orch.BrainAgent]; !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown brain agent " + orch.BrainAgent})
+			return
+		}
+	}
+	if bp := strings.TrimSpace(orch.BrainProviderID); bp != "" {
+		if _, ok := s.providerByID(bp); !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled brain provider " + bp})
 			return
 		}
 	}
