@@ -231,8 +231,7 @@ export const api = {
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
   teamView: (team?: string) =>
     req<TeamSnapshot>(`/api/team/view${team ? `?team=${encodeURIComponent(team)}` : ""}`),
-  teamAgents: () => req<{ agents: Record<string, any>[] }>("/api/team/agents"),
-  teamChatPoll: (id: number) =>
+    teamChatPoll: (id: number) =>
     req<{ messages: { role: string; content: string; meta?: string }[] }>(`/api/team/chat_poll?conversation_id=${id}`),
   teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
   teamCreate: (body: TeamCreateReq) =>

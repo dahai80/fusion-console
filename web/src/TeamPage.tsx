@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Ban, BookOpen, Eye, Pause, Play, Plus, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
+import { AlertTriangle, Ban, BookOpen, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
 import { api, type LeadStatus, type TeamSnapshot } from "./api";
-import TeamWizard from "./TeamWizard";
 import { Button, Card } from "./components/ui";
 
 // Team view (T4b, issue #6): pure observer over the agent-studio daemon.
@@ -9,7 +8,8 @@ import { Button, Card } from "./components/ui";
 // Ops: cancel / rerun / set_limits plus lifecycle pause/resume/disband and the
 // lead loop start/stop (upstream RPCs landed in fusion-agent-studio). The
 // playbook panel (issue #14) renders from teams.playbook_render/trace and
-// hides itself for playbook:false teams.
+// hides itself for playbook:false teams. Team creation and member management
+// live in the chat sidebar team panel; this page is ops + observability only.
 const COLUMNS: { id: string; label: string }[] = [
   { id: "pending", label: "Pending" },
   { id: "running", label: "Running" },
@@ -28,9 +28,6 @@ export default function TeamPage() {
   const [snap, setSnap] = useState<TeamSnapshot | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
-  const [memberCaps, setMemberCaps] = useState("");
-  const [agents, setAgents] = useState<Record<string, any>[]>([]);
-  const [memberId, setMemberId] = useState("");
   const [lead, setLead] = useState<LeadStatus | null>(null);
   const [goal, setGoal] = useState("");
   // Playbook panel (issue #14): rendered strictly from the
@@ -46,7 +43,6 @@ export default function TeamPage() {
   // new team (?team= in the URL keeps the view linkable). Empty = the
   // configured default team from the cached poller snapshot.
   const [focusTeam, setFocusTeam] = useState(() => new URLSearchParams(window.location.search).get("team") || "");
-  const [wizard, setWizard] = useState(false);
   const [liveTeams, setLiveTeams] = useState<string[]>([]);
   const load = () => {
     setErr("");
@@ -69,16 +65,6 @@ export default function TeamPage() {
         else { setPb(null); setPbError(msg); }
       });
   };
-  // Sidebar "New team" lands here with ?new=1 — open the wizard once and
-  // strip the param so a refresh does not re-trigger it.
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("new") === "1") {
-      setWizard(true);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("new");
-      window.history.replaceState(null, "", url.toString());
-    }
-  }, []);
   useEffect(() => { load(); }, [focusTeam]);
   useEffect(() => {
     const t = setInterval(load, 5000);
@@ -95,14 +81,6 @@ export default function TeamPage() {
     const t = setInterval(read, 15000);
     return () => clearInterval(t);
   }, []);
-  // Pick-list source: the console fleet (orchestrator workers) — team
-  // members are staffed from configured workers, not raw daemon agents.
-  useEffect(() => {
-    api.orchestration()
-      .then((r) => setAgents((r.orchestrator?.workers ?? []).map((w: any) => ({ id: w.name || w.agent, name: w.name || w.agent, agent: w.agent, enabled: w.enabled }))))
-      .catch(() => setAgents([]));
-  }, []);
-
   const op = async (op: string, task_id?: string) => {
     setBusy(task_id ? `${op}:${task_id}` : op);
     try {
@@ -160,45 +138,9 @@ export default function TeamPage() {
     teamOp("disband");
   };
 
-  // Add-member = the console-side team-creation entry: registers an existing
-  // daemon agent on the team roster (team.roster_register pass-through).
-  const addMember = async () => {
-    if (!memberId) return;
-    const agent = agents.find((a) => a.id === memberId);
-    setBusy("register_member");
-    try {
-      await api.teamOp({
-        op: "register_member",
-        agent_id: memberId,
-        name: (agent?.name as string) || memberId,
-        capabilities: memberCaps.split(",").map((s) => s.trim()).filter(Boolean),
-      });
-      setMemberId("");
-      setMemberCaps("");
-      load();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy("");
-    }
-  };
-
-  // Only offer agents not already on the roster.
-  const rosterIds = new Set((snap?.roster ?? []).map((m) => String(m.member_id || m.agent_id || m.name || "")));
-  const candidates = agents.filter((a: any) => a.enabled !== false && !rosterIds.has(String(a.id)));
-
   const tasks = snap?.tasks ?? [];
   const alerts = snap?.alerts ?? [];
   const brief = snap?.brief_warnings ?? {};
-
-  if (wizard) {
-    return (
-      <TeamWizard
-        onCreated={(team) => { setWizard(false); applyFocus(team); }}
-        onCancel={() => setWizard(false)}
-      />
-    );
-  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-6">
@@ -214,7 +156,6 @@ export default function TeamPage() {
           )}
           {snap?.fetched_at && <span>{new Date(snap.fetched_at).toLocaleTimeString()}</span>}
           <Button variant="ghost" onClick={load}><RefreshCw size={14} /> Refresh</Button>
-          <Button onClick={() => setWizard(true)}><Plus size={14} /> New team</Button>
         </div>
       </div>
 
@@ -302,25 +243,12 @@ export default function TeamPage() {
         </div>
       </Card>
 
-      {/* Members first — team creation is the primary entry on this page. */}
+      {/* Roster is read-only here: adding/removing members happens in the
+          chat sidebar team panel (Manage members), the single entry point. */}
       <Card className="p-4">
-        <h3 className="mb-2 text-sm font-medium">Members</h3>
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <select value={memberId} onChange={(e) => {
-            setMemberId(e.target.value);
-            const a = agents.find((x) => x.id === e.target.value);
-            const caps = (a?.capabilities as string[] | undefined)?.filter(Boolean) ?? [];
-            setMemberCaps(caps.join(", "));
-          }}
-            className="w-56 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700">
-            <option value="">select an existing worker…</option>
-            {candidates.map((a) => (
-              <option key={String(a.id)} value={String(a.id)}>{String(a.name)} ({String(a.id)})</option>
-            ))}
-          </select>
-          <input value={memberCaps} onChange={(e) => setMemberCaps(e.target.value)} placeholder="capabilities, comma-separated"
-            className="min-w-48 flex-1 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700" />
-          <Button onClick={addMember} disabled={busy !== "" || !memberId}>Add member</Button>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">Members</h3>
+          <span className="text-xs text-zinc-400">manage members from the chat sidebar team panel</span>
         </div>
         {(snap?.roster ?? []).length === 0 ? (
           <p className="text-sm text-zinc-400">No roster reported by the daemon.</p>
