@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { FolderCheck, PenLine, ShieldAlert, Sparkles, Upload } from "lucide-react";
-import { api, type SkillDoc, type SkillEntry } from "./api";
+import { api, type CavemanStatus, type SkillDoc, type SkillEntry } from "./api";
 import { Badge, Button, Card, Input, Select, Textarea } from "./components/ui";
 
 // Curated industry skills worth one-click importing. Sources are pinned to
@@ -55,11 +55,13 @@ export function SkillsPanel() {
 const [importKind, setImportKind] = useState<"github" | "local">("github");
 const [localPath, setLocalPath] = useState("");
 const [skillQuery, setSkillQuery] = useState("");
+const [caveman, setCaveman] = useState<CavemanStatus | null>(null);
 
     const load = useCallback(() => {
         api.skills(repo || undefined).then((r) => setSkills(r.skills ?? [])).catch((e) => setErr((e as Error).message));
     }, [repo]);
     useEffect(() => { load(); }, [load]);
+    useEffect(() => { api.cavemanStatus().then(setCaveman).catch(() => {}); }, []);
 
     const openEditor = (doc?: Partial<SkillDoc>, opts: { scope?: "global" | "project"; review?: SkillReview } = {}) => {
         setEditing(true);
@@ -154,6 +156,29 @@ const [skillQuery, setSkillQuery] = useState("");
                 <code> ~/.claude/skills/</code>, project ones from <code>&lt;repo&gt;/.claude/skills/</code>.
                 Scope only applies to the Claude agent.
             </p>
+
+            {caveman && (
+                <Card className="p-4 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                            <p className="font-medium flex items-center gap-2">
+                                Built-in injection: caveman
+                                {caveman.enabled
+                                    ? <Badge>on · {caveman.level}</Badge>
+                                    : <Badge>off</Badge>}
+                            </p>
+                            <p className="mt-0.5 truncate text-xs text-zinc-500">
+                                {caveman.enabled
+                                    ? `activation ruleset injected into ${caveman.targets.join(" and ")} (${caveman.ruleset_bytes} bytes)`
+                                    : "no injection — set orchestrator.caveman_default to true to enable"}
+                            </p>
+                            <p className="mt-0.5 truncate text-xs text-zinc-500" title={caveman.source}>
+                                source: {caveman.source}
+                            </p>
+                        </div>
+                    </div>
+                </Card>
+            )}
 
             <div className="flex flex-wrap gap-1 rounded-xl border border-zinc-200/80 bg-zinc-100/60 p-1 dark:border-zinc-800 dark:bg-zinc-900/60">
                 {TABS.map(({ id, label, icon: Icon }) => (

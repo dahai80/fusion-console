@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,5 +218,39 @@ func TestOrchestratorPromptCarriesCaveman(t *testing.T) {
 	s.cfg.Orchestrator.CavemanDefault = &off
 	if strings.Contains(s.orchestratorPrompt(), "CAVEMAN MODE ACTIVE") {
 		t.Error("toggle-off brain prompt must not carry activation")
+	}
+}
+
+func TestCavemanStatusEndpoint(t *testing.T) {
+	s := New(&config.Config{Server: config.ServerConfig{DataDir: t.TempDir()}}, t.TempDir(), nil)
+	cookie := loginCookie(t, s)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/caveman", nil)
+	req.AddCookie(cookie)
+	s.mux.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Enabled bool   `json:"enabled"`
+		Level   string `json:"level"`
+		Source  string `json:"source"`
+		Bytes   int    `json:"ruleset_bytes"`
+		Targets []string `json:"targets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Enabled {
+		t.Error("caveman must default to enabled")
+	}
+	if out.Level != "full" {
+		t.Errorf("level = %q, want full", out.Level)
+	}
+	if out.Bytes == 0 {
+		t.Error("ruleset_bytes must be positive when enabled")
+	}
+	if len(out.Targets) != 2 {
+		t.Errorf("targets = %v", out.Targets)
 	}
 }
