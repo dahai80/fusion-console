@@ -34,7 +34,6 @@ import {
   Download,
   ExternalLink,
   Database,
-Code2,
   Users,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -51,7 +50,7 @@ import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "code" | "team" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "onboard";
 
 export default function App() {
   return (
@@ -120,7 +119,6 @@ function Shell() {
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
         {page === "rag" && <RagPage />}
-        {page === "code" && <CodePage />}
         {page === "team" && <TeamPage />}
       </main>
     </div>
@@ -161,7 +159,6 @@ function TopBar({
           {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("gateway", "Gateway", Network)}
           {tab("rag", "Knowledge Base", Database)}
-          {tab("code", "Coding Agent", Code2)}
           {tab("team", "Team", Users)}
         </nav>
       </div>
@@ -1408,7 +1405,7 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
 
 function AgentsPage() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [tab, setTab] = useState<"tools" | "workers" | "skills">("tools");
+  const [tab, setTab] = useState<"tools" | "workers" | "skills" | "code">("tools");
   const load = () => api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
   useEffect(() => { load(); }, []);
   return (
@@ -1423,6 +1420,7 @@ function AgentsPage() {
             ["tools", "Agents (tools)"],
             ["workers", "Workers"],
             ["skills", "Skills"],
+            ["code", "Coding Agent"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -1462,6 +1460,7 @@ function AgentsPage() {
         </Card>
       )}
       {tab === "skills" && <SkillsPanel />}
+      {tab === "code" && <CodePage />}
     </div>
   );
 }
