@@ -284,7 +284,7 @@ function KeyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
       </div>
       <p className="text-xs text-zinc-400">
         Recommended path: everything (brain + workers) goes through the gateway with this key,
-        so token usage is tracked in one place. Direct cloud providers can be added and given a default model on the Models page.
+        so token usage is tracked in one place. Direct OpenAI/Anthropic-compatible sources live on the Models page.
       </p>
     </Card>
   );
@@ -438,7 +438,7 @@ function VerifyStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
       {sample && <pre className="max-h-32 overflow-auto rounded-lg bg-zinc-50 p-2 text-xs dark:bg-zinc-900">{sample}</pre>}
       {msg && <p className="text-sm text-emerald-600 dark:text-emerald-400">{msg}</p>}
       {err && <p className="text-sm text-red-500">{err}</p>}
-      <p className="text-xs text-zinc-400">The test call runs against the selected provider — manage all providers and their default models on the Models page.</p>
+      <p className="text-xs text-zinc-400">The test call runs against your enabled model source (Models page).</p>
     </Card>
   );
 }

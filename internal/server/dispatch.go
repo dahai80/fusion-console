@@ -378,6 +378,10 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 				log.Printf("orchestrator: background run #%d: append result message: %v", run.ID, aerr)
 			}
 		}
+		// Chain continuation: wake the brain so a multi-step plan keeps
+		// moving without a human nudge between background runs. Detached —
+		// the worker slot (agentRuns) must free before the next turn starts.
+		go s.maybeAutoContinue(run)
 	}()
 	return fmt.Sprintf("dispatched as background run #%d (worker %s). It runs after any current agent subprocess and reports back into this conversation when finished; progress is visible in the dispatch panel and via dispatch_status.", run.ID, workerName), nil
 }
@@ -389,6 +393,53 @@ func (s *Server) dispatchTimeout() time.Duration {
 		return time.Duration(m) * time.Minute
 	}
 	return 30 * time.Minute
+}
+
+// autoContinueMax caps consecutive brain self-continuations in one chain —
+// background run finishes, brain wakes, dispatches the next run, repeat. A
+// human message in the conversation resets the counter.
+const autoContinueMax = 8
+
+// maybeAutoContinue wakes the agent-brain after a background run reports into
+// its conversation, so a multi-step plan keeps moving without a human nudge
+// between steps (each brain turn ends at dispatch time; without this wake-up
+// the next step waits for the user to send a message). Bounded by
+// autoContinueMax per human turn; chat-brain mode is skipped because its
+// planner loop lives inside the SSE chat handler.
+func (s *Server) maybeAutoContinue(run *bgRun) {
+	if run.ConversationID <= 0 || s.cfg.Orchestrator.Mode == "off" {
+		return
+	}
+	if s.cfg.Orchestrator.BrainMode != "agent" {
+		log.Printf("orchestrator: background run #%d: auto-continue skipped (chat brain mode)", run.ID)
+		return
+	}
+	s.autoMu.Lock()
+	s.autoDepth[run.ConversationID]++
+	depth := s.autoDepth[run.ConversationID]
+	s.autoMu.Unlock()
+	if depth > autoContinueMax {
+		log.Printf("orchestrator: background run #%d: auto-continue cap %d reached conv=%d — waiting for human", run.ID, autoContinueMax, run.ConversationID)
+		return
+	}
+	// The agent-brain starts fresh every turn and cannot read the chat
+	// history — the wake message must carry the finished run's outcome so
+	// the brain can decide the next step without re-deriving context.
+	result := run.Result
+	if result == "" {
+		result = run.Err
+	}
+	if len(result) > 1200 {
+		result = result[:1200] + "…"
+	}
+	msg := fmt.Sprintf("[auto-continue] Background run #%d (worker %s) finished: status %s, %ds, $%.2f.\n\nTask was: %s\n\nResult:\n%s\n\nContinue the plan: dispatch the next step via run_agent (background=true) if steps remain, or post a short completion summary if the plan is done. Never repeat work this run already did.", run.ID, run.Worker, run.Status, run.ElapsedS, run.CostUSD, oneLine(run.Task, 300), result)
+	log.Printf("orchestrator: auto-continue conv=%d depth=%d after run #%d (%s)", run.ConversationID, depth, run.ID, run.Status)
+	ctx, cancel := context.WithTimeout(context.Background(), s.dispatchTimeout())
+	defer cancel()
+	// No SSE stream to write to — the brain's reply lands in the chat
+	// history via runAgentBrainTurn's own persistence.
+	noopSend := func(map[string]any) {}
+	s.runAgentBrainTurn(ctx, run.ConversationID, run.User, msg, noopSend)
 }
 
 // summarizeDispatch renders the completion message persisted into the chat.
@@ -512,6 +563,10 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 		Command:         settings.Command,
 		Env:             pEnv,
 	}
+	// Caveman default (issue #30): claude-family CLIs get the activation
+	// ruleset as an appended system prompt; other families ride the task.
+	claudeFamily := agent.ProtocolFor(cli, settings.Protocol) == agent.ProtocolClaudeStreamJSON
+	injectCaveman(s.cavemanPrompt(), claudeFamily, &opts.Task, &opts)
 	if note := s.versionChangeNotice(args.Agent, agent.CommandFor(settings.Name, settings.Command)); note != "" && send != nil {
 		send(map[string]any{"type": "tool", "tool": callName, "status": "progress", "detail": note})
 	}

@@ -32,6 +32,24 @@ type Provider struct {
 	Models   []string     `json:"models"` // model pool offered by this provider; Model stays the default
 	APIKeyID string       `json:"api_key_id"`
 	Enabled  bool         `json:"enabled"`
+	// Lifecycle names a console-managed service behind this source:
+	// "fusion-gateway" (binary the console installs/starts) or "macfabric"
+	// (launchd service, macOS Apple Silicon only). Empty = external/custom,
+	// no lifecycle management.
+	Lifecycle string `json:"lifecycle,omitempty"`
+}
+
+// Lifecycle constants for Provider.Lifecycle (design v2 §4).
+const (
+	LifecycleFusionGateway = "fusion-gateway"
+	LifecycleMacfabric     = "macfabric"
+)
+
+// ChatConfig is the global chat default (design v2: replaces the gateway
+// brain card as the owner of "which model new conversations use").
+type ChatConfig struct {
+	DefaultProviderID string `json:"default_provider_id,omitempty"`
+	DefaultModel      string `json:"default_model,omitempty"`
 }
 
 // DefaultModel returns the provider's default model: the legacy Model field
@@ -44,6 +62,64 @@ func (p *Provider) DefaultModel() string {
 		return p.Models[0]
 	}
 	return ""
+}
+
+// ValidateProvider normalizes and validates a provider entry before it is
+// persisted. It returns a human-readable note for acceptable-but-suspicious
+// input (e.g. an OpenAI-compatible URL without /v1) — callers surface it to
+// the UI — and an error for input that must not be saved. The entry is
+// normalized in place (base URL trailing slash trimmed).
+func ValidateProvider(p *Provider) (note string, err error) {
+	p.ID = strings.TrimSpace(p.ID)
+	p.Name = strings.TrimSpace(p.Name)
+	p.BaseURL = strings.TrimSpace(p.BaseURL)
+	if p.ID == "" {
+		return "", fmt.Errorf("provider id is required")
+	}
+	for _, r := range p.ID {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return "", fmt.Errorf("provider id %q: use lowercase letters, digits, - and _ only", p.ID)
+		}
+	}
+	switch p.Type {
+	case ProviderOpenAICompat, ProviderAnthropic, ProviderGateway:
+	default:
+		return "", fmt.Errorf("unknown provider type %q", p.Type)
+	}
+	if p.BaseURL == "" {
+		return "", fmt.Errorf("base_url is required")
+	}
+	if !strings.HasPrefix(p.BaseURL, "http://") && !strings.HasPrefix(p.BaseURL, "https://") {
+		return "", fmt.Errorf("base_url must start with http:// or https://")
+	}
+	p.BaseURL = strings.TrimSuffix(p.BaseURL, "/")
+	hasV1 := strings.HasSuffix(p.BaseURL, "/v1")
+	switch p.Type {
+	case ProviderAnthropic:
+		// The Anthropic wire protocol appends /v1/messages itself; a /v1
+		// suffix here produces /v1/v1/messages 404s (verified quirk).
+		if hasV1 {
+			return "", fmt.Errorf("anthropic-compatible base_url must not end with /v1 — the protocol appends the path itself")
+		}
+	case ProviderOpenAICompat:
+		if !hasV1 && p.Lifecycle == "" {
+			// Some gateways serve at the bare host, so this stays a note;
+			// the testcall decides (design §4.1A).
+			note = "openai-compatible base_url does not end with /v1 — most services expect it; the test call will verify"
+		}
+	}
+	seen := map[string]bool{}
+	for _, m := range p.Models {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			return "", fmt.Errorf("model pool contains an empty entry")
+		}
+		if seen[m] {
+			return "", fmt.Errorf("model %q appears twice in the pool", m)
+		}
+		seen[m] = true
+	}
+	return note, nil
 }
 
 // AgentSettings holds per-agent executable path and defaults.
@@ -127,12 +203,25 @@ type OrchestratorConfig struct {
 	// DispatchTimeoutMinutes caps one dispatched agent run (foreground and
 	// background). 0 = 30 minutes; raise it for long multi-step briefs.
 	DispatchTimeoutMinutes int `json:"dispatch_timeout_minutes"`
+	// CavemanDefault injects the caveman skill activation ruleset into every
+	// brain session and dispatched worker (issue #30). Pointer so an absent
+	// key defaults to on while an explicit false stays off.
+	CavemanDefault *bool  `json:"caveman_default"`
+	CavemanLevel   string `json:"caveman_level"` // lite | full (default) | ultra | wenyan-*
+}
+
+// CavemanEnabled reports whether caveman activation is on: true unless the
+// config explicitly sets caveman_default to false.
+func (o *OrchestratorConfig) CavemanEnabled() bool {
+	return o.CavemanDefault == nil || *o.CavemanDefault
 }
 
 // DefaultOrchestrator returns safe wizard defaults.
 func DefaultOrchestrator() OrchestratorConfig {
-	return OrchestratorConfig{Mode: "confirm", BrainAgent: "claude", Repos: []string{}, Workers: []WorkerConfig{}, WorkerMemory: "notes"}
+	return OrchestratorConfig{Mode: "confirm", BrainAgent: "claude", Repos: []string{}, Workers: []WorkerConfig{}, WorkerMemory: "notes", CavemanDefault: boolPtr(true), CavemanLevel: "full"}
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 // ServerConfig is the [server] section.
 type ServerConfig struct {
@@ -211,6 +300,7 @@ type Config struct {
 	Provider []Provider      `json:"providers"`
 	Agent    []AgentSettings `json:"agents"`
 	Harness  HarnessConfig   `json:"harness"`
+	Chat     ChatConfig      `json:"chat"`
 
 	// builtinMerged counts built-in agent entries MergeBuiltinAgents appended
 	// during Load (not serialized; the entrypoint persists the merge once).

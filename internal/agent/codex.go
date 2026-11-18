@@ -25,6 +25,21 @@ func (a CodexCompatAdapter) Run(ctx context.Context, opts RunOpts) (<-chan Event
 	if opts.Model != "" {
 		args = []string{"exec", "--json", "--skip-git-repo-check", "-m", opts.Model, opts.Task}
 	}
+	// Provider override: a ChatGPT-logged-in codex ignores OPENAI_BASE_URL and
+	// validates -m against the account's models. A per-run CODEX_HOME with a
+	// generated config.toml pins the custom provider without touching the
+	// user's ~/.codex.
+	if home, cleanup, err := codexHomeOverride(opts.Env); err != nil {
+		return nil, err
+	} else if home != "" {
+		env := map[string]string{}
+		for k, v := range opts.Env {
+			env[k] = v
+		}
+		env["CODEX_HOME"] = home
+		opts.Env = env
+		cleanupOnContext(ctx, cleanup)
+	}
 	_, stream, err := launch(ctx, opts, command, args, false, parseCodexJSON)
 	return stream, err
 }

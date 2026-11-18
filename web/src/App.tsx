@@ -39,19 +39,19 @@ Code2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
+import { api, streamPOST, type AgentInfo, type ChatDefault, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
-import ModelsPage from "./ModelsPage";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
 import Dashboard from "./Dashboard";
 import { SkillsPanel } from "./SkillsPanel";
 import { RagPage } from "./RagPage";
 import { CodePage } from "./CodePage";
+import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "models" | "rag" | "code" | "team" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "code" | "team" | "onboard";
 
 export default function App() {
   return (
@@ -113,15 +113,14 @@ function Shell() {
       <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} onWizard={() => setPage("onboard")} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
-          <Onboarding onDone={() => setPage("models")} />
+          <Onboarding onDone={() => setPage("gateway")} />
         )}
         {page === "dashboard" && <Dashboard />}
-        {page === "chat" && <ChatPage />}
+        {page === "chat" && <ChatPage onPage={setPage} />}
         {page === "agents" && <AgentsPage />}
         {page === "gateway" && <GatewayPage />}
-        {page === "models" && <ModelsPage />}
         {page === "rag" && <RagPage />}
-{page === "code" && <CodePage />}
+        {page === "code" && <CodePage />}
         {page === "team" && <TeamPage />}
       </main>
     </div>
@@ -161,9 +160,8 @@ function TopBar({
           {tab("agents", "Agents", Bot)}
           {tab("dashboard", "Dashboard", LayoutDashboard)}
           {tab("gateway", "Gateway", Network)}
-          {tab("models", "Models", Cpu)}
           {tab("rag", "Knowledge Base", Database)}
-{tab("code", "Coding Agent", Code2)}
+          {tab("code", "Coding Agent", Code2)}
           {tab("team", "Team", Users)}
         </nav>
       </div>
@@ -310,7 +308,7 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
 
 type ChatEntry = { role: string; content: string; meta?: string };
 
-function ChatPage() {
+function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [convs, setConvs] = useState<Conversation[]>([]);
   // Sidebar history tabs: chats vs teams. The Teams tab bootstraps the
   // agent-studio integration (status + consented install) and lists live
@@ -1331,6 +1329,7 @@ function AgentsPage() {
 }
 
 function GatewayPage() {
+  const [tab, setTab] = useState<"gateway" | "models">("gateway");
   const [status, setStatus] = useState<Awaited<ReturnType<typeof api.gatewayStatus>> | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -1450,9 +1449,67 @@ function GatewayPage() {
       setErr((ex as Error).message);
     }
   };
+
+  const gwStart = async () => {
+    setBusy(true); setMsg(""); setErr("");
+    try {
+      const r = await api.gatewayStart();
+      setMsg(`gateway start: ${r.note || "ok"}`);
+      load();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally { setBusy(false); }
+  };
+  const gwStop = async () => {
+    setBusy(true); setMsg(""); setErr("");
+    try {
+      const r = await api.gatewayStop();
+      setMsg(`gateway stop: ${r.note || "ok"}`);
+      load();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally { setBusy(false); }
+  };
+
+  const tabBar = (
+    <div className="flex gap-2">
+      {(
+        [
+          ["gateway", "Gateway"],
+          ["models", "Models"],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          onClick={() => setTab(id)}
+          className={`rounded-xl border px-3 py-1.5 text-sm transition-colors ${
+            tab === id
+              ? "border-indigo-300 bg-indigo-50 text-indigo-600 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300"
+              : "border-zinc-200/80 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  // Models live under the Gateway tab — full-width page of its own.
+  if (tab === "models") {
+    return (
+      <div>
+        <div className="mx-auto max-w-4xl px-6 pt-6">{tabBar}</div>
+        <ModelsPage />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
-      <h2 className="text-lg font-semibold">Gateway</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Gateway</h2>
+        {tabBar}
+      </div>
       <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between">
           <div>
@@ -1464,11 +1521,20 @@ function GatewayPage() {
               {status?.installed ? `installed: ${status.binary}` : "binary not installed by console"}
             </p>
           </div>
-          {status?.reachable && (
-            <Button onClick={openAdmin}>
-              <ExternalLink size={14} /> Open Admin GUI
-            </Button>
-          )}
+          <span className="ml-auto flex gap-1.5">
+            {status?.reachable ? (
+              <>
+                <Button onClick={openAdmin}>
+                  <ExternalLink size={14} /> Open Admin GUI
+                </Button>
+                <Button variant="outline" onClick={gwStop} disabled={busy}>Stop</Button>
+              </>
+            ) : (
+              status?.installed && (
+                <Button onClick={gwStart} disabled={busy}>Start</Button>
+              )
+            )}
+          </span>
         </div>
       </Card>
 
@@ -1484,7 +1550,7 @@ function GatewayPage() {
           <h3 className="font-medium flex items-center gap-2"><Cpu size={16} /> Brain model</h3>
           <p className="text-sm text-zinc-500">
             The gateway provider's default model: <span className="font-medium text-zinc-700 dark:text-zinc-200">{brainModel || "not set"}</span>.
-            Chat reads it per conversation — change the default on the Models page (single owner
+            Chat reads it per conversation — change the default in the Gateway tab {'>'} Models (single owner
             of provider.Model), or set the brain provider/model under Agents {'>'} Workers {'>'} Brain.
             Cloud models are pinned to their backend via the qualified <code>backend/model</code> id.
           </p>

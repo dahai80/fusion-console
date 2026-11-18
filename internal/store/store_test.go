@@ -128,6 +128,44 @@ func TestDeleteAndRenameConversation(t *testing.T) {
 	}
 }
 
+func TestConversationModelColumnsAndRoundTrip(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Fresh DB: columns exist (created with them); idempotent re-open must
+	// not fail on ALTER of an existing column.
+	s2, err := Open(filepath.Join(t.TempDir(), "t2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.Close()
+
+	id, err := s.CreateConversation("u", "t", "chat", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, model := "", ""
+	if pid, model, err = s.ConversationModel(id); err != nil || pid != "" || model != "" {
+		t.Fatalf("fresh conversation model = %q/%q err=%v", pid, model, err)
+	}
+	// User-scoped binding (upstream hardening): wrong user must not match.
+	if err := s.SetConversationModel("other", id, "iff-local", "fabric-small"); err == nil {
+		t.Fatal("cross-user model set allowed")
+	}
+	if err := s.SetConversationModel("u", id, "iff-local", "fabric-small"); err != nil {
+		t.Fatal(err)
+	}
+	if pid, model, err = s.ConversationModel(id); err != nil || pid != "iff-local" || model != "fabric-small" {
+		t.Fatalf("after set = %q/%q err=%v", pid, model, err)
+	}
+	users, err := s.ConversationProviderUsers("iff-local")
+	if err != nil || len(users) != 1 || users[0] != id {
+		t.Fatalf("provider users = %v err=%v", users, err)
+	}
+}
+
 func TestDispatchRunPersistence(t *testing.T) {
 	s := openTestStore(t)
 	row := &DispatchRunRow{ConvID: 1, User: "admin", Worker: "fusion-site", Agent: "claude",

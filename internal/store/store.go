@@ -167,6 +167,34 @@ func (s *Store) migrateConversationModelColumns() error {
 	return nil
 }
 
+// addColumn runs ddl when column is missing from table. CREATE-IF-NOT-EXISTS
+// cannot express this, and a bare ALTER fails on every startup after the
+// first — hence the PRAGMA probe.
+func addColumn(db *sql.DB, table, column, ddl string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil // already migrated
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(ddl)
+	return err
+}
+
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -179,6 +207,35 @@ func (s *Store) CreateConversation(user, title, kind, agentName, workdir string)
 		return 0, fmt.Errorf("store: create conversation: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// ConversationModel returns the conversation's chosen model source.
+func (s *Store) ConversationModel(convID int64) (providerID, model string, err error) {
+	err = s.db.QueryRow(`SELECT provider_id, model FROM conversations WHERE id = ?`, convID).
+		Scan(&providerID, &model)
+	if err != nil {
+		return "", "", fmt.Errorf("store: conversation model: %w", err)
+	}
+	return providerID, model, nil
+}
+
+// ConversationProviderUsers returns the IDs of conversations bound to a
+// provider — the delete-confirmation consumer list (design v2 §4.1A).
+func (s *Store) ConversationProviderUsers(providerID string) ([]int64, error) {
+	rows, err := s.db.Query(`SELECT id FROM conversations WHERE provider_id = ? LIMIT 50`, providerID)
+	if err != nil {
+		return nil, fmt.Errorf("store: conversation provider users: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // ListConversations returns conversations for a user, newest first.
