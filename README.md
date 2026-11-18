@@ -130,6 +130,15 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   the console. Operations are limited to what the daemon exposes today
   (task cancel/rerun, orchestrator limits). Secrets resolve from env
   (`FUSION_WS_TOKEN`, `FUSION_CONSOLE_APIKEY_AGENT_STUDIO`) or keychain.
+- **Borrowed UX batch (issue #45)** — classified daemon failures surface as
+  bilingual reason-code cards; a run drawer replays each task's timestamped
+  event timeline with a usage footer; mid-run steering ([STEER] composer)
+  sends supplements to a running member with delivery receipts; blocked
+  tasks render wakeup cards (arm / wake now / cancel); member badges show
+  availability x workload with a distinct "offline + queued" stuck state;
+  worker worktrees replay uncommitted work-in-progress, pin a hidden ref
+  (`refs/console-tasks/<task>`), and are preserved with a marker on failed
+  delivery for one-click re-dispatch.
 - **Multi-user (light)** — per-user bcrypt passwords, HttpOnly session cookies,
   login required even inside the tailnet.
 - **Knowledge Base (optional fusion-rag)** — nothing is downloaded until you

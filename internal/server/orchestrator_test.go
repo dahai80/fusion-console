@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -59,6 +60,99 @@ func TestCreateWorktree(t *testing.T) {
 	s.cfg.Orchestrator.Repos = nil
 	if _, err := s.createWorktree("relative/path", "claude"); err == nil {
 		t.Error("relative repo path accepted")
+	}
+}
+
+// TestCreateWorktreeUncommittedSnapshot (issue #45 F6): a worktree created
+// from a repo with work-in-progress exposes that diff to the agent — tracked
+// changes via a stash snapshot, untracked files copied — while the source
+// repo stays untouched (no stash entry, working tree unchanged).
+func TestCreateWorktreeUncommittedSnapshot(t *testing.T) {
+	s := New(&config.Config{Server: config.ServerConfig{DataDir: t.TempDir()}}, t.TempDir(), nil)
+	repo := filepath.Join(t.TempDir(), "fusion-demo")
+	initRepo(t, repo)
+	mod := filepath.Join(repo, "README.md")
+	if err := os.WriteFile(mod, []byte("work in progress"), 0o644); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("untracked"), 0o644); err != nil {
+		t.Fatalf("untracked: %v", err)
+	}
+
+	wt, err := s.createWorktree(repo, "claude")
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(wt, "README.md"))
+	if err != nil || string(got) != "work in progress" {
+		t.Fatalf("tracked change missing in worktree: %q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "notes.txt")); err != nil {
+		t.Fatalf("untracked file not copied: %v", err)
+	}
+	// Source repo untouched: working tree still dirty, no stash created.
+	out, err := exec.Command("git", "-C", repo, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(string(out), "README.md") {
+		t.Fatalf("source working tree changed: %s", out)
+	}
+	if stash, _ := exec.Command("git", "-C", repo, "stash", "list").CombinedOutput(); len(strings.TrimSpace(string(stash))) > 0 {
+		t.Fatalf("source stash list not empty: %s", stash)
+	}
+}
+
+// TestCreateWorktreeHiddenRef (issue #45 F6b): the hidden ref pins the
+// worktree's HEAD in the source repo so the commits survive collection.
+func TestCreateWorktreeHiddenRef(t *testing.T) {
+	s := New(&config.Config{Server: config.ServerConfig{DataDir: t.TempDir()}}, t.TempDir(), nil)
+	repo := filepath.Join(t.TempDir(), "fusion-demo")
+	initRepo(t, repo)
+
+	wt, err := s.createWorktree(repo, "claude")
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	slug := filepath.Base(wt)
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "refs/console-tasks/"+slug).CombinedOutput()
+	if err != nil {
+		t.Fatalf("hidden ref missing: %v: %s", err, out)
+	}
+	ref := strings.TrimSpace(string(out))
+	wtHead, err := exec.Command("git", "-C", wt, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("worktree head: %v", err)
+	}
+	if ref != strings.TrimSpace(string(wtHead)) {
+		t.Fatalf("hidden ref %s != worktree HEAD %s", ref, wtHead)
+	}
+	// Cleanup must never remove the hidden ref.
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	_ = exec.Command("git", "-C", repo, "worktree", "prune").Run()
+	if out, err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "refs/console-tasks/"+slug).CombinedOutput(); err != nil {
+		t.Fatalf("hidden ref lost after cleanup: %v: %s", err, out)
+	}
+}
+
+// TestPreserveFailedWorktree (issue #45 F6c): the marker records the failure
+// and nothing is deleted.
+func TestPreserveFailedWorktree(t *testing.T) {
+	s := New(&config.Config{Server: config.ServerConfig{DataDir: t.TempDir()}}, t.TempDir(), nil)
+	wt := t.TempDir()
+	s.preserveFailedWorktree(wt, fmt.Errorf("agent claude failed: budget exceeded"))
+	body, err := os.ReadFile(filepath.Join(wt, ".console-preserved"))
+	if err != nil {
+		t.Fatalf("marker missing: %v", err)
+	}
+	if !strings.Contains(string(body), "budget exceeded") {
+		t.Fatalf("marker body = %s", body)
+	}
+	entries, err := os.ReadDir(wt)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("worktree contents lost: %v", err)
 	}
 }
 

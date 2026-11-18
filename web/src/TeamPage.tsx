@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Ban, BookOpen, ChevronDown, ChevronRight, Pause, Play, RefreshCw, RotateCcw, Square, Users } from "lucide-react";
-import { api, type LeadStatus, type TeamSnapshot } from "./api";
-import { Button, Card } from "./components/ui";
+import { AlarmClock, AlertTriangle, Ban, BookOpen, ChevronDown, ChevronRight, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
+import { api, ApiError, type LeadStatus, type TeamSnapshot } from "./api";
+import { Button, Card, Select } from "./components/ui";
+import ReasonCard from "./components/ReasonCard";
+import RunDrawer from "./components/RunDrawer";
 
 // Teams view (T4b, issue #6): pure observer over the agent-studio daemon.
 // Master-detail layout (prototype docs/prototype-team-ops.html): grouped tree
@@ -23,9 +25,110 @@ function columnFor(status: string): string {
   return "pending";
 }
 
+// WakeupCard (issue #45 F4): humans arm a wakeup on a blocked task (kind
+// at/every, expiry, timeout action), fire it now, or cancel the task. The
+// armed count renders only when the daemon exposes task metadata — it does
+// not today, so the counter stays hidden rather than showing a fake 0/8.
+function WakeupCard({
+  team,
+  taskId,
+  title,
+  onDone,
+  onCancel,
+}: {
+  team: string | undefined;
+  taskId: string;
+  title: string;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [kind, setKind] = useState<"at" | "every">("every");
+  const [minutes, setMinutes] = useState("15");
+  const [expiryMin, setExpiryMin] = useState("120");
+  const [onTimeout, setOnTimeout] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const arm = async () => {
+    setBusy(true);
+    setErr("");
+    const rule: Record<string, unknown> = { kind };
+    if (kind === "every") rule.every = Math.max(60, Number(minutes) * 60 || 900);
+    else rule.at = Math.floor(Date.now() / 1000) + Math.max(1, Number(minutes) * 60 || 900);
+    if (expiryMin) rule.expires_at = Math.floor(Date.now() / 1000) + Number(expiryMin) * 60;
+    if (onTimeout) rule.on_timeout = onTimeout;
+    try {
+      await api.teamOp({ op: "wakeup_create", team, task_id: taskId, wakeup: rule });
+      onDone();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const wakeNow = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.teamOp({ op: "wakeup_now", team, task_id: taskId });
+      onDone();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="border-amber-300/60 p-2.5 dark:border-amber-500/30">
+      <p className="flex items-center gap-1.5 break-words text-sm font-medium">
+        <AlarmClock size={14} className="shrink-0 text-amber-500" /> {title}
+      </p>
+      <p className="mt-1 text-xs text-zinc-400">blocked — waiting on an external condition</p>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+        <Select className="w-auto px-2 py-1" value={kind} onChange={(e) => setKind(e.target.value as "at" | "every")}>
+          <option value="every">every</option>
+          <option value="at">at (once)</option>
+        </Select>
+        <input
+          className="w-16 rounded-lg border border-zinc-200/80 bg-transparent px-2 py-1 dark:border-zinc-700"
+          value={minutes}
+          onChange={(e) => setMinutes(e.target.value)}
+          title={kind === "every" ? "interval in minutes" : "minutes from now"}
+        />
+        <span className="text-zinc-400">min</span>
+        <Select className="w-auto px-2 py-1" value={onTimeout} onChange={(e) => setOnTimeout(e.target.value)}>
+          <option value="">on timeout: keep</option>
+          <option value="end">on timeout: cancel</option>
+        </Select>
+        <input
+          className="w-16 rounded-lg border border-zinc-200/80 bg-transparent px-2 py-1 dark:border-zinc-700"
+          value={expiryMin}
+          onChange={(e) => setExpiryMin(e.target.value)}
+          title="wakeup expiry in minutes"
+        />
+        <span className="text-zinc-400">expiry</span>
+      </div>
+      {err && <p className="mt-1 text-xs text-red-500">{err}</p>}
+      <div className="mt-2 flex gap-1">
+        <Button variant="ghost" className="px-2 py-1 text-xs" onClick={arm} disabled={busy}>
+          <AlarmClock size={12} /> Arm wakeup
+        </Button>
+        <Button variant="ghost" className="px-2 py-1 text-xs" onClick={wakeNow} disabled={busy}>
+          <Play size={12} /> Wake now
+        </Button>
+        <Button variant="ghost" className="px-2 py-1 text-xs" onClick={onCancel} disabled={busy}>
+          <Ban size={12} /> Cancel task
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 export default function TeamPage() {
   const [snap, setSnap] = useState<TeamSnapshot | null>(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState("");
   const [lead, setLead] = useState<LeadStatus | null>(null);
   const [goal, setGoal] = useState("");
@@ -46,9 +149,13 @@ export default function TeamPage() {
   // configured default team.
   const [liveTeams, setLiveTeams] = useState<{ name: string; lifecycle: string }[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // Run drawer (issue #45 F2): open over one task's replay RPCs. Hidden for
+  // good once the daemon reports the run RPCs unavailable (degraded path).
+  const [runDrawer, setRunDrawer] = useState<string | null>(null);
+  const [runsUnavailable, setRunsUnavailable] = useState(false);
   const load = () => {
-    setErr("");
-    api.teamView(focusTeam || undefined).then(setSnap).catch((e) => setErr((e as Error).message));
+    setErr(null);
+    api.teamView(focusTeam || undefined).then(setSnap).catch((e) => setErr(e as ApiError));
     // Lead loop status rides the same poll; an unregistered team (or daemon
     // without the RPC) just means "no lead" — never a visible error here.
     api.teamOp({ op: "lead_status", team: focusTeam || undefined }).then((r) => setLead(r as LeadStatus)).catch(() => setLead(null));
@@ -91,7 +198,7 @@ export default function TeamPage() {
       await api.teamOp({ op, task_id });
       load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(e as ApiError);
     } finally {
       setBusy("");
     }
@@ -106,13 +213,11 @@ export default function TeamPage() {
       await api.teamOp({ op, team: focusTeam || undefined, ...extra });
       load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(e as ApiError);
     } finally {
       setBusy("");
     }
   };
-
-  const lifecycle = (snap?.lifecycle || "").toUpperCase();
 
   // Deep-linkable focus: ?team=<name> in the URL mirrors the state so a
   // fresh load (or a shared link) observes the same non-default team.
@@ -146,6 +251,23 @@ export default function TeamPage() {
   const alerts = snap?.alerts ?? [];
   const brief = snap?.brief_warnings ?? {};
 
+  const lifecycle = (snap?.lifecycle || "").toUpperCase();
+
+  // Workload axis (issue #45 F5): open tasks per assignee, split by running
+  // vs queued, with the member's concurrency cap when the roster carries one.
+  const workloadFor = (name: string, all: Record<string, any>[]) => {
+    let running = 0;
+    let queued = 0;
+    for (const t of all) {
+      if (String(t.assignee || "") !== name) continue;
+      const s = String(t.status || "").toLowerCase();
+      if (s === "running") running += 1;
+      else if (s === "queued") queued += 1;
+    }
+    const rosterRow = (snap?.roster ?? []).find((m) => String(m.name || m.member_id || "") === name);
+    const capacity = Number(rosterRow?.max_concurrency ?? rosterRow?.concurrency ?? 0);
+    return { running, queued, capacity };
+  };
   // Tree grouping: default team (focusTeam === "") rides the focused
   // snapshot's lifecycle; listed teams carry their own.
   const treeTeams = [{ name: "", lifecycle: (snap?.lifecycle || "").toLowerCase() }, ...liveTeams];
@@ -173,7 +295,7 @@ export default function TeamPage() {
         </div>
       </div>
 
-      {err && <p className="text-sm text-red-500">{err}</p>}
+      {err && <ReasonCard error={err} />}
 
       <div className="flex items-start gap-4">
         {/* Left: grouped tree of live teams. Selection deep-links via ?team=
@@ -303,7 +425,9 @@ export default function TeamPage() {
       </Card>
 
       {/* Roster is read-only here: adding/removing members happens in the
-          chat sidebar team panel (Manage members), the single entry point. */}
+          chat sidebar team panel (Manage members), the single entry point.
+          Badges are dual-axis (issue #45 F5): availability x workload, with
+          "offline + queued" as a distinct red stuck state. */}
       <Card className="p-4">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h3 className="text-sm font-medium">Members</h3>
@@ -313,13 +437,34 @@ export default function TeamPage() {
           <p className="text-sm text-zinc-400">No roster reported by the daemon.</p>
         ) : (
           <div className="space-y-1.5">
-            {snap!.roster.map((m, i) => (
-              <div key={m.member_id || m.name || i} className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="font-medium">{m.name || m.member_id}</span>
-                {m.role && <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{m.role}</span>}
-                {m.status && <span className="text-xs text-zinc-400">{m.status}</span>}
-              </div>
-            ))}
+            {snap!.roster.map((m, i) => {
+              const name = String(m.name || m.member_id || "");
+              const wl = workloadFor(name, tasks);
+              const stuck = (m.presence || "").toLowerCase() !== "available" && (wl.queued > 0 || wl.running > 0);
+              return (
+                <div key={m.member_id || m.name || i} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="font-medium">{name}</span>
+                  {m.role && <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{m.role}</span>}
+                  {stuck ? (
+                    <span className="rounded-lg bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-600 dark:text-red-400">
+                      stuck · {(m.presence || "offline").toLowerCase()} · {wl.queued + wl.running} open
+                    </span>
+                  ) : (
+                    <>
+                      <span className={`rounded-lg px-2 py-0.5 text-xs ${
+                        (m.presence || "").toLowerCase() === "available"
+                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"}`}>
+                        {(m.presence || m.status || "unknown").toLowerCase()}
+                      </span>
+                      <span className="text-xs text-zinc-400">
+                        {wl.running > 0 ? `working ${wl.running}${wl.capacity > 0 ? `/${wl.capacity}` : ""}` : wl.queued > 0 ? `${wl.queued} queued` : "idle"}
+                      </span>
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>
@@ -400,9 +545,24 @@ export default function TeamPage() {
               </p>
               <div className="space-y-2">
                 {colTasks.map((t) => (
+                  String(t.status || "").toLowerCase() === "blocked" ? (
+                    <WakeupCard
+                      key={t.task_id || t.id}
+                      team={focusTeam || undefined}
+                      taskId={String(t.task_id || t.id)}
+                      title={String(t.title || t.description || t.task_id || t.id)}
+                      onDone={load}
+                      onCancel={() => op("cancel", String(t.task_id || t.id))}
+                    />
+                  ) : (
                   <Card key={t.task_id || t.id} className="p-2.5">
                     <p className="break-words text-sm font-medium">{t.title || t.description || t.task_id || t.id}</p>
                     <p className="mt-1 truncate text-xs text-zinc-400" title={t.agent_id || ""}>{t.agent_id || ""}</p>
+                    {!runsUnavailable && (
+                      <Button variant="ghost" className="mt-1 px-2 py-1 text-xs" onClick={() => setRunDrawer(String(t.task_id || t.id))}>
+                        <Eye size={12} /> View run
+                      </Button>
+                    )}
                     {brief[t.task_id || t.id] && (
                       <p className="mt-1 text-xs text-amber-500">
                         brief: {brief[t.task_id || t.id].length} contract item(s) missing
@@ -421,6 +581,7 @@ export default function TeamPage() {
                       </div>
                     )}
                   </Card>
+                  )
                 ))}
                 {colTasks.length === 0 && <p className="px-1 py-3 text-xs text-zinc-300 dark:text-zinc-600">—</p>}
               </div>
@@ -431,6 +592,15 @@ export default function TeamPage() {
 
       </div>
       </div>
+
+      {runDrawer && (
+        <RunDrawer
+          team={focusTeam || undefined}
+          taskId={runDrawer}
+          onClose={() => setRunDrawer(null)}
+          onUnavailable={() => setRunsUnavailable(true)}
+        />
+      )}
     </div>
   );
 }

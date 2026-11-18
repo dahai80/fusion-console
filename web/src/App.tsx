@@ -23,6 +23,7 @@ import {
   Plus,
   X,
   RefreshCw,
+  RotateCcw,
   KeyRound,
   Loader2,
   Maximize2,
@@ -40,7 +41,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, type AgentInfo, type ChatDefault, type CodeStatus, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
+import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type CodeStatus, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -50,6 +51,7 @@ import { RagPage } from "./RagPage";
 import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
+import RunDrawer from "./components/RunDrawer";
 
 type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "onboard";
 
@@ -337,6 +339,10 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [dispatchActive, setDispatchActive] = useState(0);
 const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Run drawer (issue #45 F2): "View run" on team-chat bubbles whose meta
+  // carries a task_id. Hidden for good once the daemon lacks the run RPCs.
+  const [runDrawerTask, setRunDrawerTask] = useState<string | null>(null);
+  const [teamRunsHidden, setTeamRunsHidden] = useState(false);
 
   const resolveApproval = async (ok: boolean) => {
     if (!approval) return;
@@ -475,16 +481,26 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const [teamAgentList, setTeamAgentList] = useState<Record<string, any>[]>([]);
   const [teamPickAdd, setTeamPickAdd] = useState<string[]>([]);
   const [teamPanelBusy, setTeamPanelBusy] = useState(false);
+  // Steer context (issue #45 F3): the running task of the open team, if any —
+  // while one is live the composer becomes a [STEER] composer and sends go
+  // through teams.supplement instead of creating another task.
+  const [teamRunning, setTeamRunning] = useState<{ task_id: string; title: string } | null>(null);
   const loadTeamRoster = useCallback(async (name: string) => {
     try {
       const r = await api.teamView(name);
       setTeamRoster((r.roster ?? []).map((m) => String(m.name || m.agent_id || "")).filter(Boolean));
-    } catch { setTeamRoster([]); }
+      const running = (r.tasks ?? []).find((t) => String(t.status || "").toLowerCase() === "running");
+      setTeamRunning(running ? { task_id: String(running.task_id || running.id || ""), title: String(running.title || running.description || "") } : null);
+    } catch { setTeamRoster([]); setTeamRunning(null); }
   }, []);
   useEffect(() => {
     setTeamPanelOpen(false);
-    if (active?.Kind !== "team" || !active.AgentName) { setTeamRoster([]); return; }
+    if (active?.Kind !== "team" || !active.AgentName) { setTeamRoster([]); setTeamRunning(null); return; }
     loadTeamRoster(active.AgentName);
+    // Keep the steer context live: a task finishing flips the composer back
+    // to task-assignment mode on the next tick.
+    const t = setInterval(() => loadTeamRoster(active.AgentName), 5000);
+    return () => clearInterval(t);
   }, [active?.ID, active?.Kind, active?.AgentName, loadTeamRoster]); // eslint-disable-line react-hooks/exhaustive-deps
   // Team SPEC panel (issue #41): the group-chat entry point for the shared
   // SPEC.md. Read via teams.spec_read; edits persist through teams.spec_write
@@ -721,6 +737,13 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
+    // Mid-run steering (issue #45 F3): while the open team has a running
+    // task, a plain send becomes a supplement into that run instead of a new
+    // task — receipt states render on the steer bubble.
+    if (active?.Kind === "team" && teamRunning && !text.startsWith("@")) {
+      await sendSteer(text);
+      return;
+    }
     // Attachments pass the stored file path, never the content: the model
     // pulls segments through the read API (byte-range with continuation
     // metadata), so a single call can never push a whole large document into
@@ -792,6 +815,44 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       });
     } catch (ex) {
       setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // sendSteer pushes one supplement into the running task and renders the
+  // receipt transition on the steer bubble (pending -> delivered n/3 /
+  // delivered_as_inbox). Cap errors surface the reason copy.
+  const sendSteer = async (text: string) => {
+    if (!active || active.Kind !== "team" || !teamRunning) return;
+    const task = teamRunning;
+    setBusy(true);
+    setErr("");
+    setInput("");
+    setAttachments([]);
+    const meta = JSON.stringify({ steer: true, task_id: task.task_id, receipt: "pending" });
+    setEntries((e) => [...e, { role: "user", content: text, meta }]);
+    try {
+      const r = await api.teamOp({ op: "supplement", team: active.AgentName, task_id: task.task_id, text });
+      const receipt = String(r.receipt || "delivered");
+      const used = Number(r.steers_used || 0);
+      setEntries((e) =>
+        e.map((m) =>
+          m.meta === meta
+            ? { ...m, meta: JSON.stringify({ steer: true, task_id: task.task_id, receipt, steers_used: used }) }
+            : m
+        )
+      );
+    } catch (ex) {
+      const ae = ex as ApiError;
+      setEntries((e) =>
+        e.map((m) =>
+          m.meta === meta
+            ? { ...m, meta: JSON.stringify({ steer: true, task_id: task.task_id, receipt: "failed", error: ae.message }) }
+            : m
+        )
+      );
+      setErr(ae.reason_code ? `${ae.message} [${ae.reason_code}]` : ae.message);
     } finally {
       setBusy(false);
     }
@@ -1150,11 +1211,34 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                 {m.meta && (() => {
                   try {
                     const j = JSON.parse(m.meta);
+                    // Steer bubble receipt line (issue #45 F3).
+                    if (j.steer) {
+                      const label =
+                        j.receipt === "pending" ? "steer · pending…"
+                        : j.receipt === "delivered" ? `steer · ✓ delivered (${j.steers_used ?? "?"}/3)`
+                        : j.receipt === "delivered_as_inbox" ? "steer · ✓ delivered as inbox (run already finished)"
+                        : j.receipt === "failed" ? "steer · failed"
+                        : `steer · ${j.receipt}`;
+                      return (
+                        <p className={`mt-1 text-xs ${j.receipt === "failed" ? "text-red-500" : "text-zinc-400"}`}>
+                          {label}
+                          {j.error ? ` — ${j.error}` : ""}
+                        </p>
+                      );
+                    }
                     return (
                       <p className="mt-1 text-xs text-zinc-400">
                         {j.cost_usd ? `$${Number(j.cost_usd).toFixed(4)} · ` : ""}
                         {j.tokens_in ? `${j.tokens_in}→${j.tokens_out} tok` : ""}
                         {j.model ? ` · ${j.model}` : ""}
+                        {j.task_id && active?.Kind === "team" && !teamRunsHidden && (
+                          <button
+                            className="ml-1 text-indigo-500 hover:underline"
+                            onClick={() => setRunDrawerTask(String(j.task_id))}
+                          >
+                            · View run
+                          </button>
+                        )}
                       </p>
                     );
                   } catch { return null; }
@@ -1233,7 +1317,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                 }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               }}
-              placeholder={listening ? "listening…" : "Message…  (@ to hand off to an agent)"}
+              placeholder={
+                listening ? "listening…"
+                : active?.Kind === "team" && teamRunning ? `[STEER] into ${teamRunning.title.slice(0, 40) || teamRunning.task_id}…`
+                : "Message…  (@ to hand off to an agent)"
+              }
             />
             <div className="flex flex-col gap-2">
               <Button onClick={send} disabled={busy || !input.trim()}
@@ -1314,6 +1402,14 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         drawerOpen={dispatchDrawer}
         onDrawerClose={() => setDispatchDrawer(false)}
       />
+      {runDrawerTask && active?.Kind === "team" && (
+        <RunDrawer
+          team={active.AgentName}
+          taskId={runDrawerTask}
+          onClose={() => setRunDrawerTask(null)}
+          onUnavailable={() => setTeamRunsHidden(true)}
+        />
+      )}
     </div>
   );
 }
@@ -1432,6 +1528,17 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
           title="Maximize — full details">
           <Maximize2 size={12} />
         </button>
+        {r.status === "error" && (
+          <button onClick={(e) => {
+            e.stopPropagation();
+            api.agentRun({ conversation_id: r.conversation_id, agent: r.agent, task: r.task, workdir: "", background: true })
+              .catch(() => {});
+          }}
+            className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-indigo-500 dark:hover:bg-zinc-700"
+            title="Re-dispatch the same task (one-click re-deliver)">
+            <RotateCcw size={12} />
+          </button>
+        )}
         {(r.status === "done" || r.status === "error") && (
           <button onClick={(e) => { e.stopPropagation(); dismissRun(r.id); }}
             className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-red-500 dark:hover:bg-zinc-700"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -1015,8 +1016,116 @@ func (s *Server) createWorktree(repo, agentName string) (string, error) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("worktree add failed: %v: %s", err, strings.TrimSpace(string(out)))
 	}
+	slug := filepath.Base(wt)
+	// Hidden ref (issue #45 F6b): pin the worktree's HEAD in the source repo
+	// before any delivery so the run's commits survive collection — the ref
+	// lives in the shared refs namespace and no cleanup path touches it.
+	head, err := exec.Command("git", "-C", wt, "rev-parse", "HEAD").Output()
+	if err == nil {
+		ref := "refs/console-tasks/" + slug
+		if out, err := exec.Command("git", "-C", abs, "update-ref", ref, strings.TrimSpace(string(head))).CombinedOutput(); err != nil {
+			log.Printf("orchestrator: hidden ref write failed %s: %v: %s", ref, err, strings.TrimSpace(string(out)))
+		} else {
+			log.Printf("orchestrator: hidden ref written %s = %s", ref, strings.TrimSpace(string(head)))
+		}
+	} else {
+		log.Printf("orchestrator: worktree HEAD read failed: %v", err)
+	}
+	// Uncommitted snapshot replay (issue #45 F6a): agents must see
+	// work-in-progress. git stash create records tracked changes as a
+	// dangling commit WITHOUT touching the source working tree or stash list;
+	// untracked files are copied over separately (bounded).
+	if snap := strings.TrimSpace(runGitOut(abs, "stash", "create")); snap != "" {
+		if out, err := exec.Command("git", "-C", wt, "checkout", snap, "--", ".").CombinedOutput(); err != nil {
+			log.Printf("orchestrator: snapshot replay failed (%s): %v: %s", snap, err, strings.TrimSpace(string(out)))
+		} else {
+			log.Printf("orchestrator: uncommitted snapshot replayed into %s (%s)", wt, snap)
+		}
+	}
+	copyUntrackedFiles(abs, wt)
 	log.Printf("orchestrator: worktree created %s (from %s)", wt, abs)
 	return wt, nil
+}
+
+// preserveFailedWorktree writes the .console-preserved marker into a failed
+// worktree run's workspace (issue #45 F6c): the worktree stays in place with
+// the failure recorded, and the failed dispatch card offers one-click
+// re-dispatch. Never deletes anything — preservation is the point.
+func (s *Server) preserveFailedWorktree(workdir string, runErr error) {
+	if workdir == "" || runErr == nil {
+		return
+	}
+	marker := filepath.Join(workdir, ".console-preserved")
+	body := fmt.Sprintf("preserved after failed delivery at %s\nerror: %s\n", time.Now().UTC().Format(time.RFC3339), runErr)
+	if err := os.WriteFile(marker, []byte(body), 0o644); err != nil {
+		log.Printf("orchestrator: preserved marker write failed %s: %v", marker, err)
+		return
+	}
+	log.Printf("orchestrator: failed worktree preserved %s (%v) — re-dispatch from the dispatch panel", workdir, runErr)
+}
+
+// runGitOut runs git in dir and returns trimmed stdout (empty on error).
+// The single-spread form matches repo.go — this toolchain (go1.26.3) rejects
+// mixing fixed args with a slice spread in one variadic call.
+func runGitOut(dir string, args ...string) string {
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// copyUntrackedFiles copies the source repo's untracked files (git
+// ls-files --others --exclude-standard) into the worktree so agents see the
+// full work-in-progress state. Bounded: at most 200 files and 1MB each —
+// anything beyond is skipped with a log line, never fails the worktree.
+func copyUntrackedFiles(src, dst string) {
+	out, err := exec.Command("git", "-C", src, "ls-files", "--others", "--exclude-standard").Output()
+	if err != nil {
+		log.Printf("orchestrator: untracked file list failed: %v", err)
+		return
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return
+	}
+	if len(lines) > 200 {
+		log.Printf("orchestrator: %d untracked files, copying first 200 only", len(lines))
+		lines = lines[:200]
+	}
+	for _, rel := range lines {
+		rel = strings.TrimSpace(rel)
+		if rel == "" || strings.Contains(rel, "..") {
+			continue
+		}
+		in, err := os.Open(filepath.Join(src, filepath.FromSlash(rel)))
+		if err != nil {
+			continue
+		}
+		st, statErr := in.Stat()
+		if statErr != nil || st.IsDir() || st.Size() > 1024*1024 {
+			in.Close()
+			if statErr == nil {
+				log.Printf("orchestrator: untracked file skipped %s (%d bytes)", rel, st.Size())
+			}
+			continue
+		}
+		dstPath := filepath.Join(dst, filepath.FromSlash(rel))
+		if mkdirErr := os.MkdirAll(filepath.Dir(dstPath), 0o755); mkdirErr != nil {
+			in.Close()
+			continue
+		}
+		outFile, err := os.Create(dstPath)
+		if err != nil {
+			in.Close()
+			continue
+		}
+		if _, err := io.Copy(outFile, in); err != nil {
+			log.Printf("orchestrator: untracked copy failed %s: %v", rel, err)
+		}
+		in.Close()
+		outFile.Close()
+	}
 }
 
 // toHarnessMessages converts chat messages (dropping tool-call fields the

@@ -168,9 +168,9 @@ func (s *Server) teamChatAssign(conv *store.Conversation, content string) (strin
 	if err != nil {
 		return "", "", err
 	}
-	if res["status"] == "error" {
-		msg, _ := res["message"].(string)
-		return "", "", fmt.Errorf("%s", msg)
+	res, err = teamResult(res)
+	if err != nil {
+		return "", "", err
 	}
 	taskID, _ := res["task_id"].(string)
 	// Lead-loop hint so the user knows whether anything will pick the task up.

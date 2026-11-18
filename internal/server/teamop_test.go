@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ func TestTeamOpMethodMapping(t *testing.T) {
 		wantMethod string
 		wantParams map[string]any
 		wantErr    string
+		check      func(t *testing.T, params map[string]any)
 	}{
 		{
 			name: "cancel", req: teamOpReq{Op: "cancel", TaskID: "t1"},
@@ -82,10 +84,51 @@ func TestTeamOpMethodMapping(t *testing.T) {
 			name: "playbook_trace missing entry", req: teamOpReq{Op: "playbook_trace"}, wantErr: "entry_id required",
 		},
 		{
+			// Mid-run steering (#748 / issue #45 F3): operator origin is fixed
+			// console-side — members can never steer, the daemon enforces roles.
+			name: "supplement", req: teamOpReq{Op: "supplement", Team: "beta", TaskID: "t1", Text: "tests only"},
+			wantMethod: "teams.supplement",
+			wantParams: map[string]any{"team": "beta", "task_id": "t1", "content": "tests only", "origin": "operator"},
+		},
+		{
+			name: "supplement missing content", req: teamOpReq{Op: "supplement", TaskID: "t1"}, wantErr: "content required",
+		},
+		{
+			name: "supplement missing task", req: teamOpReq{Op: "supplement", Text: "x"}, wantErr: "task_id required",
+		},
+		{
 			name: "cancel missing task", req: teamOpReq{Op: "cancel"}, wantErr: "task_id required",
 		},
 		{
 			name: "lead_start missing goal", req: teamOpReq{Op: "lead_start", Team: "beta"}, wantErr: "goal required",
+		},
+		{
+			// Task wakeups (#749 / issue #45 F4): console nests the rule dict.
+			name: "wakeup_create every", req: teamOpReq{Op: "wakeup_create", Team: "beta", TaskID: "t1", Wakeup: map[string]any{"kind": "every", "every": 900.0, "on_timeout": "end", "expires_at": 1000.0}},
+			wantMethod: "teams.wakeup_create",
+			wantParams: map[string]any{"team": "beta", "task_id": "t1", "rule": map[string]any{"kind": "every", "every": 900.0, "on_timeout": "end", "expires_at": 1000.0}},
+		},
+		{
+			name: "wakeup_create missing rule", req: teamOpReq{Op: "wakeup_create", Team: "beta", TaskID: "t1"}, wantErr: "wakeup rule required",
+		},
+		{
+			name: "wakeup_create missing task", req: teamOpReq{Op: "wakeup_create", Team: "beta", Wakeup: map[string]any{"kind": "at"}}, wantErr: "task_id required",
+		},
+		{
+			// [Wake now]: an at-rule firing on the next evaluation tick —
+			// 'at' is now's epoch, asserted by the custom check below.
+			name: "wakeup_now", req: teamOpReq{Op: "wakeup_now", Team: "beta", TaskID: "t1"},
+			wantMethod: "teams.wakeup_create",
+			wantParams: map[string]any{"team": "beta", "task_id": "t1"},
+			check: func(t *testing.T, params map[string]any) {
+				rule, ok := params["rule"].(map[string]any)
+				if !ok || rule["kind"] != "at" {
+					t.Fatalf("rule = %v, want kind=at", params["rule"])
+				}
+				if at, ok := rule["at"].(float64); !ok || at <= 0 {
+					t.Fatalf("rule at = %v, want a positive epoch", rule["at"])
+				}
+			},
 		},
 		{
 			name: "unknown op", req: teamOpReq{Op: "explode"}, wantErr: "unknown op",
@@ -103,14 +146,17 @@ func TestTeamOpMethodMapping(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+			if tc.check != nil {
+				tc.check(t, params)
+			}
 			if method != tc.wantMethod {
 				t.Fatalf("method = %q, want %q", method, tc.wantMethod)
 			}
-			if len(params) != len(tc.wantParams) {
+			if tc.check == nil && len(params) != len(tc.wantParams) {
 				t.Fatalf("params = %v, want %v", params, tc.wantParams)
 			}
 			for k, want := range tc.wantParams {
-				if params[k] != want {
+				if !reflect.DeepEqual(params[k], want) {
 					t.Fatalf("param %s = %v, want %v", k, params[k], want)
 				}
 			}

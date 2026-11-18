@@ -502,8 +502,19 @@ func truncateRunes(s string, n int) string {
 // finishDispatch carries a validated dispatch from workdir resolution through
 // subprocess execution to cost/memory bookkeeping. Shared by the foreground
 // planner path and background runs; send may be nil for background runs.
-func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, callName string, args dispatchArgs, wk *config.WorkerConfig, cli string, settings config.AgentSettings, budget float64, send func(map[string]any)) (string, error) {
+// The named error drives worktree failure preservation (issue #45 F6c): a
+// failed worktree run is kept in place with a .console-preserved marker, so
+// the work is re-deliverable instead of lost.
+func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, callName string, args dispatchArgs, wk *config.WorkerConfig, cli string, settings config.AgentSettings, budget float64, send func(map[string]any)) (result string, err error) {
 	workdir := s.cfg.ResolveWorkDir(cli)
+	// Worktree failure preservation (issue #45 F6c): when the dispatch fails
+	// and the workspace was a created worktree, keep it with a preserved
+	// marker — never a silent loss; re-deliver via the failed run card.
+	defer func() {
+		if err != nil && wk != nil && isolationOf(wk) == "worktree" && strings.HasPrefix(workdir, s.agentsRoot()) {
+			s.preserveFailedWorktree(workdir, err)
+		}
+	}()
 	// Brain code source: keep the configured GitHub repo current before
 	// every dispatch so the brain workspace mirrors upstream. Warnings
 	// surface in the chat tool feed without failing the dispatch.

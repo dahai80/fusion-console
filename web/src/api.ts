@@ -56,6 +56,20 @@ export type Message = {
   CreatedAt: string;
 };
 
+// ApiError carries the daemon's structured reason_code (issue #45 F1) when
+// the backend classified the failure; plain Error otherwise.
+export class ApiError extends Error {
+  reason_code?: string;
+  hint?: string;
+}
+
+function toApiError(status: number, body: { error?: string; reason_code?: string; hint?: string } | null): ApiError {
+  const err = new ApiError(body?.error || `HTTP ${status}`);
+  err.reason_code = body?.reason_code;
+  err.hint = body?.hint;
+  return err;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   // FormData bodies must keep the browser-generated multipart Content-Type.
   const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData;
@@ -69,14 +83,13 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error("unauthorized");
   }
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
+    let body: { error?: string; reason_code?: string; hint?: string } | null = null;
     try {
-      const body = await res.json();
-      if (body.error) msg = body.error;
+      body = await res.json();
     } catch {
       /* keep default */
     }
-    throw new Error(msg);
+    throw toApiError(res.status, body);
   }
   return res.json() as Promise<T>;
 }
@@ -234,9 +247,16 @@ export const api = {
     teamChatPoll: (id: number) =>
     req<{ messages: { role: string; content: string; meta?: string }[] }>(`/api/team/chat_poll?conversation_id=${id}`),
   teamTeams: () => req<{ teams: Record<string, any>[] }>("/api/team/teams"),
+  // Run replay (issue #45 F2): read-only proxies over the daemon RPCs.
+  teamRuns: (team: string | undefined, taskId: string) =>
+    req<Record<string, any>>(`/api/team/runs?task_id=${encodeURIComponent(taskId)}${team ? `&team=${encodeURIComponent(team)}` : ""}`),
+  teamRunMessages: (team: string | undefined, taskId: string, attempt: number) =>
+    req<Record<string, any>>(`/api/team/run_messages?task_id=${encodeURIComponent(taskId)}&attempt=${attempt}${team ? `&team=${encodeURIComponent(team)}` : ""}`),
+  teamRunUsage: (team: string | undefined, taskId: string) =>
+    req<Record<string, any>>(`/api/team/run_usage?task_id=${encodeURIComponent(taskId)}${team ? `&team=${encodeURIComponent(team)}` : ""}`),
   teamCreate: (body: TeamCreateReq) =>
     req<TeamCreateRes>("/api/team/create", { method: "POST", body: JSON.stringify(body) }),
-  teamOp: (body: { op: string; task_id?: string; entry_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean; text?: string }) =>
+  teamOp: (body: { op: string; task_id?: string; entry_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean; text?: string; wakeup?: Record<string, unknown>; }) =>
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
   codeInstall: (agent: string) =>
@@ -539,14 +559,13 @@ export async function streamPOST(
     throw new Error("unauthorized");
   }
   if (!res.ok || !res.body) {
-    let msg = `HTTP ${res.status}`;
+    let body: { error?: string; reason_code?: string; hint?: string } | null = null;
     try {
-      const j = await res.json();
-      if (j.error) msg = j.error;
+      body = await res.json();
     } catch {
       /* keep default */
     }
-    throw new Error(msg);
+    throw toApiError(res.status, body);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

@@ -11,26 +11,29 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // teamOpReq is the POST /api/team/op body.
 type teamOpReq struct {
-	Op             string   `json:"op"`
-	TaskID         string   `json:"task_id"`
-	EntryID        string   `json:"entry_id"`
-	MaxConcurrent  *int     `json:"max_concurrent"`
-	MaxDepth       *int     `json:"max_depth"`
-	AgentID        string   `json:"agent_id"`
-	Name           string   `json:"name"`
-	Team           string   `json:"team"`
-	Status         string   `json:"status"`
-	Capabilities   []string `json:"capabilities"`
-	Goal           string   `json:"goal"`
-	MaxRounds      int      `json:"max_rounds"`
-	TeamBudget     any      `json:"team_budget"`
-	CleanupInboxes *bool    `json:"cleanup_inboxes"`
-	Text           string   `json:"text"`
+	Op             string         `json:"op"`
+	TaskID         string         `json:"task_id"`
+	EntryID        string         `json:"entry_id"`
+	MaxConcurrent  *int           `json:"max_concurrent"`
+	MaxDepth       *int           `json:"max_depth"`
+	AgentID        string         `json:"agent_id"`
+	Name           string         `json:"name"`
+	Wakeup         map[string]any `json:"wakeup"`
+	Team           string         `json:"team"`
+	Status         string         `json:"status"`
+	Text           string         `json:"text"`
+	Capabilities   []string       `json:"capabilities"`
+	Goal           string         `json:"goal"`
+	MaxRounds      int            `json:"max_rounds"`
+	TeamBudget     any            `json:"team_budget"`
+	CleanupInboxes *bool          `json:"cleanup_inboxes"`
 }
 
 // teamOpMethod maps a console team op to the daemon JSON-RPC method and
@@ -85,6 +88,42 @@ func teamOpMethod(req teamOpReq, defTeam string) (string, map[string]any, error)
 		return "teams.lead_stop", map[string]any{"team": team}, nil
 	case "lead_status":
 		return "teams.lead_status", map[string]any{"team": team}, nil
+	case "supplement":
+		// Mid-run steering (#748, issue #45 F3): the console always sends
+		// origin=operator — member-originated supplements are rejected by the
+		// daemon. Cap errors arrive as reason_code supplement_cap_reached.
+		if req.TaskID == "" {
+			return "", nil, errTeamOp("task_id required")
+		}
+		if strings.TrimSpace(req.Text) == "" {
+			return "", nil, errTeamOp("content required")
+		}
+		return "teams.supplement", map[string]any{
+			"team": team, "task_id": req.TaskID, "content": req.Text, "origin": "operator",
+		}, nil
+	case "wakeup_create":
+		// Task wakeups (#749, issue #45 F4): the rule rides the daemon's
+		// nested shape; cap errors arrive as wakeup_cap_reached (not in the
+		// #747 v1 enum — passes through verbatim for the UI to classify).
+		if req.TaskID == "" {
+			return "", nil, errTeamOp("task_id required")
+		}
+		if len(req.Wakeup) == 0 {
+			return "", nil, errTeamOp("wakeup rule required")
+		}
+		return "teams.wakeup_create", map[string]any{
+			"team": team, "task_id": req.TaskID, "rule": req.Wakeup,
+		}, nil
+	case "wakeup_now":
+		// [Wake now] (issue #45 F4 card): an at-rule expiring immediately —
+		// the daemon's evaluation loop fires it on the next background tick.
+		if req.TaskID == "" {
+			return "", nil, errTeamOp("task_id required")
+		}
+		return "teams.wakeup_create", map[string]any{
+			"team": team, "task_id": req.TaskID,
+			"rule": map[string]any{"kind": "at", "at": float64(time.Now().Unix())},
+		}, nil
 	case "playbook_render":
 		// Read-only playbook surface (issue #14, upstream agent-studio#733).
 		// The daemon reports "playbook disabled" / "no playbook store" via the
@@ -195,16 +234,95 @@ func (s *Server) handleTeamOp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	// The daemon's teams.* dispatchers return {"status":"error","message":...}
-	// as a successful RPC result — surface it as a failure, never silent.
-	if res["status"] == "error" {
-		msg, _ := res["message"].(string)
-		log.Printf("server: team op %s rejected: %s", in.Op, msg)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": msg})
+	// The daemon's teams.* dispatchers return {"status":"error", ...} with a
+	// structured reason_code payload (issue #747) as a successful RPC result
+	// — surface it as a failure with the code intact, never silent.
+	res, err = teamResult(res)
+	if err != nil {
+		te := err.(*teamRPCError)
+		log.Printf("server: team op %s rejected (%s): %s", in.Op, te.Code, te.Message)
+		body := map[string]any{"error": te.Message}
+		if te.Code != "" {
+			body["reason_code"] = te.Code
+		}
+		if te.Hint != "" {
+			body["hint"] = te.Hint
+		}
+		writeJSON(w, http.StatusBadGateway, body)
 		return
 	}
 	log.Printf("server: team op %s executed (team=%s task=%s)", in.Op, in.Team, in.TaskID)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// teamRunsReadProxy is the shared core of the run-replay GET endpoints
+// (issue #45 F2): it forwards the query params verbatim to the named daemon
+// RPC and writes the result (or the reason-coded failure) as JSON.
+func (s *Server) teamRunsReadProxy(w http.ResponseWriter, r *http.Request, method string, allowTeam bool) {
+	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
+	if taskID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "task_id required"})
+		return
+	}
+	params := map[string]any{"task_id": taskID}
+	if allowTeam {
+		if team := strings.TrimSpace(r.URL.Query().Get("team")); team != "" {
+			params["team"] = team
+		}
+	}
+	if attempt := strings.TrimSpace(r.URL.Query().Get("attempt")); attempt != "" {
+		n, err := strconv.Atoi(attempt)
+		if err != nil || n <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "attempt must be a positive integer"})
+			return
+		}
+		params["attempt"] = n
+	}
+	jwt, err := s.teamEnsureJWT()
+	if err != nil {
+		log.Printf("server: %s auth: %v", method, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	res, err := teamRPC(studioSocketPath(), jwt, method, params)
+	if err == nil {
+		res, err = teamResult(res)
+	}
+	if err != nil {
+		te := &teamRPCError{Message: err.Error()}
+		if typed, ok := err.(*teamRPCError); ok {
+			te = typed
+		}
+		log.Printf("server: %s task=%s rejected (%s): %s", method, taskID, te.Code, te.Message)
+		body := map[string]any{"error": te.Message}
+		if te.Code != "" {
+			body["reason_code"] = te.Code
+		}
+		if te.Hint != "" {
+			body["hint"] = te.Hint
+		}
+		writeJSON(w, http.StatusBadGateway, body)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleTeamRuns serves GET /api/team/runs — teams.runs_list (attempt list
+// with per-run status/usage) for the run drawer's entry point.
+func (s *Server) handleTeamRuns(w http.ResponseWriter, r *http.Request) {
+	s.teamRunsReadProxy(w, r, "teams.runs_list", true)
+}
+
+// handleTeamRunMessages serves GET /api/team/run_messages — the timestamped
+// event stream for one attempt.
+func (s *Server) handleTeamRunMessages(w http.ResponseWriter, r *http.Request) {
+	s.teamRunsReadProxy(w, r, "teams.run_messages", true)
+}
+
+// handleTeamRunUsage serves GET /api/team/run_usage — per-run token usage
+// rows aggregated from the run_finished events.
+func (s *Server) handleTeamRunUsage(w http.ResponseWriter, r *http.Request) {
+	s.teamRunsReadProxy(w, r, "teams.run_usage", true)
 }
 
 // teamSend proxies teams.send for the chat-side brain tool: one TeamMessage
@@ -236,9 +354,9 @@ func (s *Server) teamSend(team, from, to, body, msgType, replyTo string, mention
 	if err != nil {
 		return "", "", err
 	}
-	if res["status"] == "error" {
-		msg, _ := res["message"].(string)
-		return "", "", fmt.Errorf("%s", msg)
+	res, err = teamResult(res)
+	if err != nil {
+		return "", "", err
 	}
 	msgID, _ := res["msg_id"].(string)
 	return msgID, to, nil
@@ -258,9 +376,9 @@ func (s *Server) teamInbox(team, member string) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res["status"] == "error" {
-		msg, _ := res["message"].(string)
-		return nil, fmt.Errorf("%s", msg)
+	res, err = teamResult(res)
+	if err != nil {
+		return nil, err
 	}
 	raw, ok := res["messages"].([]any)
 	if !ok {
