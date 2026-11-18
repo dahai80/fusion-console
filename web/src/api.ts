@@ -109,6 +109,8 @@ export const api = {
       body: JSON.stringify({ provider_id: providerId, model }),
     }),
   agents: () => req<{ agents: AgentInfo[] }>("/api/agents"),
+  agentRun: (p: { conversation_id: number; agent: string; task: string; workdir?: string; background?: boolean }) =>
+    req<{ ok: boolean; note?: string }>("/api/agent/run", { method: "POST", body: JSON.stringify(p) }),
   providers: () => req<{ providers: Provider[] }>("/api/settings/providers"),
   saveProvider: (p: Provider) =>
     req<{ ok: boolean; warning?: string; base_url?: string }>("/api/settings/providers", {

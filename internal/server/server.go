@@ -27,7 +27,7 @@ type Server struct {
 	store         *store.Store
 	models        *chat.ModelList
 	agents        map[string]agent.Adapter
-	agentRuns     sync.Mutex               // one agent subprocess per host at a time
+	agentSema     chan struct{}            // bounded concurrent worker slots (was a host-wide mutex: every dispatch serialized behind one subprocess)
 	approvals     sync.Map                 // confirm-mode dispatch gates: id -> chan bool
 	harness       *harness.Client          // fusion-harness sidecar (chat guards)
 	autoToken     string                   // one-time auto-login token for --open; empty = disabled
@@ -59,6 +59,12 @@ type verCacheEntry struct {
 	at      time.Time
 }
 
+// maxConcurrentAgentRuns bounds how many background worker subprocesses run
+// at once. Was a host-wide mutex (exactly one at a time) — dispatching
+// several issues queued them all behind each other; 4 slots keep memory and
+// API concurrency sane while letting independent tasks proceed in parallel.
+const maxConcurrentAgentRuns = 4
+
 // New builds the server and its route table.
 func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	s := &Server{
@@ -67,6 +73,7 @@ func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 		store:         st,
 		models:        chat.NewModelList(),
 		agents:        map[string]agent.Adapter{},
+		agentSema:     make(chan struct{}, maxConcurrentAgentRuns),
 		harness:       harness.New(),
 		verLast:       map[string]string{},
 		verCache:      map[string]verCacheEntry{},

@@ -672,8 +672,15 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     }
     // @agent mention hands the message off explicitly; anything else is a
     // plain brain chat turn (orchestration lets the brain dispatch workers).
+    // Named workers dispatch in the background — same pipeline as a brain
+    // run_agent with no brain turn in front, so the chat stays usable —
+    // while bare CLI agents keep the live-streaming foreground run.
     const mm = text.match(/@([a-zA-Z0-9_-]+)/);
     const mentioned = mm ? detectedAgents.find((a) => a.name === mm[1]) : null;
+    if (mentioned?.is_worker) {
+      await dispatchWorkerTask(text, mentioned.name);
+      return;
+    }
     if (mentioned) {
       await runAgentTask(text, mentioned.name);
       return;
@@ -722,6 +729,32 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           return copy;
         });
       });
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // @worker mention fires a direct background dispatch (POST /api/agent/run
+  // with background) — the run lands in the dispatch panel and its result is
+  // appended to this conversation when finished, no brain turn in front.
+  const dispatchWorkerTask = async (text: string, worker: string) => {
+    if (!text || busy || !worker) return;
+    setBusy(true);
+    setErr("");
+    setInput("");
+    setAttachments([]);
+    try {
+      let conv = active;
+      if (!conv) {
+        const r = await api.createConversation(text.slice(0, 40), "agent", worker, "");
+        conv = { ID: r.id, Title: text.slice(0, 40), Kind: "agent", User: "", AgentName: worker, Workdir: "", CreatedAt: "" };
+        setActive(conv);
+        await refreshConvs();
+      }
+      const r = await api.agentRun({ conversation_id: conv.ID, agent: worker, task: text, workdir: "", background: true });
+      setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: r.note || "dispatched as background run — progress in the dispatch panel" }]);
     } catch (ex) {
       setErr((ex as Error).message);
     } finally {

@@ -1096,9 +1096,9 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 		log.Printf("orchestrator: agent-brain conv=%d resuming claude session %s (mode %s applies to this run)", convID, resumeSid, settings.PermissionMode)
 	}
 	log.Printf("orchestrator: agent-brain turn conv=%d workdir=%s user=%s", convID, workdir, user)
-	// No agentRuns lock here: background dispatches hold it for the whole
-	// run (up to the dispatch timeout), and the interactive brain must stay
-	// responsive while a worker is out. One extra claude process is fine.
+	// No worker-slot acquire here: background dispatches hold slots for the
+	// whole run (up to the dispatch timeout), and the interactive brain must
+	// stay responsive while a worker is out. One extra claude process is fine.
 	// runOne streams one claude run: returns the turn text, usage and the
 	// first error text ("" = clean). Result events refresh the saved session
 	// id so the next turn can --resume it.

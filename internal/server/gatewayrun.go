@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -200,6 +201,32 @@ func tailLines(path string, n int) []string {
 		lines = lines[len(lines)-n:]
 	}
 	return lines
+}
+
+// ensureChatGateway best-effort starts the console-managed gateway when a
+// chat provider needs it but its port is closed. Without this, every brain
+// turn dies on "connection refused" until someone clicks Start on the
+// Gateway page. Returns a human note for the SSE notice feed ("" = gateway
+// reachable or nothing to do); failures never block the chat attempt.
+func (s *Server) ensureChatGateway(prov *config.Provider) string {
+	if prov == nil || prov.Type != config.ProviderGateway {
+		return ""
+	}
+	if prov.Lifecycle != "" && prov.Lifecycle != config.LifecycleFusionGateway {
+		return "" // external/custom gateway: not ours to start
+	}
+	base := strings.TrimSuffix(prov.BaseURL, "/v1")
+	if base == "" || gatewayPortOpen(base) {
+		return ""
+	}
+	log.Printf("server: chat provider gateway %s unreachable — attempting managed start", base)
+	note, err := startGateway(context.Background())
+	if err != nil {
+		log.Printf("server: gateway auto-start failed: %v", err)
+		return fmt.Sprintf("gateway auto-start failed (%v) — chat may error until it is started on the Gateway page", err)
+	}
+	log.Printf("server: gateway auto-started for chat provider: %s", note)
+	return "gateway was down — auto-started (" + note + ")"
 }
 
 // handleGatewayStart serves POST /api/gateway/start (start with the managed

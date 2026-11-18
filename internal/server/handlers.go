@@ -226,6 +226,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no usable provider — pass provider_id or enable a provider on the Models page"})
 		return
 	}
+	// Managed-gateway fast path: if the chat provider rides the console's
+	// fusion-gateway and its port is closed, auto-start it before the turn
+	// (a dead gateway otherwise turns every brain turn into a dial error).
+	if note := s.ensureChatGateway(prov); note != "" {
+		fallbackNotice = strings.TrimSpace(fallbackNotice + " " + note)
+	}
 	provider, err := buildProvider(prov)
 	if err != nil {
 		serverError(w, err, http.StatusInternalServerError)
@@ -434,6 +440,10 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		Agent          string `json:"agent"`
 		Task           string `json:"task"`
 		Workdir        string `json:"workdir"`
+		// Background skips the streaming run: the dispatch is enqueued into
+		// the background registry (worker slots, dispatch card, result
+		// reported into the conversation) exactly like a brain run_agent.
+		Background bool `json:"background"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
@@ -449,6 +459,29 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if wk != nil && !wk.Enabled {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker " + req.Agent + " is disabled in settings"})
+		return
+	}
+	// Direct background dispatch: same pipeline as the brain's run_agent
+	// (workdir/isolation/brief/caveman inside finishDispatch) without a brain
+	// turn in front — the @-mention path for single-shot tasks.
+	if req.Background {
+		if strings.TrimSpace(req.Task) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty task"})
+			return
+		}
+		user := s.auth.User(r)
+		settings := s.agentSettings(cli)
+		budget := settings.MaxBudgetUSD
+		if wk != nil && wk.MaxBudgetUSD > 0 {
+			budget = wk.MaxBudgetUSD
+		}
+		args := dispatchArgs{Agent: req.Agent, Task: req.Task, User: user}
+		note, err := s.enqueueBackgroundDispatch(req.ConversationID, user, args, wk, cli, settings, budget)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "note": note})
 		return
 	}
 	settings := s.agentSettings(cli)
@@ -487,9 +520,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No agentRuns lock on the interactive path: background dispatches hold
-	// it for their whole run, and a manual agent run must not queue behind
-	// them. The lock only serializes background workers with each other.
+	// No worker-slot acquire on the interactive path: background dispatches
+	// hold slots for their whole run, and a manual agent run must not queue
+	// behind them. The slots only bound background workers against each other.
 
 	flusher := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
