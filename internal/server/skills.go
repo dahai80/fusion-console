@@ -390,3 +390,50 @@ fetch:
 		"missing_files": bundledFileRefs(content),
 	})
 }
+
+// handleSkillsLocalImport serves POST /api/skills/local-import — read a
+// SKILL.md from a directory on this host and return it for review. Saving
+// goes through the normal skill save call, same review flow as the GitHub
+// import; nothing is installed without an explicit save.
+func (s *Server) handleSkillsLocalImport(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	dir := strings.TrimSpace(req.Path)
+	if dir == "" || !filepath.IsAbs(dir) || strings.ContainsRune(dir, 0) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path must be an absolute directory on this host"})
+		return
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a directory: " + dir})
+		return
+	}
+	mdPath := filepath.Join(dir, "SKILL.md")
+	f, err := os.Open(mdPath)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no SKILL.md in " + dir})
+		return
+	}
+	defer f.Close()
+	data, readErr := io.ReadAll(io.LimitReader(f, 256<<10))
+	if readErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read SKILL.md failed: " + readErr.Error()})
+		return
+	}
+	content := string(data)
+	warnings := auditSkillContent(content)
+	log.Printf("server: skill imported from local %s (%d bytes, %d warnings)", mdPath, len(content), len(warnings))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"content":       content,
+		"doc":           parseSkillFile(content),
+		"url":           mdPath,
+		"via_mirror":    false,
+		"warnings":      warnings,
+		"missing_files": bundledFileRefs(content),
+	})
+}

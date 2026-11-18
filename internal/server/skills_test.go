@@ -336,3 +336,29 @@ func TestSkillsImportRejectsBadSource(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillsLocalImport(t *testing.T) {
+	dir := t.TempDir()
+	skill := "---\nname: local-one\ndescription: from disk\n---\n\nBody text.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(skill), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := doJSON(t, (&Server{}).handleSkillsLocalImport, "POST", "/api/skills/local-import", map[string]any{"path": dir})
+	if code != http.StatusOK {
+		t.Fatalf("local import code = %d %v", code, out)
+	}
+	if doc, _ := out["doc"].(map[string]any); doc["name"] != "local-one" {
+		t.Fatalf("doc = %v", out["doc"])
+	}
+	if out["url"] != filepath.Join(dir, "SKILL.md") || out["via_mirror"] != false {
+		t.Fatalf("url/mirror = %v / %v", out["url"], out["via_mirror"])
+	}
+
+	// Relative path, missing directory, directory without SKILL.md.
+	for _, bad := range []string{"relative/path", filepath.Join(dir, "nope"), t.TempDir()} {
+		if code, _ := doJSON(t, (&Server{}).handleSkillsLocalImport, "POST", "/api/skills/local-import", map[string]any{"path": bad}); code == http.StatusOK {
+			t.Errorf("path %q: code 200, want error", bad)
+		}
+	}
+}

@@ -187,6 +187,8 @@ export const api = {
     req<{ content: string; doc: SkillDoc; warnings: string[] | null }>("/api/skills/draft", { method: "POST", body: JSON.stringify(d) }),
   importSkill: (source: string) =>
     req<SkillImport>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) }),
+  localImportSkill: (path: string) =>
+    req<SkillImport>("/api/skills/local-import", { method: "POST", body: JSON.stringify({ path }) }),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
   saveOrchestration: (o: Orchestrator) =>

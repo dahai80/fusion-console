@@ -50,6 +50,11 @@ func claudeArgs(agentName string, opts RunOpts) []string {
 		"--output-format", "stream-json",
 		"--verbose",
 	}
+	if opts.ResumeSessionID != "" {
+		// Resume keeps the session history; this invocation's permission
+		// mode and model flags still apply to the resumed process.
+		args = append(args, "--resume", opts.ResumeSessionID)
+	}
 	if opts.PermissionMode != "" {
 		args = append(args, "--permission-mode", opts.PermissionMode)
 	}
