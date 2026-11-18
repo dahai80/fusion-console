@@ -165,3 +165,37 @@ func TestChatDefaultConfig(t *testing.T) {
 		t.Fatal("chat default not stored")
 	}
 }
+
+func TestMergeBuiltinAgentsMigratesLegacyFusionCommand(t *testing.T) {
+	// Configs seeded when the fusion-code agent pointed at the "fusion"
+	// wrapper must migrate to the "fusion-code" binary; an explicit
+	// non-legacy command stays untouched.
+	dir := t.TempDir()
+	cfg := &Config{Server: ServerConfig{Host: "127.0.0.1", Port: 11480, DataDir: dir}}
+	cfg.Agent = []AgentSettings{
+		{Name: "fusion-code", Command: "fusion", PermissionMode: "bypassPermissions", Enabled: true, Builtin: true},
+		{Name: "claude", Command: "/opt/claude-wrapper", Enabled: true, Builtin: true},
+	}
+	if err := cfg.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	var fusion, claude string
+	for _, a := range got.Agent {
+		switch a.Name {
+		case "fusion-code":
+			fusion = a.Command
+		case "claude":
+			claude = a.Command
+		}
+	}
+	if fusion != "fusion-code" {
+		t.Errorf("legacy fusion command not migrated: %q", fusion)
+	}
+	if claude != "/opt/claude-wrapper" {
+		t.Errorf("unrelated command was touched: %q", claude)
+	}
+}

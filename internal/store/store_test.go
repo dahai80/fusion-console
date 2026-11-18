@@ -275,3 +275,24 @@ func TestWorkerSpendIncludesLegacyMCPBrainRows(t *testing.T) {
 		t.Errorf("direct row missing")
 	}
 }
+
+func TestUsageDashboardCountsLegacyMCPBrainWorkerRows(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.LogCost(0, "mcp-brain", "agent:fusion-console", 4.7, 256614, 25457); err != nil {
+		t.Fatalf("LogCost legacy worker: %v", err)
+	}
+	if err := s.LogCost(0, "admin", "chat:gw", 0.02, 1000, 500); err != nil {
+		t.Fatalf("LogCost brain: %v", err)
+	}
+	d, err := s.UsageDashboard("admin", "all")
+	if err != nil {
+		t.Fatalf("UsageDashboard: %v", err)
+	}
+	totals := d["totals"].(map[string]any)
+	if totals["worker_tokens"].(int64) != 256614+25457 {
+		t.Errorf("worker_tokens = %v", totals["worker_tokens"])
+	}
+	if totals["brain_tokens"].(int64) != 1500 {
+		t.Errorf("brain_tokens = %v, want 1500", totals["brain_tokens"])
+	}
+}

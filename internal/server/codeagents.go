@@ -21,6 +21,7 @@ const (
 	codeAgentFusion    codeAgentID = "fusion-code"
 	codeAgentClaude    codeAgentID = "claude"
 	codeAgentCodex     codeAgentID = "codex"
+	codeAgentOpencode  codeAgentID = "opencode"
 	codeAgentAtlascode codeAgentID = "atlascode"
 )
 
@@ -31,6 +32,7 @@ const (
 // per user decision 2026-11-17; claude/codex stay pinned (reference
 // protocol implementations; flipping them is a one-line change).
 var knownGoodNpmVersions = map[codeAgentID]string{
+	codeAgentOpencode:  "1.19.6",
 	codeAgentClaude:    "2.1.325",
 	codeAgentCodex:     "0.167.0",
 	codeAgentAtlascode: "0.1.121",
@@ -53,6 +55,7 @@ func (s *Server) codeAgents() []codeAgentStatus {
 		{ID: string(codeAgentFusion), Name: "fusion-code", Installed: s.cfg.Code.Installed, Running: s.cfg.Code.Installed && s.codeHealthy(time.Second)},
 		{ID: string(codeAgentClaude), Name: "Claude Code"},
 		{ID: string(codeAgentCodex), Name: "Codex CLI"},
+		{ID: string(codeAgentOpencode), Name: "OpenCode"},
 		{ID: string(codeAgentAtlascode), Name: "AtlasCode"},
 	}
 	for i := range agents {
@@ -113,6 +116,8 @@ func (s *Server) installCodeAgent(ctx context.Context, agent codeAgentID, st *ra
 		return s.startNpmInstall(ctx, st, "claude", "@anthropic-ai/claude-code@"+knownGoodNpmVersions[codeAgentClaude])
 	case codeAgentCodex:
 		return s.startNpmInstall(ctx, st, "codex", "@openai/codex@"+knownGoodNpmVersions[codeAgentCodex])
+	case codeAgentOpencode:
+		return s.startNpmInstall(ctx, st, "opencode", "opencode-ai@latest")
 	case codeAgentAtlascode:
 		return s.startNpmInstall(ctx, st, "atlascode", "@atlasharness/atlascode@latest")
 	default:
