@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,4 +221,39 @@ func injectCaveman(prompt string, claudeFamily bool, task *string, opts *agent.R
 	}
 	*task = prompt + "\n\n---\n\n" + *task
 	log.Printf("caveman: injecting activation via task prefix, no system-prompt flag on this CLI family (%d bytes)", len(prompt))
+}
+
+// cavemanStatus is the visibility payload for the Skills tab "Built-in
+// injections" block: what gets injected, from where, at which level.
+type cavemanStatus struct {
+	Enabled bool     `json:"enabled"`
+	Level   string   `json:"level"`
+	Source  string   `json:"source"`        // plugin SKILL.md path or "built-in fallback"
+	Bytes   int      `json:"ruleset_bytes"` // rendered activation block size
+	Targets []string `json:"targets"`       // where the block is injected
+}
+
+// handleCavemanStatus backs GET /api/caveman.
+func (s *Server) handleCavemanStatus(w http.ResponseWriter, _ *http.Request) {
+	orch := s.cfg.Orchestrator
+	level := strings.TrimSpace(orch.CavemanLevel)
+	if level == "" {
+		level = "full"
+	}
+	if !cavemanLevels[level] {
+		level = "full"
+	}
+	st := cavemanStatus{Enabled: orch.CavemanEnabled(), Level: level, Targets: []string{"chat brain sessions", "dispatched workers"}}
+	if !st.Enabled {
+		writeJSON(w, http.StatusOK, st)
+		return
+	}
+	txt := s.cavemanPrompt()
+	st.Bytes = len(txt)
+	if _, path, ok := readCavemanSkill(); ok {
+		st.Source = path
+	} else {
+		st.Source = "built-in fallback"
+	}
+	writeJSON(w, http.StatusOK, st)
 }

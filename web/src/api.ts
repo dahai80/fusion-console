@@ -191,6 +191,8 @@ export const api = {
     req<SkillImport>("/api/skills/local-import", { method: "POST", body: JSON.stringify({ path }) }),
   orchestration: () =>
     req<{ orchestrator: Orchestrator }>("/api/settings/orchestration"),
+  cavemanStatus: () =>
+    req<CavemanStatus>("/api/caveman"),
   saveOrchestration: (o: Orchestrator) =>
     req<{ ok: boolean }>("/api/settings/orchestration", { method: "POST", body: JSON.stringify(o) }),
   ragStatus: () => req<RagStatus>("/api/rag/status"),
@@ -486,6 +488,14 @@ export type DashboardData = {
     brain_cost_usd: number;
     worker_cost_usd: number;
   };
+};
+
+export type CavemanStatus = {
+  enabled: boolean;
+  level: string;
+  source: string;
+  ruleset_bytes: number;
+  targets: string[];
 };
 
 export type Orchestrator = {

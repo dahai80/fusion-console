@@ -144,6 +144,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/gateway/key", s.auth.Require(s.handleGatewayKeyProvision))
 	m.HandleFunc("GET /api/costs", s.auth.Require(s.handleCosts))
 	m.HandleFunc("GET /api/dashboard", s.auth.Require(s.handleDashboard))
+	m.HandleFunc("GET /api/caveman", s.auth.Require(s.handleCavemanStatus))
 	m.HandleFunc("GET /api/settings/orchestration", s.auth.Require(s.handleGetOrchestration))
 	m.HandleFunc("POST /api/settings/orchestration", s.auth.Require(s.handleSaveOrchestration))
 
