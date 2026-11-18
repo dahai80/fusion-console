@@ -475,7 +475,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const [teamRoster, setTeamRoster] = useState<string[]>([]);
   const [teamPanelOpen, setTeamPanelOpen] = useState(false);
   const [teamAgentList, setTeamAgentList] = useState<Record<string, any>[]>([]);
-  const [teamAddPick, setTeamAddPick] = useState("");
+  const [teamPickAdd, setTeamPickAdd] = useState<string[]>([]);
   const [teamPanelBusy, setTeamPanelBusy] = useState(false);
   const loadTeamRoster = useCallback(async (name: string) => {
     try {
@@ -500,26 +500,30 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     }).catch(() => setBrainLabel(""));
   }, []);
   const openTeamPanel = async () => {
-    setTeamPanelOpen((v) => !v);
-    if (!teamPanelOpen) {
-      api.teamAgents().then((r) => setTeamAgentList(r.agents ?? [])).catch(() => setTeamAgentList([]));
-    }
+    setTeamPicked([]);
+    setTeamPanelOpen(true);
+    api.teamAgents().then((r) => setTeamAgentList(r.agents ?? [])).catch(() => setTeamAgentList([]));
   };
-  const addTeamMember = async () => {
-    if (!teamAddPick || !active?.AgentName) return;
-    const a = teamAgentList.find((x) => String(x.agent_id || x.name || "") === teamAddPick);
-    const nm = String(a?.name || teamAddPick);
+  const addTeamMembers = async () => {
+    if (teamPickAdd.length === 0 || !active?.AgentName) return;
     setTeamPanelBusy(true);
     try {
-      await api.teamOp({
-        op: "register_member",
-        agent_id: teamAddPick,
-        name: nm,
-        team: active.AgentName,
-        status: "idle",
-        capabilities: Array.isArray(a?.capabilities) ? a.capabilities.map(String) : [],
-      });
-      setTeamAddPick("");
+      // One roster_register call per picked agent — partial failures stay
+      // visible, the roster reloads from the daemon afterwards.
+      for (const id of teamPickAdd) {
+        const a = teamAgentList.find((x) => String(x.agent_id || x.name || "") === id);
+        const nm = String(a?.name || id);
+        await api.teamOp({
+          op: "register_member",
+          agent_id: id,
+          name: nm,
+          team: active.AgentName,
+          status: "idle",
+          capabilities: Array.isArray(a?.capabilities) ? a.capabilities.map(String) : [],
+        });
+      }
+      setTeamPicked([]);
+      setTeamPanelOpen(false);
       await loadTeamRoster(active.AgentName);
     } catch (ex) {
       setErr((ex as Error).message);
@@ -913,28 +917,41 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
               </button>
             </div>
             {teamPanelOpen && (
-              <div className="mt-2 space-y-2 rounded-xl border border-zinc-200/80 bg-white p-3 text-sm dark:border-zinc-700 dark:bg-zinc-900">
-                <p className="text-xs font-medium text-zinc-500">Members ({teamRoster.length})</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {teamRoster.map((m) => (
-                    <span key={m} className="rounded-lg bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">{m}</span>
-                  ))}
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={teamAddPick}
-                    onChange={(e) => setTeamAddPick(e.target.value)}
-                    className="rounded-lg border border-zinc-200/80 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
-                  >
-                    <option value="">add member from daemon agents…</option>
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !teamPanelBusy && setTeamPanelOpen(false)}>
+                <div className="w-full max-w-md rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+                  <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Users size={16} /> Manage members — team: {active.AgentName}</h3>
+                  <p className="mb-2 text-xs font-medium text-zinc-500">Current members ({teamRoster.length})</p>
+                  <div className="mb-3 flex flex-wrap gap-1.5">
+                    {teamRoster.map((m) => (
+                      <span key={m} className="rounded-lg bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">{m}</span>
+                    ))}
+                    {teamRoster.length === 0 && <span className="text-xs text-zinc-400">no roster yet</span>}
+                  </div>
+                  <p className="mb-2 text-xs font-medium text-zinc-500">Agents — check to add to the team</p>
+                  {teamAgentList.length === 0 && (
+                    <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">no agents registered on the daemon yet</p>
+                  )}
+                  <div className="mb-3 max-h-56 space-y-1 overflow-y-auto">
                     {teamAgentList.map((a) => {
                       const id = String(a.agent_id || a.name || "");
-                      return <option key={id} value={id}>{String(a.name || id)} ({id})</option>;
+                      const on = teamPickAdd.includes(id);
+                      return (
+                        <label key={id} className="flex cursor-pointer items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
+                          <input type="checkbox" checked={on} className="h-4 w-4 rounded border-zinc-300 text-indigo-600"
+                            onChange={() => setTeamPicked(on ? teamPickAdd.filter((x) => x !== id) : [...teamPickAdd, id])} />
+                          <span className="font-medium">{String(a.name || id)}</span>
+                          <span className="text-xs text-zinc-500">{id}</span>
+                        </label>
+                      );
                     })}
-                  </select>
-                  <Button onClick={addTeamMember} disabled={!teamAddPick || teamPanelBusy}>
-                    {teamPanelBusy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Add
-                  </Button>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setTeamPanelOpen(false)} disabled={teamPanelBusy}>Cancel</Button>
+                    <Button onClick={addTeamMembers} disabled={teamPickAdd.length === 0 || teamPanelBusy}>
+                      {teamPanelBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                      Add {teamPickAdd.length > 0 ? `${teamPicked.length} member${teamPicked.length > 1 ? "s" : ""}` : "members"}
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}

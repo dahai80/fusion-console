@@ -24,6 +24,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # SPA built once and shared via artifact — the 5 cross-build targets
+  # reuse it instead of each rebuilding the bundle with bun.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache web dependencies
+        uses: actions/cache@v4
+        with:
+          path: web/node_modules
+          key: web-bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          restore-keys: web-bun-${{ runner.os }}-
+      - name: Install web dependencies
+        run: bun install --frozen-lockfile
+        working-directory: web
+      - name: Build web SPA
+        run: bun run build
+        working-directory: web
+      - name: Upload webdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webdist
+          path: internal/server/webdist
+          retention-days: 3
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -59,29 +87,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      # web/bun.lock is the lockfile hash key; node_modules restores in ~2s
-      # vs ~20s cold install.
-      - name: Cache web dependencies
-        uses: actions/cache@v4
-        with:
-          path: web/node_modules
-          key: web-bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
-          restore-keys: web-bun-${{ runner.os }}-
-      - name: Build web SPA
-        run: ./scripts/build-web.sh
-      - name: Vet
-        run: go vet ./...
-      - name: Format check
-        run: test -z "$(gofmt -l .)"
+      # vet/gofmt live in the lint job — here only the tests run. The
+      # committed webdist satisfies go:embed; no SPA build needed.
       - name: Test
         run: go test ./... -count=1
 
   cross-build:
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [web, lint, test]
     strategy:
       matrix:
         target: [darwin-arm64, darwin-amd64, linux-amd64, linux-arm64, windows-amd64]
@@ -92,17 +105,11 @@ jobs:
           go-version: "1.26"
         # setup-go@v5 caches the Go build/module cache keyed on go.sum by
         # default — no extra action needed for the Go side.
-      - uses: oven-sh/setup-bun@v2
+      - name: Download webdist artifact
+        uses: actions/download-artifact@v4
         with:
-          bun-version: latest
-      - name: Cache web dependencies
-        uses: actions/cache@v4
-        with:
-          path: web/node_modules
-          key: web-bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
-          restore-keys: web-bun-${{ runner.os }}-
-      - name: Build web SPA
-        run: ./scripts/build-web.sh
+          name: webdist
+          path: internal/server/webdist
       - name: Cross compile ${{ matrix.target }}
         run: ./scripts/build.sh ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
