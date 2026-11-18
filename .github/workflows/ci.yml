@@ -24,6 +24,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache web dependencies
+        uses: actions/cache@v4
+        with:
+          path: web/node_modules
+          key: web-bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          restore-keys: web-bun-${{ runner.os }}-
+      - name: Install web dependencies
+        run: bun install --frozen-lockfile
+        working-directory: web
+      # Lint must be zero-findings: go vet + gofmt for Go, tsc for the SPA.
+      - name: Go vet (zero findings)
+        run: go vet ./...
+      - name: Go format (zero findings)
+        run: test -z "$(gofmt -l .)"
+      - name: SPA typecheck (zero findings)
+        run: bunx tsc -b --force
+        working-directory: web
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -53,7 +81,7 @@ jobs:
 
   cross-build:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [lint, test]
     strategy:
       matrix:
         target: [darwin-arm64, darwin-amd64, linux-amd64, linux-arm64, windows-amd64]
