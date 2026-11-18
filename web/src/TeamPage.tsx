@@ -170,6 +170,11 @@ export default function TeamPage() {
       .catch((e) => {
         const msg = (e as Error).message;
         if (msg.includes("playbook disabled")) setPbHidden(true);
+        else if (msg.includes("team not registered")) {
+          // Unregistered team (e.g. the configured default that was never
+          // created) — a neutral empty state, not an error.
+          setPb({ rendered: "", entries: [] }); setPbHidden(false); setPbError("");
+        }
         else if (msg.includes("no playbook store")) { setPb({ rendered: "", entries: [] }); setPbHidden(false); setPbError(""); }
         else { setPb(null); setPbError(msg); }
       });
