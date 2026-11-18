@@ -104,7 +104,11 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
   chain (deny-first, fail-closed) via a Python sidecar, and chat turns are
   guarded by the same harness (context compaction + per-conversation token
   budget). Cost rows stay separate: `chat:<provider>` for the planner vs
-  `agent:<name>` for dispatched runs.
+  `agent:<name>` for dispatched runs. Background worker runs share a bounded
+  slot pool (4 concurrent by default) instead of serializing host-wide, and a
+  down console-managed gateway is auto-started before a chat turn dials it.
+  `@<worker>` mentions dispatch straight to the worker in the background (no
+  brain turn in front); `@<cli>` mentions keep the live-streaming run.
 - **Config UI** — providers + baseURL + model (fetched from `/v1/models`);
   API keys stored in the OS keychain (Keychain / DPAPI / libsecret), never in
   the config file.

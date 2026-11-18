@@ -132,9 +132,16 @@ func (s *Server) startTeamPoller() {
 	if !s.cfg.AgentStudio.Enabled {
 		return
 	}
-	log.Printf("server: team observer started (socket=%s team=%s)", studioSocketPath(), s.cfg.AgentStudio.Team)
+	// Pin the socket this poller was started for. Tests run in one process
+	// and repoint FUSION_STUDIO_SOCKET per test; a leaked poller goroutine
+	// from an earlier test must never fire RPCs at the next test's fake.
+	sock := studioSocketPath()
+	log.Printf("server: team observer started (socket=%s team=%s)", sock, s.cfg.AgentStudio.Team)
 	go func() {
 		for {
+			if studioSocketPath() != sock {
+				return
+			}
 			snap := s.pollTeam(s.cfg.AgentStudio.Team)
 			s.team.mu.Lock()
 			s.team.snap = snap

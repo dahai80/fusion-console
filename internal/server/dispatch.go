@@ -39,7 +39,7 @@ type dispatchArgs struct {
 }
 
 // bgRun is one background dispatch: queued by the brain's run_agent call,
-// executed by a goroutine (still one subprocess at a time via agentRuns),
+// executed by a goroutine (bounded by maxConcurrentAgentRuns worker slots),
 // and reported back into the originating conversation when it finishes.
 type bgRun struct {
 	ID             int64     `json:"id"`
@@ -331,8 +331,8 @@ func (r *dispatchRegistry) unreadCounts() map[int64]int {
 }
 
 // enqueueBackgroundDispatch validates nothing further (callers already did)
-// and starts the run in a goroutine. Execution still goes through the
-// one-subprocess gate, so background runs queue behind a foreground one.
+// and starts the run in a goroutine. Execution takes one of the bounded
+// worker slots, so runs queue only when all slots are busy.
 func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispatchArgs, wk *config.WorkerConfig, cli string, settings config.AgentSettings, budget float64) (string, error) {
 	// Display name: the resolved named worker, not the raw agent id the brain
 	// passed (often the CLI type "claude" — cards and chat summaries must show
@@ -361,8 +361,15 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 				s.persistRun(run)
 			}
 		}()
-		s.agentRuns.Lock()
-		defer s.agentRuns.Unlock()
+		// Bounded concurrency: acquire one of the worker slots, logging when
+		// the dispatch has to wait so queuing stays visible in the log.
+		select {
+		case s.agentSema <- struct{}{}:
+		default:
+			log.Printf("orchestrator: all %d worker slots busy — background run #%d queued", cap(s.agentSema), run.ID)
+			s.agentSema <- struct{}{}
+		}
+		defer func() { <-s.agentSema }()
 		s.bg.mu.Lock()
 		run.Status, run.StartedAt = "running", time.Now()
 		s.bg.mu.Unlock()
@@ -398,7 +405,7 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		}
 		// Chain continuation: wake the brain so a multi-step plan keeps
 		// moving without a human nudge between background runs. Detached —
-		// the worker slot (agentRuns) must free before the next turn starts.
+		// the worker slot must free before the next turn starts.
 		go s.maybeAutoContinue(run)
 	}()
 	return fmt.Sprintf("dispatched as background run #%d (worker %s). It runs after any current agent subprocess and reports back into this conversation when finished; progress is visible in the dispatch panel and via dispatch_status.", run.ID, workerName), nil
