@@ -13,25 +13,27 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // teamOpReq is the POST /api/team/op body.
 type teamOpReq struct {
-	Op             string   `json:"op"`
-	TaskID         string   `json:"task_id"`
-	EntryID        string   `json:"entry_id"`
-	MaxConcurrent  *int     `json:"max_concurrent"`
-	MaxDepth       *int     `json:"max_depth"`
-	AgentID        string   `json:"agent_id"`
-	Name           string   `json:"name"`
-	Team           string   `json:"team"`
-	Status         string   `json:"status"`
-	Text           string   `json:"text"`
-	Capabilities   []string `json:"capabilities"`
-	Goal           string   `json:"goal"`
-	MaxRounds      int      `json:"max_rounds"`
-	TeamBudget     any      `json:"team_budget"`
-	CleanupInboxes *bool    `json:"cleanup_inboxes"`
+	Op             string         `json:"op"`
+	TaskID         string         `json:"task_id"`
+	EntryID        string         `json:"entry_id"`
+	MaxConcurrent  *int           `json:"max_concurrent"`
+	MaxDepth       *int           `json:"max_depth"`
+	AgentID        string         `json:"agent_id"`
+	Name           string         `json:"name"`
+	Wakeup         map[string]any `json:"wakeup"`
+	Team           string         `json:"team"`
+	Status         string         `json:"status"`
+	Text           string         `json:"text"`
+	Capabilities   []string       `json:"capabilities"`
+	Goal           string         `json:"goal"`
+	MaxRounds      int            `json:"max_rounds"`
+	TeamBudget     any            `json:"team_budget"`
+	CleanupInboxes *bool          `json:"cleanup_inboxes"`
 }
 
 // teamOpMethod maps a console team op to the daemon JSON-RPC method and
@@ -98,6 +100,29 @@ func teamOpMethod(req teamOpReq, defTeam string) (string, map[string]any, error)
 		}
 		return "teams.supplement", map[string]any{
 			"team": team, "task_id": req.TaskID, "content": req.Text, "origin": "operator",
+		}, nil
+	case "wakeup_create":
+		// Task wakeups (#749, issue #45 F4): the rule rides the daemon's
+		// nested shape; cap errors arrive as wakeup_cap_reached (not in the
+		// #747 v1 enum — passes through verbatim for the UI to classify).
+		if req.TaskID == "" {
+			return "", nil, errTeamOp("task_id required")
+		}
+		if len(req.Wakeup) == 0 {
+			return "", nil, errTeamOp("wakeup rule required")
+		}
+		return "teams.wakeup_create", map[string]any{
+			"team": team, "task_id": req.TaskID, "rule": req.Wakeup,
+		}, nil
+	case "wakeup_now":
+		// [Wake now] (issue #45 F4 card): an at-rule expiring immediately —
+		// the daemon's evaluation loop fires it on the next background tick.
+		if req.TaskID == "" {
+			return "", nil, errTeamOp("task_id required")
+		}
+		return "teams.wakeup_create", map[string]any{
+			"team": team, "task_id": req.TaskID,
+			"rule": map[string]any{"kind": "at", "at": float64(time.Now().Unix())},
 		}, nil
 	case "playbook_render":
 		// Read-only playbook surface (issue #14, upstream agent-studio#733).

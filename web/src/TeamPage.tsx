@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Ban, BookOpen, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
+import { AlarmClock, AlertTriangle, Ban, BookOpen, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
 import { api, ApiError, type LeadStatus, type TeamSnapshot } from "./api";
-import { Button, Card } from "./components/ui";
+import { Button, Card, Select } from "./components/ui";
 import ReasonCard from "./components/ReasonCard";
 import RunDrawer from "./components/RunDrawer";
 
@@ -24,6 +24,107 @@ function columnFor(status: string): string {
   if (COLUMNS.some((c) => c.id === s)) return s;
   if (["completed", "finished", "success"].includes(s)) return "done";
   return "pending";
+}
+
+// WakeupCard (issue #45 F4): humans arm a wakeup on a blocked task (kind
+// at/every, expiry, timeout action), fire it now, or cancel the task. The
+// armed count renders only when the daemon exposes task metadata — it does
+// not today, so the counter stays hidden rather than showing a fake 0/8.
+function WakeupCard({
+  team,
+  taskId,
+  title,
+  onDone,
+  onCancel,
+}: {
+  team: string | undefined;
+  taskId: string;
+  title: string;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [kind, setKind] = useState<"at" | "every">("every");
+  const [minutes, setMinutes] = useState("15");
+  const [expiryMin, setExpiryMin] = useState("120");
+  const [onTimeout, setOnTimeout] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const arm = async () => {
+    setBusy(true);
+    setErr("");
+    const rule: Record<string, unknown> = { kind };
+    if (kind === "every") rule.every = Math.max(60, Number(minutes) * 60 || 900);
+    else rule.at = Math.floor(Date.now() / 1000) + Math.max(1, Number(minutes) * 60 || 900);
+    if (expiryMin) rule.expires_at = Math.floor(Date.now() / 1000) + Number(expiryMin) * 60;
+    if (onTimeout) rule.on_timeout = onTimeout;
+    try {
+      await api.teamOp({ op: "wakeup_create", team, task_id: taskId, wakeup: rule });
+      onDone();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const wakeNow = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.teamOp({ op: "wakeup_now", team, task_id: taskId });
+      onDone();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="border-amber-300/60 p-2.5 dark:border-amber-500/30">
+      <p className="flex items-center gap-1.5 break-words text-sm font-medium">
+        <AlarmClock size={14} className="shrink-0 text-amber-500" /> {title}
+      </p>
+      <p className="mt-1 text-xs text-zinc-400">blocked — waiting on an external condition</p>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+        <Select className="w-auto px-2 py-1" value={kind} onChange={(e) => setKind(e.target.value as "at" | "every")}>
+          <option value="every">every</option>
+          <option value="at">at (once)</option>
+        </Select>
+        <input
+          className="w-16 rounded-lg border border-zinc-200/80 bg-transparent px-2 py-1 dark:border-zinc-700"
+          value={minutes}
+          onChange={(e) => setMinutes(e.target.value)}
+          title={kind === "every" ? "interval in minutes" : "minutes from now"}
+        />
+        <span className="text-zinc-400">min</span>
+        <Select className="w-auto px-2 py-1" value={onTimeout} onChange={(e) => setOnTimeout(e.target.value)}>
+          <option value="">on timeout: keep</option>
+          <option value="end">on timeout: cancel</option>
+        </Select>
+        <input
+          className="w-16 rounded-lg border border-zinc-200/80 bg-transparent px-2 py-1 dark:border-zinc-700"
+          value={expiryMin}
+          onChange={(e) => setExpiryMin(e.target.value)}
+          title="wakeup expiry in minutes"
+        />
+        <span className="text-zinc-400">expiry</span>
+      </div>
+      {err && <p className="mt-1 text-xs text-red-500">{err}</p>}
+      <div className="mt-2 flex gap-1">
+        <Button variant="ghost" className="px-2 py-1 text-xs" onClick={arm} disabled={busy}>
+          <AlarmClock size={12} /> Arm wakeup
+        </Button>
+        <Button variant="ghost" className="px-2 py-1 text-xs" onClick={wakeNow} disabled={busy}>
+          <Play size={12} /> Wake now
+        </Button>
+        <Button variant="ghost" className="px-2 py-1 text-xs" onClick={onCancel} disabled={busy}>
+          <Ban size={12} /> Cancel task
+        </Button>
+      </div>
+    </Card>
+  );
 }
 
 export default function TeamPage() {
@@ -347,6 +448,16 @@ export default function TeamPage() {
               </p>
               <div className="space-y-2">
                 {colTasks.map((t) => (
+                  String(t.status || "").toLowerCase() === "blocked" ? (
+                    <WakeupCard
+                      key={t.task_id || t.id}
+                      team={focusTeam || undefined}
+                      taskId={String(t.task_id || t.id)}
+                      title={String(t.title || t.description || t.task_id || t.id)}
+                      onDone={load}
+                      onCancel={() => op("cancel", String(t.task_id || t.id))}
+                    />
+                  ) : (
                   <Card key={t.task_id || t.id} className="p-2.5">
                     <p className="break-words text-sm font-medium">{t.title || t.description || t.task_id || t.id}</p>
                     <p className="mt-1 truncate text-xs text-zinc-400" title={t.agent_id || ""}>{t.agent_id || ""}</p>
@@ -373,6 +484,7 @@ export default function TeamPage() {
                       </div>
                     )}
                   </Card>
+                  )
                 ))}
                 {colTasks.length === 0 && <p className="px-1 py-3 text-xs text-zinc-300 dark:text-zinc-600">—</p>}
               </div>
