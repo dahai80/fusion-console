@@ -22,6 +22,7 @@ import {
   Plus,
   X,
   RefreshCw,
+  RotateCcw,
   KeyRound,
   Loader2,
   Maximize2,
@@ -1422,6 +1423,17 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
           title="Maximize — full details">
           <Maximize2 size={12} />
         </button>
+        {r.status === "error" && (
+          <button onClick={(e) => {
+            e.stopPropagation();
+            api.agentRun({ conversation_id: r.conversation_id, agent: r.agent, task: r.task, workdir: "", background: true })
+              .catch(() => {});
+          }}
+            className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-indigo-500 dark:hover:bg-zinc-700"
+            title="Re-dispatch the same task (one-click re-deliver)">
+            <RotateCcw size={12} />
+          </button>
+        )}
         {(r.status === "done" || r.status === "error") && (
           <button onClick={(e) => { e.stopPropagation(); dismissRun(r.id); }}
             className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-red-500 dark:hover:bg-zinc-700"
