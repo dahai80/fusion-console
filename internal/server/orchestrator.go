@@ -369,6 +369,10 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 		// turn), so the run is handed to the long-lived server instead.
 		if args.Background {
 			if s.mcpMode {
+				// Carry the requesting user so background cost rows land in
+				// the per-user Workers tab spend instead of the mcp-brain
+				// legacy bucket.
+				args.User = user
 				return s.enqueueViaServer(args)
 			}
 			return s.enqueueBackgroundDispatch(convID, user, args, wk, cli, settings, budget)

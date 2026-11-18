@@ -245,3 +245,33 @@ func TestConversationModelOwnership(t *testing.T) {
 		t.Fatalf("binding not cleared: %+v err=%v", conv, err)
 	}
 }
+
+func TestWorkerSpendIncludesLegacyMCPBrainRows(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.LogCost(0, "mcp-brain", "agent:fusion-console", 4.7, 256614, 25457); err != nil {
+		t.Fatalf("LogCost legacy: %v", err)
+	}
+	if err := s.LogCost(0, "admin", "agent:claude", 2.2, 40964, 3186); err != nil {
+		t.Fatalf("LogCost direct: %v", err)
+	}
+	if err := s.LogCost(0, "someone-else", "agent:fusion-rag", 1.0, 1000, 100); err != nil {
+		t.Fatalf("LogCost other user: %v", err)
+	}
+	spend, err := s.WorkerSpend("admin")
+	if err != nil {
+		t.Fatalf("WorkerSpend: %v", err)
+	}
+	row, ok := spend["agent:fusion-console"]
+	if !ok {
+		t.Fatalf("legacy mcp-brain row missing: %+v", spend)
+	}
+	if row["tokens_in"].(int64) != 256614 {
+		t.Errorf("tokens_in = %v", row["tokens_in"])
+	}
+	if _, ok := spend["agent:fusion-rag"]; ok {
+		t.Errorf("other-user row must not leak into spend")
+	}
+	if _, ok := spend["agent:claude"]; !ok {
+		t.Errorf("direct row missing")
+	}
+}

@@ -470,11 +470,16 @@ func (s *Store) CostReport(user string) ([]map[string]any, error) {
 // WorkerSpend aggregates per-worker cost rows (source "agent:<name>") over
 // all time, keyed by source, for the dashboard Workers tab.
 func (s *Store) WorkerSpend(user string) (map[string]map[string]any, error) {
+	// Legacy rows dispatched by the brain's MCP sidecar carry user
+	// "mcp-brain" (no auth context there); count them for the requesting
+	// user so historical worker spend is not invisible.
 	rows, err := s.db.Query(
 		`SELECT source, COUNT(*) AS calls, ROUND(SUM(cost_usd), 4) AS cost_usd,
 		        SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
 		        MAX(created_at) AS last_run
-		 FROM cost_log WHERE user = ? AND source LIKE 'agent:%' GROUP BY source`, user)
+		 FROM cost_log
+		 WHERE source LIKE 'agent:%' AND (user = ? OR user = 'mcp-brain')
+		 GROUP BY source`, user)
 	if err != nil {
 		return nil, fmt.Errorf("store: worker spend: %w", err)
 	}

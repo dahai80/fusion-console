@@ -31,6 +31,11 @@ type dispatchArgs struct {
 	Offset     int64  `json:"offset"`
 	MaxBytes   int64  `json:"max_bytes"`
 	Background bool   `json:"background"`
+	// User is the console user the dispatch is attributed to. Cost rows
+	// land under this label so the Dashboard Workers tab (filtered by the
+	// logged-in user) sees the spend; empty falls back to the legacy
+	// "mcp-brain" bucket.
+	User string `json:"user,omitempty"`
 }
 
 // bgRun is one background dispatch: queued by the brain's run_agent call,
@@ -85,8 +90,14 @@ func (s *Server) enqueueViaServer(args dispatchArgs) (string, error) {
 	if s.dispatchTok == "" {
 		return "", fmt.Errorf("background dispatch unavailable: no dispatch token")
 	}
+	if strings.TrimSpace(args.User) == "" {
+		// MCP sidecar has no auth context of its own; default keeps legacy
+		// rows distinguishable from real users.
+		args.User = "mcp-brain"
+	}
 	body, _ := json.Marshal(map[string]any{
-		"agent": args.Agent, "task": args.Task, "repo": args.Repo, "background": true,
+		"agent": args.Agent, "task": args.Task, "repo": args.Repo,
+		"background": true, "user": args.User,
 	})
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 		fmt.Sprintf("http://127.0.0.1:%d/api/dispatches/enqueue", s.cfg.Server.Port), bytes.NewReader(body))
@@ -148,7 +159,14 @@ func (s *Server) handleDispatchEnqueue(w http.ResponseWriter, r *http.Request) {
 	if wk != nil && wk.MaxBudgetUSD > 0 {
 		budget = wk.MaxBudgetUSD
 	}
-	msg, err := s.enqueueBackgroundDispatch(0, "mcp-brain", args, wk, cli, settings, budget)
+	// Attribute the run to the requesting user when the brain passes it
+	// through; cost rows under "mcp-brain" are invisible to the per-user
+	// Workers tab spend query.
+	user := strings.TrimSpace(args.User)
+	if user == "" {
+		user = "mcp-brain"
+	}
+	msg, err := s.enqueueBackgroundDispatch(0, user, args, wk, cli, settings, budget)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
