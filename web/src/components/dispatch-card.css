@@ -1,0 +1,107 @@
+/* At desktop widths give the rail one fifth of the former message column.
+   The existing switcher, history column and rail occupied 3 + 16 + 18 rem. */
+@media (min-width: 64rem) {
+  aside.dispatch-rail { width: clamp(18rem, calc(20% + 10.6rem), 38rem); }
+}
+.dispatch-card,.dispatch-dialog {
+  --dispatch-tone: var(--color-zinc-600);
+  --dispatch-edge: var(--color-zinc-200);
+  --dispatch-surface: var(--color-white);
+  --dispatch-ink: var(--color-zinc-900);
+  --dispatch-secondary: var(--color-zinc-600);
+  color: var(--dispatch-ink);
+}
+.dark :is(.dispatch-card,.dispatch-dialog) {
+  --dispatch-tone: var(--color-zinc-400);
+  --dispatch-edge: var(--color-zinc-800);
+  --dispatch-surface: var(--color-zinc-900);
+  --dispatch-ink: var(--color-zinc-100);
+  --dispatch-secondary: var(--color-zinc-400);
+}
+:is(.dispatch-card,.dispatch-dialog)[data-status=running] { --dispatch-tone: var(--color-indigo-700); }
+:is(.dispatch-card,.dispatch-dialog)[data-status=done] { --dispatch-tone: var(--color-emerald-700); }
+:is(.dispatch-card,.dispatch-dialog)[data-status=blocked] { --dispatch-tone: var(--color-amber-700); }
+:is(.dispatch-card,.dispatch-dialog)[data-status=error] { --dispatch-tone: var(--color-red-700); }
+.dark :is(.dispatch-card,.dispatch-dialog)[data-status=running] { --dispatch-tone: var(--color-indigo-300); }
+.dark :is(.dispatch-card,.dispatch-dialog)[data-status=done] { --dispatch-tone: var(--color-emerald-400); }
+.dark :is(.dispatch-card,.dispatch-dialog)[data-status=blocked] { --dispatch-tone: var(--color-amber-400); }
+.dark :is(.dispatch-card,.dispatch-dialog)[data-status=error] { --dispatch-tone: var(--color-red-400); }
+.dispatch-card {
+  position: relative; border: 1px solid var(--dispatch-edge); border-radius: .75rem;
+  padding: .5rem .7rem; background: var(--dispatch-surface);
+}
+.dispatch-card:is([data-status=blocked],[data-status=error],[data-status=running]) {
+  border-color: color-mix(in srgb,var(--dispatch-tone) 32%,var(--dispatch-edge));
+}
+.dispatch-top,.dispatch-byline,.dispatch-actions,.dispatch-status,.dispatch-dialog-head,.dispatch-sheet footer button {
+  display: flex; align-items: center;
+}
+.dispatch-top,.dispatch-byline { gap: .4rem; }
+.dispatch-status { width: fit-content; gap: .3rem; padding: .08rem .4rem; border-radius: .35rem; font-size: .7rem; font-weight: 600; color: var(--dispatch-tone); background: color-mix(in srgb,var(--dispatch-tone) 11%,var(--dispatch-surface)); }
+.dispatch-id,.dispatch-byline,.dispatch-note { color: var(--dispatch-secondary); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.dispatch-actions { position: relative; z-index: 1; margin-left: auto; gap: .18rem; }
+.dispatch-actions button,.dispatch-tool { display: grid; place-items: center; min-width: 24px; min-height: 24px; border-radius: .4rem; cursor: pointer; }
+.dispatch-expand { display: block; width: 100%; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.dispatch-expand::after { content: ""; position: absolute; inset: 0; border-radius: .75rem; }
+.dispatch-expand:focus-visible { outline: 0; }
+.dispatch-expand:focus-visible::after { outline: 2px solid var(--color-indigo-500); outline-offset: -1px; }
+.dispatch-title,.dispatch-note { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.dispatch-title { margin-block: .2rem; font-size: .825rem; font-weight: 520; line-height: 1.4; -webkit-line-clamp: 2; }
+.dispatch-note { margin-bottom: .22rem; -webkit-line-clamp: 1; }
+.dispatch-byline span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dispatch-byline svg { flex-shrink: 0; }.dispatch-byline i { font-style: normal; }.dispatch-max { margin-left: auto; }
+.dispatch-dialog { position: fixed; inset: 0; margin: auto; width: min(39rem,calc(100% - 2rem)); max-height: min(84dvh,50rem); padding: 0; border: 1px solid var(--dispatch-edge); border-radius: 1rem; background: var(--dispatch-surface); overflow: hidden; box-shadow: 0 16px 55px #09090b38; }
+.dispatch-dialog::backdrop { background: #09090b77; }
+.dispatch-sheet { display: flex; flex-direction: column; max-height: inherit; }
+.dispatch-dialog-head { padding: 1rem 1.2rem; justify-content: space-between; gap: .6rem; border-bottom: 1px solid var(--dispatch-edge); }
+.dispatch-dialog-head h2 { margin-top: .3rem; font-weight: 600; overflow-wrap: anywhere; }
+.dispatch-content { padding: 1rem 1.2rem; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+.dispatch-stages { display: flex; margin-bottom: .75rem; padding: 0; list-style: none; }
+.dispatch-stages li { display: flex; align-items: center; flex: 1; gap: .3rem; color: var(--dispatch-secondary); font-size: .75rem; }
+.dispatch-stages li:last-child { flex: initial; }
+.dispatch-stages li:not(:last-child)::after { content: ""; flex: 1; height: 1px; margin-inline: .2rem .55rem; background: var(--dispatch-edge); }
+.dispatch-stages li span { width: .5rem; height: .5rem; border-radius: 50%; border: 1px solid var(--dispatch-secondary); }
+.dispatch-stages li[data-reached=true] span { background: var(--dispatch-tone); border-color: var(--dispatch-tone); }
+.dispatch-stages li[aria-current=step] { color: var(--dispatch-tone); font-weight: 600; }
+.dispatch-facts { display: flex; flex-wrap: wrap; gap: .45rem 1.3rem; font-size: .75rem; font-variant-numeric: tabular-nums; }
+.dispatch-facts dt,.dispatch-content h3 { color: var(--dispatch-secondary); font-size: .75rem; }
+.dispatch-content section { margin-top: 1rem; }.dispatch-content h3 { margin-bottom: .25rem; font-weight: 600; }
+.dispatch-content section p { white-space: pre-wrap; user-select: text; font-size: .875rem; line-height: 1.5; }
+.dispatch-error-text { color: var(--dispatch-tone); }
+.dispatch-sheet footer { padding: .6rem 1.2rem; border-top: 1px solid var(--dispatch-edge); }
+.dispatch-sheet footer button { gap: .4rem; min-height: 28px; cursor: pointer; font-size: .8rem; color: var(--dispatch-secondary); }
+@media(hover:hover){.dispatch-card:has(.dispatch-expand:hover),.dispatch-tool:hover { background: color-mix(in srgb,var(--dispatch-tone) 4%,var(--dispatch-surface)); }}
+@media(prefers-reduced-motion:no-preference){
+  .dispatch-card[data-status=running] .dispatch-status svg,.dispatch-dialog[data-status=running] .dispatch-status svg { animation: spin 1.8s linear infinite; }
+  .dispatch-dialog[open] { animation: dispatch-reveal 140ms cubic-bezier(.23,1,.32,1); }
+  @keyframes dispatch-reveal { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+}
+@media(pointer:coarse){ .dispatch-actions button,.dispatch-tool { min-width: 36px; min-height: 40px; } }
+.dispatch-top .dispatch-byline { min-width: 0; }
+.dispatch-top .dispatch-id { flex: none; }
+.dispatch-expand { display: flex; align-items: baseline; gap: .45rem; justify-content: space-between; }
+.dispatch-expand > svg { color: var(--dispatch-secondary); flex: none; }
+.dispatch-card .dispatch-stages { margin: .35rem 0 .15rem; }
+.dispatch-card .dispatch-stages li { font-size: .69rem; }
+.dispatch-stages li[aria-current=step] span { box-shadow: 0 0 0 2px color-mix(in srgb,var(--dispatch-tone) 16%,transparent); }
+.dispatch-card .dispatch-note { margin: .25rem 0 0; }
+.dispatch-brain {
+  margin-bottom: .55rem; padding: .5rem .7rem; border-radius: .75rem;
+  border: 1px solid var(--color-zinc-200); color: var(--color-zinc-700); background: var(--color-white); flex: none;
+}
+.dark .dispatch-brain { border-color: var(--color-zinc-800); color: var(--color-zinc-300); background: var(--color-zinc-900); }
+.brain-line { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; font-size: .75rem; }
+.brain-line > svg { color: var(--color-indigo-500); }
+.brain-line strong { font-weight: 600; }
+.brain-scope,.brain-phase,.brain-handoff span { font-size: .69rem; }
+.brain-scope,.brain-handoff span { color: var(--color-zinc-500); }
+.dark .brain-scope,.dark .brain-handoff span { color: var(--color-zinc-400); }
+.brain-phase { margin-left: auto; }
+.dispatch-brain[data-live=true] .brain-phase { color: var(--color-indigo-700); }
+.dark .dispatch-brain[data-live=true] .brain-phase { color: var(--color-indigo-300); }
+.brain-context,.brain-handoff { margin-top: .3rem; font-size: .75rem; line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.brain-handoff span { margin-right: .27rem; }
+@media(prefers-reduced-motion:no-preference) {
+  .dispatch-stages li span { transition: background-color 160ms ease, box-shadow 160ms ease; }
+  .dispatch-stages li[aria-current=step] span,.brain-context { animation: dispatch-reveal 160ms cubic-bezier(.23,1,.32,1); }
+}
