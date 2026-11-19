@@ -35,6 +35,7 @@ import {
   ExternalLink,
   Database,
   FileText,
+  Gauge,
   Users,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -344,6 +345,9 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [orchestrate, setOrchestrate] = useState(true);
   const [busy, setBusy] = useState(false);
   const [approval, setApproval] = useState<{ id: string; detail: string } | null>(null);
+  // Budget meter (issue #66): live conversation token spend from the harness
+  // pre_llm/post_llm gate events.
+  const [budget, setBudget] = useState<{ spent: number; limit: number } | null>(null);
   const [err, setErr] = useState("");
   const [unread, setUnread] = useState<Record<string, number>>({});
   // H5 (mobile) drawers: the conversation rail and the dispatch rail are
@@ -838,6 +842,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
           }
           else if (type === "error") last.content += `\n\n**error:** ${ev.text}`;
           else if (type === "usage") last.meta = JSON.stringify(ev);
+          else if (type === "budget") setBudget({ spent: (ev.spent as number) ?? 0, limit: (ev.limit as number) ?? 0 });
           return copy;
         });
       });
@@ -1209,6 +1214,24 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
               <Brain size={14} className="text-indigo-500" /> Brain
             </span>
           )}
+          {budget && budget.limit > 0 && (() => {
+            const pct = Math.min(100, Math.round((budget.spent / budget.limit) * 100));
+            return (
+              <span
+                title={`Conversation token budget: ${budget.spent.toLocaleString()} / ${budget.limit.toLocaleString()} tokens (${pct}%)`}
+                className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+              >
+                <Gauge size={14} className={pct >= 90 ? "text-red-500" : pct >= 70 ? "text-amber-500" : "text-emerald-500"} />
+                <span className="tabular-nums">{pct}%</span>
+                <span className="h-1 w-14 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
+                  <span
+                    className={`block h-full rounded-full ${pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-emerald-500"}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </span>
+              </span>
+            );
+          })()}
           <button
             onClick={() => setDispatchDrawer(true)}
             title="Dispatches"

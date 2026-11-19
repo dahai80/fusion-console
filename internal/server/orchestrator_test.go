@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/dahai80/fusion-console/internal/auth"
+	"github.com/dahai80/fusion-console/internal/chat"
 	"github.com/dahai80/fusion-console/internal/config"
+	"github.com/dahai80/fusion-console/internal/harness"
 )
 
 // initRepo creates a minimal git repo with one commit at dir.
@@ -338,5 +340,51 @@ func TestPlannerToolParameters(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAdmitDecision (issue #66): kernel needs_approval routes through the
+// approval flow for any declared tool; undeclared tools never execute;
+// sidecar errors deny closed; confirm mode gates run_agent when the kernel
+// did not ask.
+func TestAdmitDecision(t *testing.T) {
+	tools := []chat.ToolDecl{{Name: "run_agent"}, {Name: "read_artifact"}}
+
+	allowed, needsApproval, reason, _ := admitDecision(
+		harness.Admit{Allowed: true, NeedsApproval: true}, "read_artifact", tools, false)
+	if !allowed || !needsApproval {
+		t.Fatalf("kernel approval request ignored: allowed=%v needs=%v", allowed, needsApproval)
+	}
+
+	// Kernel did not ask + confirm mode off: declared tool runs outright.
+	allowed, needsApproval, _, _ = admitDecision(
+		harness.Admit{Allowed: true}, "read_artifact", tools, false)
+	if !allowed || needsApproval {
+		t.Fatalf("plain allow must run: allowed=%v needs=%v", allowed, needsApproval)
+	}
+
+	// Kernel did not ask + confirm mode on: run_agent gates, others run.
+	_, needsApproval, _, _ = admitDecision(harness.Admit{Allowed: true}, "run_agent", tools, true)
+	if !needsApproval {
+		t.Fatal("confirm mode must gate run_agent")
+	}
+	_, needsApproval, _, _ = admitDecision(harness.Admit{Allowed: true}, "read_artifact", tools, true)
+	if needsApproval {
+		t.Fatal("confirm mode must not gate non-dispatch tools")
+	}
+
+	// Kernel ask loses to undeclared tool — never execute foreign tools.
+	allowed, _, reason, _ = admitDecision(
+		harness.Admit{Allowed: true, NeedsApproval: true}, "rm_rf", tools, false)
+	if allowed || reason != "tool not in planner tool set" {
+		t.Fatalf("undeclared tool leaked: allowed=%v reason=%q", allowed, reason)
+	}
+
+	// Plain deny keeps the kernel reason and blocked_by.
+	blockedBy := ""
+	allowed, needsApproval, reason, blockedBy = admitDecision(
+		harness.Admit{Reason: "destructive tool", BlockedBy: "permission_engine"}, "rm_rf", tools, false)
+	if allowed || needsApproval || reason != "destructive tool" || blockedBy != "permission_engine" {
+		t.Fatalf("deny mangled: allowed=%v needs=%v reason=%q blocked_by=%q", allowed, needsApproval, reason, blockedBy)
 	}
 }

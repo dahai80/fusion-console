@@ -222,35 +222,62 @@ func (c *Client) kill() {
 // ErrDisabled means the sidecar is not available; callers proceed unguarded.
 var ErrDisabled = fmt.Errorf("harness: disabled")
 
+// PreLLMResult carries the pre_llm gate decision plus the conv budget state
+// (spent/limit tokens) so the UI can render a live budget meter (issue #66).
+type PreLLMResult struct {
+	Proceed  bool
+	Reason   string
+	Messages []Message
+	Spent    int
+	Limit    int
+}
+
 // PreLLM gates one LLM call: budget check + compaction (harness impl).
-func (c *Client) PreLLM(convID int64, budgetTokens int, model string, msgs []Message) (proceed bool, reason string, out []Message, err error) {
+func (c *Client) PreLLM(convID int64, budgetTokens int, model string, msgs []Message) (PreLLMResult, error) {
 	var res struct {
 		Proceed  bool      `json:"proceed"`
 		Reason   string    `json:"reason"`
 		Messages []Message `json:"messages"`
+		Spent    int       `json:"spent"`
+		Limit    int       `json:"limit"`
 	}
 	params := map[string]any{"conv_id": convID, "budget_tokens": budgetTokens, "model": model, "messages": msgs}
-	if err = c.call("pre_llm", params, &res); err != nil {
-		return false, "", msgs, err
+	if err := c.call("pre_llm", params, &res); err != nil {
+		return PreLLMResult{Proceed: false, Reason: err.Error(), Messages: msgs}, err
 	}
-	return res.Proceed, res.Reason, res.Messages, nil
+	return PreLLMResult{Proceed: res.Proceed, Reason: res.Reason, Messages: res.Messages, Spent: res.Spent, Limit: res.Limit}, nil
 }
 
-// PostLLM records one completed call's token usage into the conv budget.
-func (c *Client) PostLLM(convID int64, budgetTokens, tokens int) error {
-	return c.call("post_llm", map[string]any{"conv_id": convID, "budget_tokens": budgetTokens, "tokens": tokens}, nil)
+// PostLLM records one completed call's token usage into the conv budget and
+// reports the updated spend + exceeded flag for the budget meter (issue #66).
+func (c *Client) PostLLM(convID int64, budgetTokens, tokens int) (spent int, exceeded bool, err error) {
+	var res struct {
+		Spent    int  `json:"spent"`
+		Exceeded bool `json:"exceeded"`
+	}
+	if err = c.call("post_llm", map[string]any{"conv_id": convID, "budget_tokens": budgetTokens, "tokens": tokens}, &res); err != nil {
+		return 0, false, err
+	}
+	return res.Spent, res.Exceeded, nil
+}
+
+// Admit is the tool_admit verdict from the harness kernel (issue #66):
+// needs_approval means the kernel wants a human decision (routed through the
+// console's approval flow) — not a plain deny.
+type Admit struct {
+	Allowed       bool   `json:"allowed"`
+	Reason        string `json:"reason"`
+	BlockedBy     string `json:"blocked_by"`
+	NeedsApproval bool   `json:"needs_approval"`
 }
 
 // ToolAdmit runs the tool admission chain for orchestrator dispatch.
-func (c *Client) ToolAdmit(convID int64, budgetTokens int, tool string, args map[string]any) (allowed bool, reason string, err error) {
-	var res struct {
-		Allowed bool   `json:"allowed"`
-		Reason  string `json:"reason"`
+func (c *Client) ToolAdmit(convID int64, budgetTokens int, tool string, args map[string]any) (Admit, error) {
+	var res Admit
+	if err := c.call("tool_admit", map[string]any{"conv_id": convID, "budget_tokens": budgetTokens, "tool": tool, "args": args}, &res); err != nil {
+		return Admit{Allowed: false, Reason: err.Error()}, err
 	}
-	if err = c.call("tool_admit", map[string]any{"conv_id": convID, "budget_tokens": budgetTokens, "tool": tool, "args": args}, &res); err != nil {
-		return false, "", err
-	}
-	return res.Allowed, res.Reason, nil
+	return res, nil
 }
 
 // Close stops the sidecar.
