@@ -1,13 +1,23 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (() => {
+        let mode;
+        try { mode = localStorage.getItem("fc-theme"); } catch {}
+        const root = document.documentElement;
+        root.dataset.theme = mode === "light" || mode === "dark" ? mode : "system";
+        root.classList.toggle("dark", root.dataset.theme === "dark" ||
+          (root.dataset.theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches));
+      })();
+    </script>
     <title>fusion-console</title>
-    <script type="module" crossorigin src="/assets/index-DOVO_OXV.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BKJKSbcF.css">
+    <script type="module" crossorigin src="/assets/index-Crt9b9kV.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-D6VMWkfd.css">
   </head>
-  <body class="bg-zinc-950 text-zinc-100">
+  <body class="bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
     <div id="root"></div>
   </body>
 </html>
