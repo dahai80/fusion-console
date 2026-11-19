@@ -65,7 +65,7 @@ export function ModelsPage({ onSaved }: { onSaved?: () => void }) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
   const [job, setJob] = useState<{ phase: string; logs: string[]; error: string } | null>(null);
-  const [mlx, setMlx] = useState<{ supported: boolean; installed: boolean; enabled: boolean; healthy: boolean; port: number; model: string; install_dir: string } | null>(null);
+  const [mlx, setMlx] = useState<{ supported: boolean; installed: boolean; enabled: boolean; healthy: boolean; port: number; model: string; install_dir: string; ram_gb: number; chat_default: boolean; recommendations: { model: string; params: string; gb: number; tier: string }[] } | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
 
   const refreshMlx = useCallback(async () => {
@@ -81,6 +81,17 @@ export function ModelsPage({ onSaved }: { onSaved?: () => void }) {
     setBusy("mlx:" + op);
     try {
       await api.mlxOp({ op });
+      await refreshMlx();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy("");
+    }
+  };
+  const mlxOpModel = async (op: string, model: string) => {
+    setBusy("mlx:" + op);
+    try {
+      await api.mlxOp({ op, model });
       await refreshMlx();
     } catch (ex) {
       setErr((ex as Error).message);
@@ -430,6 +441,9 @@ export function ModelsPage({ onSaved }: { onSaved?: () => void }) {
           {mlx.enabled && (
             <span className="rounded-lg bg-indigo-500/10 px-2 py-0.5 text-xs text-indigo-600 dark:text-indigo-400">fallback on</span>
           )}
+          {mlx.chat_default && (
+            <span className="rounded-lg bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600 dark:text-emerald-400">chat default</span>
+          )}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {mlx.installed && !mlx.healthy && (
               <Button variant="outline" onClick={() => mlxOp("start")} disabled={busy !== ""}>
@@ -450,6 +464,38 @@ export function ModelsPage({ onSaved }: { onSaved?: () => void }) {
           <p className="w-full text-xs text-zinc-400">
             When enabled, a chat turn falls back to this local engine if the cloud gateway is unreachable. Engine dir: {mlx.install_dir} · port {mlx.port}
           </p>
+          {/* RAM-fitted model suggestions (Apple Silicon unified memory).
+              "Use" registers the local provider entry and makes it the chat
+              default — every new conversation runs on fusion-mlx. */}
+          {mlx.recommendations.length > 0 && (
+            <div className="w-full space-y-1.5 border-t border-zinc-200/60 pt-3 dark:border-zinc-800">
+              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Model suggestions for {mlx.ram_gb}GB unified memory
+              </p>
+              {mlx.recommendations.map((rec) => (
+                <div key={rec.model} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="w-14 text-xs text-zinc-400">{rec.params}</span>
+                  <span className="font-mono text-xs">{rec.model}</span>
+                  <span className="text-xs text-zinc-400">~{rec.gb}GB</span>
+                  <span className={`rounded-lg px-1.5 py-0.5 text-[10px] ${
+                    rec.tier === "comfortable"
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      : rec.tier === "tight"
+                        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                        : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"
+                  }`}>
+                    {rec.tier === "comfortable" ? "fits well" : rec.tier === "tight" ? "tight" : "too big"}
+                  </span>
+                  {rec.tier !== "too_big" && (
+                    <Button variant="ghost" className="ml-auto" onClick={() => mlxOpModel("set_primary", rec.model)} disabled={busy !== "" || !mlx.healthy}>
+                      Use as chat model
+                    </Button>
+                  )}
+                </div>
+              ))}
+              <p className="text-xs text-zinc-400">Download models through fusion-mlx itself (HF mirror) — the console only suggests.</p>
+            </div>
+          )}
         </div>
       )}
 
