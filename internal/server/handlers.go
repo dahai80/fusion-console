@@ -332,8 +332,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		pre, err := s.harness.PreLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, model, hMsgs)
 		if err != nil {
-			log.Printf("server: harness pre_llm unavailable, proceeding unguarded: %v", err)
-		} else {
+			// Fail-closed (issue #110): a broken guard denies the call, it
+			// never becomes unguarded chat.
+			log.Printf("server: harness pre_llm unavailable, failing closed: %v", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "harness guard unavailable: " + err.Error()})
+			return
+		}
+		{
 			budgetSpent, budgetLimit = pre.Spent, pre.Limit
 			if !pre.Proceed {
 				log.Printf("server: harness denied llm call conv=%d: %s", req.ConversationID, pre.Reason)
