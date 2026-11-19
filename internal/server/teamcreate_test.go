@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dahai80/fusion-console/internal/config"
@@ -96,10 +97,23 @@ const wizardBody = `{"team":{"name":"workers-two","namespace_key":"team:workers-
 // the definition under the "definition" key with kernel field names, tasks
 // are added in order on the created team, the response reports task ids.
 func TestTeamCreateSuccess(t *testing.T) {
+	// The team poller goroutine dials the same fake socket concurrently with
+	// the create pipeline; appends must not race on the shared slice.
+	var mu sync.Mutex
 	var methods []string
+	record := func(method string) {
+		mu.Lock()
+		methods = append(methods, method)
+		mu.Unlock()
+	}
+	snapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), methods...)
+	}
 	var addTeams []any
 	sock := fakeStudioFunc(t, func(method string, params map[string]any) (map[string]any, error) {
-		methods = append(methods, method)
+		record(method)
 		switch method {
 		case "teams.register":
 			def, _ := params["definition"].(map[string]any)
@@ -135,8 +149,8 @@ func TestTeamCreateSuccess(t *testing.T) {
 	if len(out.Tasks) != 1 || out.Tasks[0].TaskID != "task-1" || out.Tasks[0].Error != "" {
 		t.Fatalf("tasks = %+v", out.Tasks)
 	}
-	if len(methods) < 2 || methods[0] != "teams.register" || methods[1] != "teams.add_task" {
-		t.Fatalf("call order = %v", methods)
+	if m := snapshot(); len(m) < 2 || m[0] != "teams.register" || m[1] != "teams.add_task" {
+		t.Fatalf("call order = %v", m)
 	}
 	if len(addTeams) != 1 || addTeams[0] != "workers-two" {
 		t.Fatalf("add_task team = %v", addTeams)

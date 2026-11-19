@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dahai80/fusion-console/internal/chat"
@@ -29,9 +30,22 @@ func runTool(t *testing.T, s *Server, name, args string) (string, error) {
 // same register -> add_task -> lead_start pipeline as the wizard proxy and
 // reports per-task outcomes in the tool result text.
 func TestCreateTeamToolPipeline(t *testing.T) {
+	// Poller goroutine dials the same fake socket concurrently with the tool
+	// pipeline; appends must not race on the shared slice (CI flake).
+	var mu sync.Mutex
 	var methods []string
-	sock := fakeStudioFunc(t, func(method string, params map[string]any) (map[string]any, error) {
+	record := func(method string) {
+		mu.Lock()
 		methods = append(methods, method)
+		mu.Unlock()
+	}
+	snapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), methods...)
+	}
+	sock := fakeStudioFunc(t, func(method string, params map[string]any) (map[string]any, error) {
+		record(method)
 		switch method {
 		case "teams.register":
 			def, _ := params["definition"].(map[string]any)
@@ -56,6 +70,7 @@ func TestCreateTeamToolPipeline(t *testing.T) {
 	}
 	// teamEnsureJWT warms caches with other RPCs; assert the create pipeline
 	// as an ordered subsequence.
+	methods = snapshot()
 	var pipeline []string
 	for _, m := range methods {
 		switch m {
