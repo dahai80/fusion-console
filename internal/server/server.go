@@ -103,6 +103,8 @@ func (s *Server) routes() {
 	m := s.mux
 	m.HandleFunc("GET /api/health", s.handleHealth)
 	m.HandleFunc("GET /api/memory/status", s.handleMemoryStatus)
+	m.HandleFunc("GET /api/mlx/status", s.handleMLXStatus)
+	m.HandleFunc("POST /api/mlx/op", s.handleMLXOp)
 	m.HandleFunc("POST /api/login", s.handleLogin)
 	m.HandleFunc("POST /api/autologin", s.handleAutoLogin)
 	m.HandleFunc("POST /api/logout", s.handleLogout)

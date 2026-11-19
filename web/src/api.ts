@@ -139,6 +139,10 @@ export const api = {
   models: (provider: string) =>
     req<{ models: string[] }>(`/api/settings/models?provider=${encodeURIComponent(provider)}`),
   modelCatalog: () => req<{ items: ModelCatalogItem[] }>("/api/model-catalog"),
+  mlxStatus: () =>
+    req<{ supported: boolean; installed: boolean; enabled: boolean; healthy: boolean; port: number; model: string; install_dir: string }>("/api/mlx/status"),
+  mlxOp: (p: { op: string; model?: string }) =>
+    req<{ ok: boolean; note?: string }>("/api/mlx/op", { method: "POST", body: JSON.stringify(p) }),
   setChatDefault: (providerId: string, model: string) =>
     req<{ ok: boolean }>("/api/settings/chat-default", {
       method: "POST",
