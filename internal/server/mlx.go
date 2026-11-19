@@ -112,20 +112,63 @@ func (s *Server) stopMLX() (string, error) {
 	return "stopped", nil
 }
 
+// MlxModelRec is one suggested local model: MLX 4-bit weights are roughly
+// 0.55 GB per billion parameters; the catalog lists the common picks.
+type MlxModelRec struct {
+	Model  string  `json:"model"`
+	Params string  `json:"params"`
+	GB     float64 `json:"gb"`
+	Tier   string  `json:"tier"` // comfortable | tight | too_big | unknown
+}
+
+// mlxModelCatalog returns the suggestion list fitted to the host's unified
+// memory. Headroom model: weights + KV cache must fit under RAM minus the
+// OS (~6GB) and console worker processes (~4GB); "comfortable" additionally
+// keeps 4GB spare, "tight" loads but squeezes everything else.
+func mlxModelCatalog(ramGB int) []MlxModelRec {
+	if ramGB <= 0 {
+		return nil
+	}
+	catalog := []MlxModelRec{
+		{Model: "qwen3-4b-4bit", Params: "4B", GB: 2.5},
+		{Model: "qwen3-8b-4bit", Params: "8B", GB: 5},
+		{Model: "qwen3-14b-4bit", Params: "14B", GB: 9},
+		{Model: "qwen3-32b-4bit", Params: "32B", GB: 20},
+		{Model: "qwen3-72b-4bit", Params: "72B", GB: 40},
+	}
+	avail := float64(ramGB) - 10
+	out := make([]MlxModelRec, 0, len(catalog))
+	for _, m := range catalog {
+		tier := "too_big"
+		switch {
+		case m.GB+4 <= avail:
+			tier = "comfortable"
+		case m.GB+2 <= avail:
+			tier = "tight"
+		}
+		out = append(out, MlxModelRec{Model: m.Model, Params: m.Params, GB: m.GB, Tier: tier})
+	}
+	return out
+}
+
 func (s *Server) handleMLXStatus(w http.ResponseWriter, r *http.Request) {
 	installed := false
 	if mlxSupported() {
 		_, err := os.Stat(filepath.Join(s.cfg.MLX.InstallDir, "start.sh"))
 		installed = err == nil
 	}
+	ram := ramGB()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"supported":   mlxSupported(),
-		"installed":   installed,
-		"enabled":     s.cfg.MLX.Enabled,
-		"healthy":     mlxSupported() && s.mlxHealthy(500*time.Millisecond),
-		"port":        s.cfg.MLX.Port,
-		"model":       s.cfg.MLX.Model,
-		"install_dir": s.cfg.MLX.InstallDir,
+		"supported":       mlxSupported(),
+		"installed":       installed,
+		"enabled":         s.cfg.MLX.Enabled,
+		"healthy":         mlxSupported() && s.mlxHealthy(500*time.Millisecond),
+		"port":            s.cfg.MLX.Port,
+		"model":           s.cfg.MLX.Model,
+		"install_dir":     s.cfg.MLX.InstallDir,
+		"ram_gb":          ram,
+		"chat_default":    s.cfg.Chat.DefaultProviderID == "fusion-mlx-local",
+		"recommendations": mlxModelCatalog(ram),
 	})
 }
 
@@ -145,6 +188,45 @@ func (s *Server) handleMLXOp(w http.ResponseWriter, r *http.Request) {
 		note, err = s.startMLX(r.Context())
 	case "stop":
 		note, err = s.stopMLX()
+	case "set_primary":
+		// Register (or update) a persistent provider entry for the local
+		// engine and make it the chat default — every new conversation then
+		// runs on fusion-mlx. The engine itself must be running already.
+		if !s.mlxHealthy(500 * time.Millisecond) {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "fusion-mlx is not running — start it first"})
+			return
+		}
+		model := strings.TrimSpace(req.Model)
+		if model == "" {
+			model = strings.TrimSpace(s.cfg.MLX.Model)
+		}
+		if model == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pick a model first"})
+			return
+		}
+		found := false
+		for i := range s.cfg.Provider {
+			if s.cfg.Provider[i].ID == "fusion-mlx-local" {
+				s.cfg.Provider[i].BaseURL = s.mlxBaseURL() + "/v1"
+				s.cfg.Provider[i].Model = model
+				s.cfg.Provider[i].Models = []string{model}
+				s.cfg.Provider[i].Enabled = true
+				found = true
+			}
+		}
+		if !found {
+			s.cfg.Provider = append(s.cfg.Provider, config.Provider{
+				ID: "fusion-mlx-local", Name: "fusion-mlx (local)",
+				Type: config.ProviderOpenAICompat, BaseURL: s.mlxBaseURL() + "/v1",
+				Model: model, Models: []string{model}, Enabled: true,
+			})
+		}
+		s.cfg.Chat = config.ChatConfig{DefaultProviderID: "fusion-mlx-local", DefaultModel: model}
+		s.cfg.MLX.Model = model
+		s.cfg.MLX.Enabled = true
+		if err = s.cfg.Save(s.cfgDir); err == nil {
+			note = "chat default set to fusion-mlx-local (" + model + ")"
+		}
 	case "enable", "disable":
 		s.cfg.MLX.Enabled = req.Op == "enable"
 		if req.Model != "" {
