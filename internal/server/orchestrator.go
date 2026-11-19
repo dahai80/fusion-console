@@ -226,7 +226,7 @@ func orchestratorTools() []chat.ToolDecl {
 				`"tool_allowlist":{"type":"array","items":{"type":"string"},"description":"defaults to [file_read] when omitted — include file_read so members can read the full SPEC.md"},"permission_mode":{"type":"string"},` +
 				`"budget_tokens":{"type":"integer"},"max_concurrency":{"type":"integer"},` +
 				`"context":{"type":"string","description":"resident member context (role description + key conventions), injected into every member turn"}},"required":["name"]}},` +
-				`"playbook":{"type":"boolean"},"max_depth":{"type":"integer"},"lead_budget_tokens":{"type":"integer"}},` +
+				`"playbook":{"type":"boolean"},"max_depth":{"type":"integer"},"lead_budget_tokens":{"type":"integer"}}},` +
 				`"spec":{"type":"string","description":"optional initial team SPEC.md body (collaboration conventions, role boundaries); seeded at register time"},` +
 				`"tasks":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"detail":{"type":"string"}},"required":["title"]}},` +
 				`"lead_start":{"type":"boolean","description":"start the lead loop right after creation"},` +
