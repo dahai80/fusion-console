@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Loader2, PanelRightClose, PanelRightOpen, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Check, CircleAlert, Clock, Loader2, PanelRightClose, PanelRightOpen } from "lucide-react";
 import type { DispatchRun } from "../api";
 
 const desktopQuery = window.matchMedia("(min-width: 48rem)");
@@ -24,35 +24,34 @@ export function useDispatchRail() {
   return { desktop, open: desktop ? docked : drawer, setOpen };
 }
 
-export function DispatchSummary({ runs, stale, open, onToggle }: {
-  runs: DispatchRun[] | null; stale: boolean; open: boolean; onToggle: () => void;
+export function DispatchReopen({ runs, stale, onOpen }: {
+  runs: DispatchRun[] | null; stale: boolean; onOpen: () => void;
 }) {
   const counts = { running: 0, queued: 0, issues: 0, done: 0 };
   for (const run of runs ?? []) {
     const group = run.status === "blocked" || run.status === "error" ? "issues" : run.status;
     counts[group]++;
   }
-  const action = open ? "收起任务状态" : "展开任务状态";
-  const ToggleIcon = open ? PanelRightClose : PanelRightOpen;
-  const summary = runs ? `${counts.running} 进行中，${counts.queued} 排队，${counts.issues} 有问题，${counts.done} 已完成` : "";
-  return <div className="dispatch-summary">
-    <button type="button" id="dispatch-toggle" aria-controls="dispatch-rail" aria-expanded={open}
-      aria-label={action} aria-describedby="dispatch-counts" title={action} onClick={onToggle}>
-      <ToggleIcon size={16} aria-hidden="true" /><span>任务状态</span>
+  const allDone = !!runs?.length && counts.done === runs.length;
+  const note = stale ? (runs ? "等待刷新" : "暂时无法获取")
+    : !runs ? "正在读取…" : !runs.length ? "暂无任务" : "";
+  const summary = runs?.length
+    ? [note, `${counts.running} 运行中，${counts.queued} 排队，${counts.issues} 异常，${counts.done} 已完成`].filter(Boolean).join(" · ")
+    : note;
+  return <div className="dispatch-reopen">
+    <span id="dispatch-counts" role="status" aria-atomic="true" className="sr-only">{summary}</span>
+    <button type="button" id="dispatch-toggle" aria-controls="dispatch-rail" aria-expanded={false}
+      aria-label="展开任务状态" aria-describedby="dispatch-counts" title={`展开任务状态 · ${summary}`} onClick={onOpen}>
+      <span className="dispatch-signals" aria-hidden="true">
+        {note ? <span className="dispatch-idle">{note}</span> : <>
+          {counts.running > 0 && <span data-signal="running"><Loader2 />{counts.running} 运行中</span>}
+          {counts.running === 0 && counts.queued > 0 && <span data-signal="queued"><Clock />{counts.queued} 排队</span>}
+          {counts.issues > 0 && <span data-signal="error"><CircleAlert />{counts.issues} 异常</span>}
+          {allDone && <span data-signal="done"><Check />全部完成 · {counts.done}</span>}
+        </>}
+      </span>
+      <span className="dispatch-side-icon"><PanelRightOpen size={17} aria-hidden="true" /></span>
     </button>
-    <div className="dispatch-counts" id="dispatch-counts" role="status" aria-atomic="true" title="所有聊天中保留的后台派工，问题包括受阻和失败">
-      {runs && <span className="sr-only">{summary}</span>}
-      {runs && <div className="dispatch-totals" aria-hidden="true">
-        <span className="dispatch-active-count" data-active={counts.running > 0}>
-          {counts.running > 0 && <Loader2 size={12} />}<b>{counts.running}</b> 进行中
-        </span>
-        <span><b>{counts.queued}</b> 排队</span>
-        <span data-issue={counts.issues > 0}><b>{counts.issues}</b> 有问题</span>
-        <span><b>{counts.done}</b> 已完成</span>
-      </div>}
-      {stale ? <span className="dispatch-feed-note">{runs ? "等待刷新" : "暂时无法获取"}</span>
-        : !runs && <span className="dispatch-feed-note">正在读取…</span>}
-    </div>
   </div>;
 }
 
@@ -61,20 +60,34 @@ export function DispatchRail({ desktop, open, onClose, headerActions, children }
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
+  const wasOpen = useRef(open);
+  useLayoutEffect(() => {
+    const changed = open !== wasOpen.current;
+    wasOpen.current = open;
     const node = dialog.current;
-    if (!node || !open) return;
-    node.showModal();
-    closeButton.current?.focus();
-    return () => node.close();
+    if (open && node) {
+      // Align the phone drawer header with the Chat toolbar, below the app navigation.
+      const chat = node.closest(".chat-layout");
+      function alignDrawer() {
+        if (chat && node) node.style.top = Math.max(0, chat.getBoundingClientRect().top) + "px";
+      }
+      alignDrawer();
+      node.showModal();
+      closeButton.current?.focus({ preventScroll: true });
+      window.addEventListener("resize", alignDrawer);
+      return () => { window.removeEventListener("resize", alignDrawer); node.close(); };
+    }
+    if (changed) {
+      const target = open ? closeButton.current : document.getElementById("dispatch-toggle");
+      target?.focus({ preventScroll: true });
+    }
   }, [desktop, open]);
-  const CloseIcon = desktop ? PanelRightClose : X;
   const content = <>
     <header className="flex shrink-0 items-center justify-between gap-1 pb-2 pl-1">
       <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Dispatches</h2>
       <div className="flex items-center gap-1">{headerActions}
-        <button ref={closeButton} type="button" onClick={onClose} className="dispatch-rail-close" aria-label="收起任务状态" title="收起任务状态">
-          <CloseIcon size={16} aria-hidden="true" />
+        <button ref={closeButton} type="button" onClick={onClose} className="dispatch-rail-close" aria-controls="dispatch-rail" aria-expanded={true} aria-label="收起任务状态" title="收起任务状态">
+          <PanelRightClose size={17} aria-hidden="true" />
         </button>
       </div>
     </header>
