@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 
 // Shared UI primitives styled after shadcn/ui design tokens
 // (zinc neutrals + indigo accent, rounded-xl, subtle borders/shadows).
@@ -82,18 +82,41 @@ export function Badge({
   );
 }
 
-const ThemeCtx = createContext<{ dark: boolean; toggle: () => void }>({ dark: true, toggle: () => {} });
+export type ThemeMode = "system" | "light" | "dark";
+
+function themeMode(value?: string | null): ThemeMode {
+  return value === "light" || value === "dark" ? value : "system";
+}
+
+const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
+function subscribeToScheme(notify: () => void) {
+  colorScheme.addEventListener("change", notify);
+  return () => colorScheme.removeEventListener("change", notify);
+}
+const ThemeCtx = createContext<{ dark: boolean; mode: ThemeMode; setMode: (mode: ThemeMode) => void }>({
+  dark: false, mode: "system", setMode: () => {},
+});
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [dark, setDark] = useState(true);
-  useEffect(() => {
+  const [mode, selectMode] = useState(() => themeMode(document.documentElement.dataset.theme));
+  const systemDark = useSyncExternalStore(subscribeToScheme, () => colorScheme.matches);
+  const dark = mode === "dark" || (mode === "system" && systemDark);
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = mode;
     document.documentElement.classList.toggle("dark", dark);
-  }, [dark]);
-  return (
-    <ThemeCtx.Provider value={{ dark, toggle: () => setDark((d) => !d) }}>
-      {children}
-    </ThemeCtx.Provider>
-  );
+  }, [dark, mode]);
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.key === "fc-theme" || event.key === null) selectMode(themeMode(event.newValue));
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, []);
+  function setMode(next: ThemeMode) {
+    selectMode(next);
+    try { localStorage.setItem("fc-theme", next); } catch { /* Keep the in-tab preference. */ }
+  }
+  return <ThemeCtx.Provider value={{ dark, mode, setMode }}>{children}</ThemeCtx.Provider>;
 }
 
 export const useTheme = () => useContext(ThemeCtx);

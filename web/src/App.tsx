@@ -14,6 +14,7 @@ import {
   LogOut,
   MessageSquare,
   Moon,
+  Monitor,
 
   Send,
   Sparkles,
@@ -50,7 +51,7 @@ import { SkillsPanel } from "./SkillsPanel";
 import { RagPage } from "./RagPage";
 import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
-import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
+import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme, type ThemeMode } from "./components/ui";
 import RunDrawer from "./components/RunDrawer";
 import { beginBrainTurn, brainEvent, endBrainTurn, type BrainActivity } from "./components/brainActivity";
 import { BrainCard, DispatchCard, DispatchDetails } from "./components/DispatchCard";
@@ -150,7 +151,8 @@ function TopBar({
 }: {
   user: string; page: Page; setPage: (p: Page) => void; onLogout: () => void; onWizard: () => void;
 }) {
-  const { dark, toggle } = useTheme();
+  const { mode, setMode } = useTheme();
+  const themeLabel = { system: "跟随系统", light: "浅色", dark: "深色" }[mode];
   const tab = (id: Page, label: string, Icon: typeof Bot) => (
     <button
       aria-label={label}
@@ -181,9 +183,13 @@ function TopBar({
       </div>
       <div className="flex items-center gap-2 text-sm text-zinc-500">
         <ConsoleUpdate />
-        <button onClick={toggle} aria-label="切换明暗风格" className="rounded-xl p-2 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
-          {dark ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
+        <label title={`外观 · ${themeLabel}`} className="relative inline-flex shrink-0 items-center rounded-xl p-2 hover:bg-zinc-200/60 focus-within:ring-2 focus-within:ring-indigo-500 dark:hover:bg-zinc-800/60">
+          {mode === "system" ? <Monitor size={16} /> : mode === "dark" ? <Moon size={16} /> : <Sun size={16} />}
+          <select aria-label="页面外观" value={mode} onChange={e => setMode(e.target.value as ThemeMode)}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0">
+            <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
+          </select>
+        </label>
         <UserMenu user={user} onLogout={onLogout} onWizard={onWizard} />
       </div>
     </header>
