@@ -403,7 +403,7 @@ function UsageChart({
 }) {
   const W = 720;
   const H = 240;
-  const PAD = { top: 16, right: 8, bottom: 24, left: 44 };
+  const PAD = { top: 30, right: 8, bottom: 24, left: 44 };
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
   const GAP = 2; // surface gap between stacked segments
@@ -415,10 +415,9 @@ function UsageChart({
   );
   const yTicks = 4;
   const labelEvery = Math.ceil(buckets.length / 12);
-  const maxIdx = buckets.reduce((mi, b, i) =>
-    b.brain_tokens_in + b.brain_tokens_out + b.worker_tokens_in + b.worker_tokens_out >
-    buckets[mi].brain_tokens_in + buckets[mi].brain_tokens_out + buckets[mi].worker_tokens_in + buckets[mi].worker_tokens_out
-      ? i : mi, 0);
+  // Every bar gets a direct value label; when bar centers are closer than
+  // ~26px (dense ranges) labels alternate between two rows to stay readable.
+  const staggerLabels = plotW / buckets.length < 26;
 
   const y = (v: number) => PAD.top + plotH - (v / maxTotal) * plotH;
   const x = (i: number) => PAD.left + (plotW / buckets.length) * (i + 0.5);
@@ -465,12 +464,17 @@ function UsageChart({
                   style={{ clipPath: "inset(0 0 round 4px 4px 0 0)" }}
                 />
               )}
-              {/* selective direct label: peak bucket only */}
-              {i === maxIdx && (
-                <text x={x(i)} y={Math.min(workerY, brainY) - 5} textAnchor="middle" className="fill-zinc-500 dark:fill-zinc-400 text-[10px] font-medium tabular-nums">
-                  {fmtTokens(b.brain_tokens_in + b.brain_tokens_out + b.worker_tokens_in + b.worker_tokens_out)}
-                </text>
-              )}
+              {/* direct label: every bucket (two-row stagger when dense) */}
+              <text
+                x={x(i)}
+                y={Math.max(10, Math.min(workerY, brainY) - 5 - (staggerLabels && i % 2 === 1 ? 11 : 0))}
+                textAnchor="middle"
+                className="fill-zinc-500 dark:fill-zinc-400 text-[9px] tabular-nums"
+              >
+                {b.brain_tokens_in + b.brain_tokens_out + b.worker_tokens_in + b.worker_tokens_out > 0
+                  ? fmtTokens(b.brain_tokens_in + b.brain_tokens_out + b.worker_tokens_in + b.worker_tokens_out)
+                  : ""}
+              </text>
               {/* x labels, thinned */}
               {i % labelEvery === 0 && (
                 <text x={x(i)} y={H - 8} textAnchor="middle" className="fill-zinc-400 text-[10px] tabular-nums">
