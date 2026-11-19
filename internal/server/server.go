@@ -105,6 +105,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/health", s.handleHealth)
 	s.consoleUpdateRoutes(m)
 	m.HandleFunc("GET /api/memory/status", s.handleMemoryStatus)
+	m.HandleFunc("GET /api/harness/report", s.auth.Require(s.handleHarnessReport))
 	m.HandleFunc("GET /api/mlx/status", s.handleMLXStatus)
 	m.HandleFunc("POST /api/mlx/op", s.handleMLXOp)
 	m.HandleFunc("POST /api/login", s.handleLogin)

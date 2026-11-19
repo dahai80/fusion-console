@@ -33,13 +33,13 @@ import subprocess
 import sys
 import uuid
 
-from fusion_harness import KERNEL_VERSION, Compactor, LLMFunnel, LifecycleBus, ToolFunnel
+from fusion_harness import KERNEL_VERSION, Compactor, FailureAnalyzer, LLMFunnel, LifecycleBus, ToolFunnel
 from fusion_harness.compactor import CompactionConfig
 from fusion_harness.permissions import PermissionEngine, PermissionRule
 
 PROTOCOL_VERSION = 1
-METHODS = ["hello", "ping", "pre_llm", "post_llm", "tool_admit", "resolve", "meter", "reset"]
-FEATURES = ["approvals", "meter", "compaction"]
+METHODS = ["hello", "ping", "pre_llm", "post_llm", "tool_admit", "resolve", "meter", "report", "reset"]
+FEATURES = ["approvals", "meter", "compaction", "report"]
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                     format="%(asctime)s harnessd %(levelname)s %(message)s")
@@ -129,6 +129,7 @@ class Harnessd:
                 "tool_admit": self._tool_admit,
                 "resolve": self._resolve,
                 "meter": self._meter,
+                "report": self._report,
                 "reset": self._reset,
             }.get(method)
             if handler is None:
@@ -242,6 +243,42 @@ class Harnessd:
         meter["budget_spent_tokens"] = st.budget.spent_tokens
         meter["budget_exceeded"] = st.budget.is_exceeded()
         return {"id": req_id, "result": meter}
+
+    async def _report(self, req_id, p) -> dict:
+        # G4 observability report (fusion-console issue #78): one call returns
+        # the funnel snapshot (llm meter, budget, recent lifecycle events) and
+        # the failure attribution over the recorded events. No trajectories
+        # are recorded by this sidecar, so attribution runs over lifecycle
+        # events; when the kernel cannot derive verdicts the attribution
+        # section stays empty and the UI hides it.
+        conv = int(p.get("conv_id", 0))
+        st = self.state(conv, int(p.get("budget_tokens", 0)))
+        snapshot = {
+            "llm_meter": st.llm_funnel.meter(),
+            "budget": {
+                "spent": st.budget.spent_tokens,
+                "limit": st.budget.limit,
+                "exceeded": st.budget.is_exceeded(),
+            },
+            "events": [ev.to_dict() for ev in st.bus.replay(limit=200)],
+        }
+        attribution = {"runs": {}, "mode_counts": {}, "cluster_counts": {}}
+        try:
+            from types import SimpleNamespace
+            analyzer = FailureAnalyzer()
+            records = []
+            for ev in st.bus.replay():
+                payload = ev.payload or {}
+                records.append(SimpleNamespace(
+                    run_id=payload.get("run_id") or ev.session_id or ("conv:%d" % conv),
+                    ts=ev.ts, event=ev.event, domain=ev.domain, **{
+                        k: v for k, v in payload.items() if k not in ("run_id",)},
+                ))
+            if records:
+                attribution = analyzer.analyze(records)
+        except Exception as e:  # attribution is best-effort, never break report
+            logger.warning("report attribution unavailable: %s", e)
+        return {"id": req_id, "result": {"snapshot": snapshot, "attribution": attribution}}
 
     async def _reset(self, req_id, p) -> dict:
         self.convs.pop(int(p.get("conv_id", 0)), None)

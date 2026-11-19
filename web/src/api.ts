@@ -245,6 +245,8 @@ export const api = {
   dismissDispatch: (id: number) =>
     req<{ ok: boolean }>(`/api/dispatches/${id}/dismiss`, { method: "POST" }),
   clearDispatches: () => req<{ ok: boolean }>("/api/dispatches/clear", { method: "POST" }),
+  harnessReport: (convId: number) =>
+    req<HarnessReport>(`/api/harness/report?conv_id=${convId}`),
   failuresList: () => req<{ failures: FailureRow[] }>("/api/failures"),
   failuresAdd: (body: { agent?: string; category: string; note: string }) =>
     req<{ ok: boolean }>("/api/failures", { method: "POST", body: JSON.stringify(body) }),
@@ -402,6 +404,31 @@ export type DispatchRun = {
   result: string;
   error?: string;
   read: boolean;
+};
+
+// Harness sidecar report (issue #78): funnel snapshot + failure attribution
+// for one conversation, fetched on demand from the run view.
+export type HarnessReportEvent = {
+  seq: number; ts: number; domain: string; event: string;
+  payload?: Record<string, unknown>; session_id?: string;
+};
+export type HarnessReportRun = {
+  verdicts?: { mode?: string; cluster?: string; agent?: string }[];
+  responsible_agent?: string;
+  decisive_moment?: Record<string, unknown>;
+  handoff_candidates?: Record<string, unknown>[];
+};
+export type HarnessReport = {
+  snapshot: {
+    llm_meter?: Record<string, unknown>;
+    budget: { spent: number; limit: number; exceeded: boolean };
+    events: HarnessReportEvent[];
+  };
+  attribution: {
+    runs: Record<string, HarnessReportRun>;
+    mode_counts: Record<string, number>;
+    cluster_counts: Record<string, number>;
+  };
 };
 
 export type RagStatus = {

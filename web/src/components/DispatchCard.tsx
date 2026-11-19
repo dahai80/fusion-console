@@ -1,6 +1,7 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Bot, Brain, CheckCircle, CirclePause, Clock, ExternalLink, Loader2, Maximize2, X, XCircle } from "lucide-react";
-import type { DispatchRun } from "../api";
+import type { DispatchRun, HarnessReport } from "../api";
+import { api } from "../api";
 import type { BrainActivity } from "./brainActivity";
 import "./dispatch-card.css";
 
@@ -86,6 +87,47 @@ export function DispatchCard({ run, liveDetail, actions, onExpand }: {
   </div>;
 }
 
+function DispatchGuardReport({ convId }: { convId: number }) {
+  const [report, setReport] = useState<HarnessReport | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.harnessReport(convId)
+      .then(rep => { if (!cancelled) setReport(rep); })
+      .catch(() => { /* guard off or sidecar down — section stays hidden */ });
+    return () => { cancelled = true; };
+  }, [convId]);
+  if (!report) return null;
+  const meter = report.snapshot.llm_meter ?? {};
+  const num = (key: string) => typeof meter[key] === "number" ? meter[key] as number : null;
+  const stats = [
+    ["LLM calls", num("calls")], ["Prompt tokens", num("prompt_tokens")],
+    ["Cache hit", num("cache_hit_rate") === null ? null : Math.round((meter.cache_hit_rate as number) * 100) + "%"],
+    ["Failures", num("failures")], ["Loops", num("loops_detected")],
+    ["Budget", report.snapshot.budget.limit > 0
+      ? `${report.snapshot.budget.spent.toLocaleString()} / ${report.snapshot.budget.limit.toLocaleString()}${report.snapshot.budget.exceeded ? " (exceeded)" : ""}`
+      : null],
+  ].filter(([, v]) => v !== null && v !== undefined) as [string, string | number][];
+  const runs = Object.entries(report.attribution.runs ?? {});
+  if (!stats.length && !runs.length) return null;
+  return <section className="dispatch-report">
+    <h3>Guard report</h3>
+    {stats.length > 0 && <dl className="dispatch-report-stats">
+      {stats.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+    </dl>}
+    {runs.map(([runId, run]) => <div key={runId} className="dispatch-report-run">
+      <div className="dispatch-report-run-head">
+        <strong>{runId}</strong>
+        {run.responsible_agent && <span className="dispatch-report-agent">{run.responsible_agent}</span>}
+        {(run.verdicts ?? []).map((v, i) => v.mode && <span key={i} className="dispatch-report-mode">{v.mode}</span>)}
+      </div>
+      {run.decisive_moment != null && Object.keys(run.decisive_moment).length > 0 &&
+        <p className="dispatch-report-decisive">Decisive: {JSON.stringify(run.decisive_moment)}</p>}
+      {(run.handoff_candidates?.length ?? 0) > 0 &&
+        <p className="dispatch-report-handoff">Handoff candidates: {run.handoff_candidates!.length}</p>}
+    </div>)}
+  </section>;
+}
+
 export function DispatchDetails({ run, liveDetail, onClose, onConversation }: {
   run: DispatchRun; liveDetail?: string; onClose: () => void; onConversation?: () => void;
 }) {
@@ -122,6 +164,7 @@ export function DispatchDetails({ run, liveDetail, onClose, onConversation }: {
         {fields.map(([label,content]) => content && <section key={label}>
           <h3>{label}</h3><p className={label === "Error" ? "dispatch-error-text" : ""}>{content}</p>
         </section>)}
+        <DispatchGuardReport convId={run.conversation_id} />
       </div>
       {onConversation && <footer><button type="button" onClick={onConversation}><ExternalLink size={13} />Open conversation</button></footer>}
     </div>

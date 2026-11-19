@@ -397,6 +397,62 @@ func (c *Client) Resolve(convID int64, approvalID string, approve bool) (Admit, 
 	return res, nil
 }
 
+// ReportEvent is one lifecycle event from the sidecar's replay buffer.
+type ReportEvent struct {
+	Seq       int64          `json:"seq"`
+	Ts        float64        `json:"ts"`
+	Domain    string         `json:"domain"`
+	Event     string         `json:"event"`
+	Payload   map[string]any `json:"payload"`
+	SessionID string         `json:"session_id"`
+}
+
+// ReportVerdict is one failure-attribution verdict inside a run (kernel
+// failure_attribution; per-run extras like decisive_moment stay open — the
+// raw maps ride through for fields this build does not pin).
+type ReportVerdict struct {
+	Mode    string `json:"mode"`
+	Cluster string `json:"cluster"`
+	Agent   string `json:"agent"`
+}
+
+// ReportRun is one run's attribution: verdicts, the responsible agent, the
+// decisive failure moment and (kernel #132) handoff candidates when present.
+type ReportRun struct {
+	Verdicts          []ReportVerdict  `json:"verdicts"`
+	ResponsibleAgent  string           `json:"responsible_agent"`
+	DecisiveMoment    map[string]any   `json:"decisive_moment,omitempty"`
+	HandoffCandidates []map[string]any `json:"handoff_candidates,omitempty"`
+}
+
+// Report is the sidecar report RPC result (fusion-harness v0.24+, issue #78):
+// a funnel/budget/event snapshot plus failure attribution.
+type Report struct {
+	Snapshot struct {
+		LLMMeter map[string]any `json:"llm_meter"`
+		Budget   struct {
+			Spent    int  `json:"spent"`
+			Limit    int  `json:"limit"`
+			Exceeded bool `json:"exceeded"`
+		} `json:"budget"`
+		Events []ReportEvent `json:"events"`
+	} `json:"snapshot"`
+	Attribution struct {
+		Runs          map[string]ReportRun `json:"runs"`
+		ModeCounts    map[string]int       `json:"mode_counts"`
+		ClusterCounts map[string]int       `json:"cluster_counts"`
+	} `json:"attribution"`
+}
+
+// Report fetches the G4 observability report for one conversation.
+func (c *Client) Report(convID int64, budgetTokens int) (Report, error) {
+	var res Report
+	if err := c.call("report", map[string]any{"conv_id": convID, "budget_tokens": budgetTokens}, &res); err != nil {
+		return Report{}, err
+	}
+	return res, nil
+}
+
 // Close stops the sidecar.
 func (c *Client) Close() {
 	c.mu.Lock()

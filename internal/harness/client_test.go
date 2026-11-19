@@ -175,3 +175,37 @@ func TestClientResolveDenyAndUnknown(t *testing.T) {
 		t.Fatalf("deny verdict wrong: %+v", deny)
 	}
 }
+
+// TestClientReport (issue #78): report returns the funnel snapshot plus an
+// attribution section; maps may be empty but must be non-nil JSON objects.
+func TestClientReport(t *testing.T) {
+	skipIfNoHarness(t)
+	wd, _ := os.Getwd()
+	t.Setenv("FUSION_CONSOLE_HARNESS_SIDECAR", filepath.Join(wd, "..", "..", "sidecar", "harnessd.py"))
+
+	c := New()
+	defer c.Close()
+	// Drive one turn so the conv has funnel + lifecycle state.
+	if _, err := c.PreLLM(11, 100000, "test-model", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("pre_llm: %v", err)
+	}
+	if _, _, err := c.PostLLM(11, 100000, 300); err != nil {
+		t.Fatalf("post_llm: %v", err)
+	}
+	rep, err := c.Report(11, 100000)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if rep.Snapshot.Budget.Spent < 300 {
+		t.Errorf("snapshot budget spent = %d, want >= 300", rep.Snapshot.Budget.Spent)
+	}
+	if rep.Snapshot.Budget.Limit != 100000 {
+		t.Errorf("snapshot budget limit = %d, want 100000", rep.Snapshot.Budget.Limit)
+	}
+	if rep.Snapshot.LLMMeter == nil {
+		t.Error("llm_meter missing")
+	}
+	if rep.Attribution.Runs == nil || rep.Attribution.ModeCounts == nil || rep.Attribution.ClusterCounts == nil {
+		t.Error("attribution maps missing (sidecar must always send the three sections)")
+	}
+}
