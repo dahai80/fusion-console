@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -114,6 +115,18 @@ func (s *Store) migrate() error {
 			cost_usd REAL NOT NULL DEFAULT 0,
 			tokens_in INTEGER NOT NULL DEFAULT 0,
 			tokens_out INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		)`,
+		// memory_outbox buffers worker-result memory events while the
+		// (optional) fusion-memory service is unreachable. FIFO, capped by
+		// the writer; replayed in order once the probe reports healthy.
+		`CREATE TABLE IF NOT EXISTS memory_outbox (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			worker TEXT NOT NULL DEFAULT '',
+			conv_id INTEGER NOT NULL DEFAULT 0,
+			kind TEXT NOT NULL DEFAULT 'worker_result',
+			content TEXT NOT NULL,
+			tags TEXT NOT NULL DEFAULT '[]',
 			created_at TEXT NOT NULL
 		)`,
 	}
@@ -695,6 +708,77 @@ func (s *Store) ClearFinishedDispatchRuns() error {
 	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE status IN ('done','error')`)
 	if err != nil {
 		return fmt.Errorf("store: clear finished dispatch runs: %w", err)
+	}
+	return nil
+}
+
+// MemoryEvent is one worker-result lesson queued for the (optional)
+// fusion-memory service. Buffered in memory_outbox while the service is
+// unreachable, replayed FIFO once it is healthy again.
+type MemoryEvent struct {
+	ID        int64
+	Worker    string
+	ConvID    int64
+	Kind      string
+	Content   string
+	Tags      string
+	CreatedAt string
+}
+
+const memoryOutboxCap = 1000
+
+// EnqueueMemoryEvent buffers an event for later delivery. The cap keeps a
+// long offline stretch from growing the table without bound — oldest rows
+// are trimmed first (FIFO loss is acceptable for observability-grade data).
+func (s *Store) EnqueueMemoryEvent(e *MemoryEvent) error {
+	if _, err := s.db.Exec(
+		`INSERT INTO memory_outbox (worker, conv_id, kind, content, tags, created_at)
+		 VALUES (?,?,?,?,?,?)`,
+		e.Worker, e.ConvID, e.Kind, e.Content, e.Tags, e.CreatedAt); err != nil {
+		return fmt.Errorf("store: enqueue memory event: %w", err)
+	}
+	if _, err := s.db.Exec(
+		`DELETE FROM memory_outbox WHERE id <= (
+			SELECT id FROM memory_outbox ORDER BY id DESC LIMIT 1 OFFSET ?)`,
+		memoryOutboxCap); err != nil {
+		return fmt.Errorf("store: trim memory outbox: %w", err)
+	}
+	return nil
+}
+
+// PendingMemoryEvents returns buffered events in FIFO order.
+func (s *Store) PendingMemoryEvents(limit int) ([]MemoryEvent, error) {
+	rows, err := s.db.Query(
+		`SELECT id, worker, conv_id, kind, content, tags, created_at
+		 FROM memory_outbox ORDER BY id ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: pending memory events: %w", err)
+	}
+	defer rows.Close()
+	var out []MemoryEvent
+	for rows.Next() {
+		var e MemoryEvent
+		if err := rows.Scan(&e.ID, &e.Worker, &e.ConvID, &e.Kind, &e.Content, &e.Tags, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("store: scan memory event: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// DeleteMemoryEvents removes replayed rows.
+func (s *Store) DeleteMemoryEvents(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	q := `DELETE FROM memory_outbox WHERE id IN (` +
+		strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)`
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	if _, err := s.db.Exec(q, args...); err != nil {
+		return fmt.Errorf("store: delete memory events: %w", err)
 	}
 	return nil
 }

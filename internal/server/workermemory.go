@@ -21,9 +21,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dahai80/fusion-console/internal/config"
+	"github.com/dahai80/fusion-console/internal/store"
 )
 
 // notesInstruction is prepended to every worker task under the notes and
@@ -175,10 +177,102 @@ func (s *Server) commitWorkerMemory(ctx context.Context, workerID, task, result 
 		},
 	}
 	if err := memoryPost(ctx, "commit", body, nil, 3*time.Second); err != nil {
-		log.Printf("server: worker memory commit failed worker=%s: %v", workerID, err)
+		log.Printf("server: worker memory commit failed worker=%s: %v — buffering to outbox", workerID, err)
+		// Offline buffering: the event goes to the local outbox and is
+		// replayed once the probe loop sees fm-server healthy again. The
+		// dispatch path is never blocked or retried inline.
+		if s.store != nil {
+			_ = s.store.EnqueueMemoryEvent(&store.MemoryEvent{
+				Worker: workerID, Kind: "worker_result", Content: task + "\n=> " + result,
+				Tags: "[]", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			})
+		}
 		return
 	}
 	log.Printf("server: worker memory committed worker=%s", workerID)
+}
+
+// startMemoryOutboxLoop probes fm-server once a minute and replays buffered
+// memory events when it comes back healthy. Purely opportunistic: probe
+// failures are silent (service is optional), replay is best-effort FIFO.
+func (s *Server) startMemoryOutboxLoop() {
+	if s.cfg.Orchestrator.WorkerMemory == "off" {
+		return
+	}
+	go func() {
+		wasHealthy := false
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for range t.C {
+			resp, err := http.Get(memoryServerURL() + "/healthz")
+			healthy := err == nil && resp.StatusCode == http.StatusOK
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if !healthy {
+				continue
+			}
+			if !wasHealthy {
+				log.Printf("server: fusion-memory healthy — replaying outbox")
+			}
+			events, err := s.store.PendingMemoryEvents(50)
+			if err != nil {
+				log.Printf("server: memory outbox read: %v", err)
+				wasHealthy = healthy
+				continue
+			}
+			replayed := []int64{}
+			for _, e := range events {
+				parts := strings.SplitN(e.Content, "\n=> ", 2)
+				task, result := e.Content, ""
+				if len(parts) == 2 {
+					task, result = parts[0], parts[1]
+				}
+				memCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				before := len(replayed)
+				if err := memoryPost(memCtx, "commit", map[string]any{
+					"session_id": "fusion-console-" + e.Worker,
+					"interaction": map[string]any{
+						"id": fmt.Sprintf("ix-%d", time.Now().UnixNano()), "session_id": "fusion-console-" + e.Worker,
+						"turns": []map[string]any{{
+							"turn_idx": 0, "user_message": task, "assistant_message": result, "tool_calls": []any{},
+						}},
+						"timestamp": time.Now().Unix(),
+						"metadata":  map[string]any{"source": "fusion-console", "worker": e.Worker, "replayed": true},
+					},
+				}, nil, 4*time.Second); err == nil {
+					replayed = append(replayed, e.ID)
+				}
+				cancel()
+				if len(replayed) == before {
+					break // first failure stops this round; retry next tick
+				}
+			}
+			if err := s.store.DeleteMemoryEvents(replayed); err != nil {
+				log.Printf("server: memory outbox cleanup: %v", err)
+			}
+			if len(replayed) > 0 {
+				log.Printf("server: memory outbox replayed %d event(s)", len(replayed))
+			}
+			wasHealthy = healthy
+		}
+	}()
+}
+
+// handleMemoryStatus reports the worker-memory configuration and liveness for
+// the dashboard. Neutral when the hub is absent — it is an optional service.
+func (s *Server) handleMemoryStatus(w http.ResponseWriter, r *http.Request) {
+	mode := s.workerMemoryMode()
+	healthy := false
+	resp, err := http.Get(memoryServerURL() + "/healthz")
+	if err == nil {
+		healthy = resp.StatusCode == http.StatusOK
+		resp.Body.Close()
+	}
+	pending, _ := s.store.PendingMemoryEvents(1000)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mode": mode, "healthy": healthy, "outbox_pending": len(pending),
+	})
 }
 
 // prefixWorkerTask composes the final task text per the given memory mode.

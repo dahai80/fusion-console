@@ -95,12 +95,14 @@ func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	s.routes()
 	s.loadPersistedRuns()
 	s.startTeamPoller()
+	s.startMemoryOutboxLoop()
 	return s
 }
 
 func (s *Server) routes() {
 	m := s.mux
 	m.HandleFunc("GET /api/health", s.handleHealth)
+	m.HandleFunc("GET /api/memory/status", s.handleMemoryStatus)
 	m.HandleFunc("POST /api/login", s.handleLogin)
 	m.HandleFunc("POST /api/autologin", s.handleAutoLogin)
 	m.HandleFunc("POST /api/logout", s.handleLogout)
