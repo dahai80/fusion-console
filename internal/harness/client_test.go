@@ -53,7 +53,8 @@ func TestClientPreLLMCompactionAndBudget(t *testing.T) {
 		{Role: "assistant", Content: "ok"},
 		{Role: "user", Content: "final question"},
 	}
-	proceed, reason, out, err := c.PreLLM(1, 1000000, "glm-5", msgs)
+	pre, err := c.PreLLM(1, 1000000, "glm-5", msgs)
+	proceed, reason, out := pre.Proceed, pre.Reason, pre.Messages
 	if err != nil || !proceed {
 		t.Fatalf("pre_llm: proceed=%v reason=%q err=%v", proceed, reason, err)
 	}
@@ -62,10 +63,11 @@ func TestClientPreLLMCompactionAndBudget(t *testing.T) {
 	}
 
 	// Tiny budget: after one usage report the next call must be denied.
-	if err := c.PostLLM(2, 10, 10); err != nil {
+	if _, _, err := c.PostLLM(2, 10, 10); err != nil {
 		t.Fatalf("post_llm: %v", err)
 	}
-	proceed, reason, _, err = c.PreLLM(2, 10, "glm-5", []Message{{Role: "user", Content: "x"}})
+	pre2, err := c.PreLLM(2, 10, "glm-5", []Message{{Role: "user", Content: "x"}})
+	proceed, reason = pre2.Proceed, pre2.Reason
 	if err != nil {
 		t.Fatalf("pre_llm: %v", err)
 	}
@@ -85,21 +87,55 @@ func TestClientToolAdmit(t *testing.T) {
 	c := New()
 	defer c.Close()
 	// Orchestrator tools are allowlisted; anything else is denied.
-	allowed, _, err := c.ToolAdmit(3, 0, "run_agent", map[string]any{"agent": "claude"})
+	res, err := c.ToolAdmit(3, 0, "run_agent", map[string]any{"agent": "claude"})
 	if err != nil {
 		t.Fatalf("tool_admit run_agent: %v", err)
 	}
-	if !allowed {
+	if !res.Allowed {
 		t.Fatal("run_agent denied — allowlist broken")
 	}
-	allowed, reason, err := c.ToolAdmit(3, 0, "rm_rf", map[string]any{})
+	if res.NeedsApproval {
+		t.Fatal("allowlisted run_agent must not request approval")
+	}
+	res, err = c.ToolAdmit(3, 0, "rm_rf", map[string]any{})
 	if err != nil {
 		t.Fatalf("tool_admit rogue: %v", err)
 	}
-	if allowed {
+	if res.Allowed {
 		t.Fatal("rogue tool allowed — deny-first violated")
 	}
-	if reason == "" {
+	if res.Reason == "" {
 		t.Fatal("deny reason empty")
+	}
+}
+
+// TestClientPreLLMBudgetFields (issue #66): pre_llm must carry spent/limit so
+// the UI can render the budget meter.
+func TestClientPreLLMBudgetFields(t *testing.T) {
+	skipIfNoHarness(t)
+	wd, _ := os.Getwd()
+	t.Setenv("FUSION_CONSOLE_HARNESS_SIDECAR", filepath.Join(wd, "..", "..", "sidecar", "harnessd.py"))
+
+	c := New()
+	defer c.Close()
+	pre, err := c.PreLLM(4, 100000, "test-model", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("pre_llm: %v", err)
+	}
+	if !pre.Proceed {
+		t.Fatalf("small budget denied: %s", pre.Reason)
+	}
+	if pre.Limit != 100000 {
+		t.Errorf("limit = %d, want 100000", pre.Limit)
+	}
+	if pre.Spent < 0 {
+		t.Errorf("spent = %d, want >= 0", pre.Spent)
+	}
+	spent, _, err := c.PostLLM(4, 100000, 500)
+	if err != nil {
+		t.Fatalf("post_llm: %v", err)
+	}
+	if spent < 500 {
+		t.Errorf("post_llm spent = %d, want >= 500", spent)
 	}
 }
