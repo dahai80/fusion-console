@@ -69,7 +69,9 @@ export function DispatchCard({ run, liveDetail, actions, onExpand }: {
   return <div className="dispatch-card" data-status={run.status}>
     <div className="dispatch-top">
       <span className="dispatch-id">#{run.id}</span>
-      <span className="dispatch-byline"><Bot size={13} /><span>{run.worker}</span>
+      <span className="dispatch-byline">
+        {run.status === "running" && <Loader2 size={13} className="dispatch-spin" aria-hidden="true" />}
+        <Bot size={13} /><span>{run.worker}</span>
         {run.status !== "queued" && <><i>·</i>{duration(run.elapsed_s)}</>}
       </span>
       <div className="dispatch-actions">{actions}</div>
