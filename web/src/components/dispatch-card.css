@@ -213,3 +213,24 @@ aside.dispatch-rail[hidden] { display: none; }
   .dispatch-drawer[open] { animation: dispatch-drawer-in 160ms cubic-bezier(.23,1,.32,1); }
   @keyframes dispatch-drawer-in { from { transform: translateX(1rem); } }
 }
+
+/* Guard report (issue #78): sidecar funnel snapshot + failure attribution. */
+.dispatch-report { margin-top: .75rem; border-top: 1px solid var(--color-zinc-200); padding-top: .75rem; }
+.dispatch-report h3 { margin: 0 0 .5rem; font-size: .8rem; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--color-zinc-500); }
+.dispatch-report-stats { display: flex; flex-wrap: wrap; gap: .35rem 1rem; margin: 0; }
+.dispatch-report-stats div { display: flex; gap: .35rem; align-items: baseline; }
+.dispatch-report-stats dt { font-size: .75rem; color: var(--color-zinc-500); }
+.dispatch-report-stats dd { margin: 0; font-size: .8rem; font-variant-numeric: tabular-nums; color: var(--color-zinc-800); }
+.dispatch-report-run { margin-top: .6rem; padding: .5rem .65rem; border: 1px solid var(--color-zinc-200); border-radius: .6rem; background: var(--color-zinc-50); }
+.dispatch-report-run-head { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; font-size: .8rem; }
+.dispatch-report-agent { color: var(--color-indigo-600); font-weight: 500; }
+.dispatch-report-mode { padding: .05rem .4rem; border-radius: 9999px; border: 1px solid var(--color-zinc-200); font-size: .7rem; color: var(--color-zinc-600); }
+.dispatch-report-decisive,.dispatch-report-handoff { margin: .3rem 0 0; font-size: .75rem; color: var(--color-zinc-500); word-break: break-word; }
+.dark .dispatch-report { border-top-color: var(--color-zinc-800); }
+.dark .dispatch-report h3 { color: var(--color-zinc-400); }
+.dark .dispatch-report-stats dt { color: var(--color-zinc-400); }
+.dark .dispatch-report-stats dd { color: var(--color-zinc-200); }
+.dark .dispatch-report-run { border-color: var(--color-zinc-800); background: color-mix(in srgb, var(--color-zinc-900) 50%, transparent); }
+.dark .dispatch-report-agent { color: var(--color-indigo-300); }
+.dark .dispatch-report-mode { border-color: var(--color-zinc-700); color: var(--color-zinc-300); }
+.dark .dispatch-report-decisive,.dark .dispatch-report-handoff { color: var(--color-zinc-400); }
