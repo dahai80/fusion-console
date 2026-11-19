@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Check, CircleAlert, Clock, Loader2, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Check, CircleAlert, Clock, Loader2, PanelRightClose, PanelRightOpen, CloudOff } from "lucide-react";
 import type { DispatchRun } from "../api";
 
 const desktopQuery = window.matchMedia("(min-width: 48rem)");
@@ -24,8 +24,25 @@ export function useDispatchRail() {
   return { desktop, open: desktop ? docked : drawer, setOpen };
 }
 
-export function DispatchReopen({ runs, stale, onOpen }: {
-  runs: DispatchRun[] | null; stale: boolean; onOpen: () => void;
+const signalIcons = { running: Loader2, queued: Clock, error: CircleAlert, done: Check };
+type Signal = { kind: keyof typeof signalIcons; count: number; label: string };
+
+function compactCount(count: number) {
+  return count > 99 ? "99+" : String(count);
+}
+
+function DispatchBubble({ signals, stale, loading }: { signals: Signal[]; stale: boolean; loading: boolean }) {
+  const [primary, issue] = signals;
+  const Icon = primary ? signalIcons[primary.kind] : stale ? CloudOff : loading ? Clock : PanelRightOpen;
+  return <span className="dispatch-bubble" data-signal={primary?.kind} aria-hidden="true">
+    <Icon size={primary ? 13 : 17} />
+    {primary && <b>{compactCount(primary.count)}</b>}
+    {issue && <span className="dispatch-bubble-alert">{compactCount(issue.count)}</span>}
+  </span>;
+}
+
+export function DispatchReopen({ runs, stale, compact, onOpen }: {
+  runs: DispatchRun[] | null; stale: boolean; compact: boolean; onOpen: () => void;
 }) {
   const counts = { running: 0, queued: 0, issues: 0, done: 0 };
   for (const run of runs ?? []) {
@@ -38,19 +55,27 @@ export function DispatchReopen({ runs, stale, onOpen }: {
   const summary = runs?.length
     ? [note, `${counts.running} 运行中，${counts.queued} 排队，${counts.issues} 异常，${counts.done} 已完成`].filter(Boolean).join(" · ")
     : note;
+  const signals: Signal[] = [];
+  if (!note) {
+    if (counts.running) signals.push({ kind: "running", count: counts.running, label: `${counts.running} 运行中` });
+    else if (counts.queued) signals.push({ kind: "queued", count: counts.queued, label: `${counts.queued} 排队` });
+    if (counts.issues) signals.push({ kind: "error", count: counts.issues, label: `${counts.issues} 异常` });
+    if (allDone) signals.push({ kind: "done", count: counts.done, label: `全部完成 · ${counts.done}` });
+  }
   return <div className="dispatch-reopen">
     <span id="dispatch-counts" role="status" aria-atomic="true" className="sr-only">{summary}</span>
     <button type="button" id="dispatch-toggle" aria-controls="dispatch-rail" aria-expanded={false}
       aria-label="展开任务状态" aria-describedby="dispatch-counts" title={`展开任务状态 · ${summary}`} onClick={onOpen}>
-      <span className="dispatch-signals" aria-hidden="true">
-        {note ? <span className="dispatch-idle">{note}</span> : <>
-          {counts.running > 0 && <span data-signal="running"><Loader2 />{counts.running} 运行中</span>}
-          {counts.running === 0 && counts.queued > 0 && <span data-signal="queued"><Clock />{counts.queued} 排队</span>}
-          {counts.issues > 0 && <span data-signal="error"><CircleAlert />{counts.issues} 异常</span>}
-          {allDone && <span data-signal="done"><Check />全部完成 · {counts.done}</span>}
-        </>}
-      </span>
-      <span className="dispatch-side-icon"><PanelRightOpen size={17} aria-hidden="true" /></span>
+      {compact ? <DispatchBubble signals={signals} stale={stale} loading={!runs} /> : <>
+        <span className="dispatch-signals" aria-hidden="true">
+          {note && <span className="dispatch-idle">{note}</span>}
+          {signals.map(({ kind, label }) => {
+            const Icon = signalIcons[kind];
+            return <span key={kind} data-signal={kind}><Icon />{label}</span>;
+          })}
+        </span>
+        <span className="dispatch-side-icon"><PanelRightOpen size={17} aria-hidden="true" /></span>
+      </>}
     </button>
   </div>;
 }
