@@ -72,10 +72,11 @@
 .dispatch-sheet footer button { gap: .4rem; min-height: 28px; cursor: pointer; font-size: .8rem; color: var(--dispatch-secondary); }
 @media(hover:hover){.dispatch-card:has(.dispatch-expand:hover),.dispatch-tool:hover { background: color-mix(in srgb,var(--dispatch-tone) 4%,var(--dispatch-surface)); }}
 @media(prefers-reduced-motion:no-preference){
-  .dispatch-card[data-status=running] .dispatch-status svg,.dispatch-dialog[data-status=running] .dispatch-status svg { animation: spin 1.8s linear infinite; }
+  .dispatch-card[data-status=running] .dispatch-status svg,.dispatch-card[data-status=running] .dispatch-spin,.dispatch-dialog[data-status=running] .dispatch-status svg { animation: spin 1.8s linear infinite; }
   .dispatch-dialog[open] { animation: dispatch-reveal 140ms cubic-bezier(.23,1,.32,1); }
   @keyframes dispatch-reveal { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 }
+.dispatch-card[data-status=running] .dispatch-spin { color: var(--dispatch-tone); }
 @media(pointer:coarse){ .dispatch-actions button,.dispatch-tool { min-width: 36px; min-height: 40px; } }
 .dispatch-top .dispatch-byline { min-width: 0; }
 .dispatch-top .dispatch-id { flex: none; }
