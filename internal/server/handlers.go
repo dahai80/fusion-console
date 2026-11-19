@@ -226,11 +226,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no usable provider — pass provider_id or enable a provider on the Models page"})
 		return
 	}
-	// Managed-gateway fast path: if the chat provider rides the console's
-	// fusion-gateway and its port is closed, auto-start it before the turn
-	// (a dead gateway otherwise turns every brain turn into a dial error).
-	if note := s.ensureChatGateway(prov); note != "" {
-		fallbackNotice = strings.TrimSpace(fallbackNotice + " " + note)
+	// Managed-gateway fast path + local MLX fallback (P1): when the chat
+	// provider rides fusion-gateway and its port stays closed even after the
+	// managed auto-start, an enabled fusion-mlx takes this turn so chat
+	// survives cloud outages. Fail-open: without MLX the original error path
+	// is untouched.
+	if prov.Type == config.ProviderGateway && !gatewayPortOpen(strings.TrimSuffix(prov.BaseURL, "/v1")) {
+		if note := s.ensureChatGateway(prov); note != "" {
+			fallbackNotice = strings.TrimSpace(fallbackNotice + " " + note)
+			if s.mlxUsable() {
+				prov = s.mlxProvider()
+				fallbackNotice = strings.TrimSpace(fallbackNotice + " cloud gateway unreachable — this turn runs on local fusion-mlx")
+				log.Printf("server: chat falling back to local fusion-mlx (model %s)", prov.Model)
+			}
+		}
 	}
 	provider, err := buildProvider(prov)
 	if err != nil {
@@ -238,6 +247,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apiKey, err := s.resolveProviderKey(r.Context(), prov)
+	if prov.ID == "fusion-mlx" {
+		// Local engine: no keychain round-trip — fusion-mlx does not check
+		// bearer material on the loopback surface.
+		apiKey, err = "mlx-local", nil
+	}
 	if err != nil {
 		log.Printf("server: chat api key unavailable (provider %s, key id %s): %v", prov.ID, prov.APIKeyID, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{

@@ -271,6 +271,23 @@ func DefaultHarness() HarnessConfig {
 	return HarnessConfig{Enabled: true, BudgetTokens: 400000}
 }
 
+// MLXConfig is the optional fusion-mlx integration (macOS Apple Silicon
+// only): the console can start/stop the local engine and use it as a
+// same-turn chat fallback when the cloud gateway is unreachable. Off by
+// default; the Models page card only renders on supported hosts.
+type MLXConfig struct {
+	Enabled    bool   `json:"enabled"`
+	Port       int    `json:"port"`        // registered 11434
+	InstallDir string `json:"install_dir"` // fusion-mlx repo checkout
+	Model      string `json:"model"`       // chat model id served by the engine
+}
+
+// DefaultMLX returns the opt-in default: disabled, standard paths.
+func DefaultMLX() MLXConfig {
+	home, _ := os.UserHomeDir()
+	return MLXConfig{Enabled: false, Port: 11434, InstallDir: filepath.Join(home, "fusion", "fusion-mlx")}
+}
+
 // DefaultRag returns the opt-in default: nothing installed, nothing enabled.
 func DefaultRag() RagConfig {
 	return RagConfig{Installed: false, Enabled: false, Port: 11436, InstallDir: filepath.Join(DefaultDir(), "fusion-rag")}
@@ -309,6 +326,7 @@ type Config struct {
 	Rag           RagConfig          `json:"rag"`
 	Code          CodeConfig         `json:"code"`
 	AgentStudio   AgentStudioConfig  `json:"agentstudio"`
+	MLX           MLXConfig          `json:"mlx"`
 }
 
 // BuiltinMergedCount reports how many built-in agent entries Load appended
@@ -416,6 +434,17 @@ func Load(dir string) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.AgentStudio.Team) == "" {
 		cfg.AgentStudio.Team = "default"
+	}
+	// fusion-mlx (optional, Apple Silicon): absent section = defaults; the
+	// card only shows on macOS/arm64 and stays disabled until opted in.
+	if !bytes.Contains(data, []byte("\"mlx\"")) {
+		cfg.MLX = DefaultMLX()
+	}
+	if cfg.MLX.Port == 0 {
+		cfg.MLX.Port = 11434
+	}
+	if strings.TrimSpace(cfg.MLX.InstallDir) == "" {
+		cfg.MLX.InstallDir = DefaultMLX().InstallDir
 	}
 	// Built-in agents missing from older configs are appended additively so
 	// new CLIs (e.g. atlascode) appear without a config migration. The count

@@ -65,7 +65,29 @@ export function ModelsPage({ onSaved }: { onSaved?: () => void }) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
   const [job, setJob] = useState<{ phase: string; logs: string[]; error: string } | null>(null);
+  const [mlx, setMlx] = useState<{ supported: boolean; installed: boolean; enabled: boolean; healthy: boolean; port: number; model: string; install_dir: string } | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
+
+  const refreshMlx = useCallback(async () => {
+    try {
+      const st = await api.mlxStatus();
+      setMlx(st.supported ? st : null);
+    } catch {
+      setMlx(null);
+    }
+  }, []);
+  useEffect(() => { refreshMlx(); }, [refreshMlx]);
+  const mlxOp = async (op: string) => {
+    setBusy("mlx:" + op);
+    try {
+      await api.mlxOp({ op });
+      await refreshMlx();
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy("");
+    }
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -385,6 +407,49 @@ export function ModelsPage({ onSaved }: { onSaved?: () => void }) {
             </Button>
             <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
           </div>
+        </div>
+      )}
+
+      {/* fusion-mlx (macOS Apple Silicon only): local engine card. Start/
+          stop via its own start.sh; the toggle opts chat turns into falling
+          back here when the cloud gateway is unreachable. Hidden entirely
+          off-platform (status.supported = false renders nothing). */}
+      {mlx && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-zinc-200/80 p-4 dark:border-zinc-800">
+          <Cpu size={15} className="text-indigo-500" />
+          <h3 className="text-sm font-medium">fusion-mlx (local)</h3>
+          <span className={`rounded-lg px-2 py-0.5 text-xs ${
+            mlx.healthy
+              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              : mlx.installed
+                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+          }`}>
+            {mlx.healthy ? "running" : mlx.installed ? "stopped" : "not installed"}
+          </span>
+          {mlx.enabled && (
+            <span className="rounded-lg bg-indigo-500/10 px-2 py-0.5 text-xs text-indigo-600 dark:text-indigo-400">fallback on</span>
+          )}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {mlx.installed && !mlx.healthy && (
+              <Button variant="outline" onClick={() => mlxOp("start")} disabled={busy !== ""}>
+                <Play size={13} /> Start
+              </Button>
+            )}
+            {mlx.installed && mlx.healthy && (
+              <Button variant="outline" onClick={() => mlxOp("stop")} disabled={busy !== ""}>
+                <Square size={13} /> Stop
+              </Button>
+            )}
+            {mlx.installed && (
+              <Button variant="ghost" onClick={() => mlxOp(mlx.enabled ? "disable" : "enable")} disabled={busy !== ""}>
+                {mlx.enabled ? "Disable fallback" : "Enable fallback"}
+              </Button>
+            )}
+          </div>
+          <p className="w-full text-xs text-zinc-400">
+            When enabled, a chat turn falls back to this local engine if the cloud gateway is unreachable. Engine dir: {mlx.install_dir} · port {mlx.port}
+          </p>
         </div>
       )}
 
