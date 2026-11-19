@@ -592,17 +592,20 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 		// it at index 0, because the compactor may truncate old messages.
 		if s.cfg.Harness.Enabled {
 			hMsgs := toHarnessMessages(msgs)
-			proceed, reason, compacted, err := s.harness.PreLLM(prov.convID, prov.budget, prov.model, hMsgs)
+			pre, err := s.harness.PreLLM(prov.convID, prov.budget, prov.model, hMsgs)
 			if err != nil {
 				log.Printf("orchestrator: harness pre_llm unavailable, proceeding unguarded: %v", err)
-			} else if !proceed {
-				log.Printf("orchestrator: budget denied planner call conv=%d: %s", prov.convID, reason)
-				send(map[string]any{"type": "error", "text": "conversation token budget exceeded: " + reason})
-				return full, total
-			} else if len(compacted) > 0 {
-				msgs = fromHarnessMessages(compacted)
-				if len(msgs) == 0 || msgs[0].Role != "system" {
-					msgs = append([]chat.Message{{Role: "system", Content: s.orchestratorPrompt()}}, msgs...)
+			} else {
+				send(map[string]any{"type": "budget", "spent": pre.Spent, "limit": pre.Limit})
+				if !pre.Proceed {
+					log.Printf("orchestrator: budget denied planner call conv=%d: %s", prov.convID, pre.Reason)
+					send(map[string]any{"type": "error", "text": "conversation token budget exceeded: " + pre.Reason})
+					return full, total
+				} else if len(pre.Messages) > 0 {
+					msgs = fromHarnessMessages(pre.Messages)
+					if len(msgs) == 0 || msgs[0].Role != "system" {
+						msgs = append([]chat.Message{{Role: "system", Content: s.orchestratorPrompt()}}, msgs...)
+					}
 				}
 			}
 		}
@@ -646,8 +649,10 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 			send(map[string]any{"type": "usage", "tokens_in": total.TokensIn, "tokens_out": total.TokensOut})
 		}
 		if s.cfg.Harness.Enabled {
-			if err := s.harness.PostLLM(prov.convID, prov.budget, iterIn+iterOut); err != nil {
+			if spent, _, err := s.harness.PostLLM(prov.convID, prov.budget, iterIn+iterOut); err != nil {
 				log.Printf("orchestrator: harness post_llm unavailable: %v", err)
+			} else {
+				send(map[string]any{"type": "budget", "spent": spent, "limit": prov.budget})
 			}
 		}
 		full += turnText
@@ -665,33 +670,27 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 			if callArgs == nil {
 				callArgs = map[string]any{}
 			}
-			allowed, reason, err := s.harness.ToolAdmit(prov.convID, prov.budget, call.Name, callArgs)
+			admit, err := s.harness.ToolAdmit(prov.convID, prov.budget, call.Name, callArgs)
 			if err != nil {
 				log.Printf("orchestrator: tool_admit unavailable for %s, failing closed: %v", call.Name, err)
-				allowed, reason = false, "tool admission unavailable (fail-closed)"
-			} else if allowed {
-				// Sidecar allowlist is a superset; verify against the real
-				// planner tool set here so only declared tools execute.
-				allowed = false
-				for _, t := range tools {
-					if t.Name == call.Name {
-						allowed = true
-						break
-					}
-				}
-				if !allowed {
-					reason = "tool not in planner tool set"
-				}
+				admit = harness.Admit{Reason: "tool admission unavailable (fail-closed)", BlockedBy: "sidecar_unavailable"}
 			}
+			allowed, needsApproval, reason, blockedBy := admitDecision(admit, call.Name, tools, s.cfg.Orchestrator.Mode == "confirm")
 			if !allowed {
 				log.Printf("orchestrator: tool %s denied: %s", call.Name, reason)
-				send(map[string]any{"type": "tool", "tool": call.Name, "status": "denied", "detail": reason})
+				detail := reason
+				if blockedBy != "" {
+					detail = fmt.Sprintf("%s (blocked_by: %s)", reason, blockedBy)
+				}
+				send(map[string]any{"type": "tool", "tool": call.Name, "status": "denied", "detail": detail})
 				msgs = append(msgs, chat.Message{Role: "tool", ToolCallID: call.ID, Content: "tool call denied: " + reason})
 				continue
 			}
-			// Confirm mode: hold every agent dispatch until the user approves
-			// it in the browser. Timeout = deny (fail-closed).
-			if call.Name == "run_agent" && s.cfg.Orchestrator.Mode == "confirm" {
+			// Kernel-owned approval (issue #66): when the harness admission
+			// chain says needs_approval, route the call through the browser
+			// approval flow no matter which tool it is. Confirm mode still
+			// applies to run_agent when the kernel did not ask. Timeout = deny.
+			if needsApproval {
 				ok, waitReason := s.awaitApproval(ctx, prov, call, send)
 				if !ok {
 					log.Printf("orchestrator: dispatch not approved: %s", waitReason)
@@ -746,6 +745,32 @@ func (s *Server) awaitApproval(ctx context.Context, prov *providerOpts, call cha
 	case <-ctx.Done():
 		return false, "request cancelled"
 	}
+}
+
+// admitDecision resolves the planner's action for one tool call given the
+// harness kernel verdict (issue #66). Precedence: sidecar error = deny;
+// kernel needs_approval = human gate (kernel-owned decision) but only after
+// the tool is a declared planner tool; plain allow must still be a declared
+// tool. Returns allowed, needsApproval, deny reason, and blocked_by.
+func admitDecision(admit harness.Admit, toolName string, tools []chat.ToolDecl, confirmMode bool) (bool, bool, string, string) {
+	if !admit.Allowed {
+		return false, false, admit.Reason, admit.BlockedBy
+	}
+	declared := false
+	for _, t := range tools {
+		if t.Name == toolName {
+			declared = true
+			break
+		}
+	}
+	if !declared {
+		return false, false, "tool not in planner tool set", ""
+	}
+	needsApproval := admit.NeedsApproval
+	if !needsApproval && toolName == "run_agent" && confirmMode {
+		needsApproval = true
+	}
+	return true, needsApproval, "", admit.BlockedBy
 }
 
 func toolDetail(call chat.ToolCall) string {

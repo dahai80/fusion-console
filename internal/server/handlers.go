@@ -324,22 +324,26 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	// fusion-harness guard: budget gate + compaction before every LLM call.
 	// Sidecar missing = unguarded chat (logged at startup), never a failure.
+	var budgetSpent, budgetLimit = -1, 0
 	if s.cfg.Harness.Enabled {
 		hMsgs := make([]harness.Message, len(chatMsgs))
 		for i, m := range chatMsgs {
 			hMsgs[i] = harness.Message{Role: m.Role, Content: m.Content}
 		}
-		proceed, reason, compacted, err := s.harness.PreLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, model, hMsgs)
+		pre, err := s.harness.PreLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, model, hMsgs)
 		if err != nil {
 			log.Printf("server: harness pre_llm unavailable, proceeding unguarded: %v", err)
-		} else if !proceed {
-			log.Printf("server: harness denied llm call conv=%d: %s", req.ConversationID, reason)
-			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "conversation token budget exceeded: " + reason})
-			return
-		} else if len(compacted) > 0 {
-			chatMsgs = make([]chat.Message, len(compacted))
-			for i, m := range compacted {
-				chatMsgs[i] = chat.Message{Role: m.Role, Content: m.Content}
+		} else {
+			budgetSpent, budgetLimit = pre.Spent, pre.Limit
+			if !pre.Proceed {
+				log.Printf("server: harness denied llm call conv=%d: %s", req.ConversationID, pre.Reason)
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "conversation token budget exceeded: " + pre.Reason})
+				return
+			} else if len(pre.Messages) > 0 {
+				chatMsgs = make([]chat.Message, len(pre.Messages))
+				for i, m := range pre.Messages {
+					chatMsgs[i] = chat.Message{Role: m.Role, Content: m.Content}
+				}
 			}
 		}
 	}
@@ -356,6 +360,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := s.auth.User(r)
+	// Budget meter seed (issue #66): the pre_llm gate's spent/limit snapshot.
+	if budgetSpent >= 0 {
+		send(map[string]any{"type": "budget", "spent": budgetSpent, "limit": budgetLimit})
+	}
 	if fallbackNotice != "" {
 		send(map[string]any{"type": "notice", "text": fallbackNotice})
 	}
@@ -457,8 +465,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.cfg.Harness.Enabled {
-		if err := s.harness.PostLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, usage.TokensIn+usage.TokensOut); err != nil {
+		if spent, _, err := s.harness.PostLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, usage.TokensIn+usage.TokensOut); err != nil {
 			log.Printf("server: harness post_llm unavailable: %v", err)
+		} else {
+			send(map[string]any{"type": "budget", "spent": spent, "limit": s.cfg.Harness.BudgetTokens})
 		}
 	}
 	send(map[string]any{"type": "done"})
