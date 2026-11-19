@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Brain, Bot, Sigma, RefreshCw, Table2, BarChart3, ShieldAlert, Download } from "lucide-react";
+import { Activity, Brain, Bot, Sigma, RefreshCw, Table2, BarChart3, ShieldAlert, Download } from "lucide-react";
 import { api, type DashboardBucket, type DashboardData, type FailureRow, type UsageRange, type WorkerStatus } from "./api";
+import TaskOverview from "./dashboard/TaskOverview";
+import { formatTokens as fmtTokens } from "./dashboard/overview";
 import { Button, Card, useTheme } from "./components/ui";
 
 // Palette validated with the dataviz validator (light + dark surfaces).
@@ -17,12 +19,6 @@ const RANGES: { id: UsageRange; label: string }[] = [
   { id: "all", label: "All time" },
 ];
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + "k";
-  return String(n);
-}
-
 // Bucket strings come from SQL substr: hour "13", day "2026-11-13",
 // month "2026-11". Turn each into a short display label.
 function bucketLabel(bucket: string, unit: string): string {
@@ -33,13 +29,14 @@ function bucketLabel(bucket: string, unit: string): string {
 }
 
 export default function Dashboard() {
-  const [tab, setTab] = useState<"usage" | "workers" | "failures">("usage");
+  const [tab, setTab] = useState<"overview" | "usage" | "workers" | "failures">("overview");
   return (
-    <div>
-      <div className="flex items-center gap-1 border-b border-zinc-200/80 px-6 pt-4 dark:border-zinc-800">
-        {([["usage", "Usage", BarChart3], ["workers", "Workers", Bot], ["failures", "Failures", ShieldAlert]] as const).map(([id, label, Icon]) => (
+    <div className="h-full overflow-y-auto">
+      <div className="flex overflow-x-auto items-center gap-1 border-b border-zinc-200/80 px-6 pt-4 dark:border-zinc-800">
+        {([["overview", "Overview", Activity], ["usage", "Usage", BarChart3], ["workers", "Workers", Bot], ["failures", "Failures", ShieldAlert]] as const).map(([id, label, Icon]) => (
           <button
             key={id}
+            aria-pressed={tab === id}
             onClick={() => setTab(id)}
             className={`inline-flex items-center gap-2 rounded-t-xl px-4 py-2 text-sm font-medium transition-colors ${
               tab === id
@@ -51,7 +48,7 @@ export default function Dashboard() {
           </button>
         ))}
       </div>
-      {tab === "usage" ? <UsageTab /> : tab === "workers" ? <WorkersTab /> : <FailuresTab />}
+      {tab === "overview" ? <TaskOverview /> : tab === "usage" ? <UsageTab /> : tab === "workers" ? <WorkersTab /> : <FailuresTab />}
     </div>
   );
 }

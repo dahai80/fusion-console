@@ -78,7 +78,7 @@ export default function App() {
 function Shell() {
   // undefined = session check in flight, null = logged out, string = logged in
   const [user, setUser] = useState<string | null | undefined>(undefined);
-  const [page, setPage] = useState<Page>("chat");
+  const [page, setPage] = useState<Page>(() => new URLSearchParams(window.location.search).has("dashboard") ? "dashboard" : "chat");
 
   useEffect(() => {
     // One-time auto-login token (console launched with --open puts it in the
