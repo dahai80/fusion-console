@@ -44,12 +44,29 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		req.Kind = "chat"
 	}
 	if req.Kind == "agent" {
-		if _, ok := s.agents[req.AgentName]; !ok {
+		cli, wk := s.resolveWorkerTarget(req.AgentName)
+		if _, ok := s.agents[cli]; !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown agent " + req.AgentName})
 			return
 		}
+		if wk != nil && !wk.Enabled {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker " + req.AgentName + " is disabled in settings"})
+			return
+		}
+		if strings.TrimSpace(req.Workdir) == "" {
+			if wk != nil {
+				req.Workdir = config.ConfiguredWorkDir(wk.WorkDir)
+			} else {
+				req.Workdir = config.ConfiguredWorkDir(s.agentSettings(cli).WorkDir)
+			}
+		}
 		if req.Workdir == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent session requires workdir"})
+			return
+		}
+		// Looking up "." inside the directory also checks permission to enter it.
+		if fi, err := os.Stat(req.Workdir + string(os.PathSeparator) + "."); err != nil || !fi.IsDir() {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workdir not accessible: " + req.Workdir})
 			return
 		}
 	}
