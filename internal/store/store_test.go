@@ -169,7 +169,7 @@ func TestConversationModelColumnsAndRoundTrip(t *testing.T) {
 func TestDispatchRunPersistence(t *testing.T) {
 	s := openTestStore(t)
 	row := &DispatchRunRow{ConvID: 1, User: "admin", Worker: "fusion-site", Agent: "claude",
-		Task: "fix issue", Status: "queued", StartedAt: time.Now().UTC().Format(time.RFC3339)}
+		Task: "fix issue", Status: "queued", RequiresRepo: true, Repo: "/work/project", StartedAt: time.Now().UTC().Format(time.RFC3339)}
 	id, err := s.CreateDispatchRun(row)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -183,11 +183,35 @@ func TestDispatchRunPersistence(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("list: %v %d", err, len(got))
 	}
-	if got[0].Status != "done" || got[0].Result != "all good" || !got[0].Read || got[0].ElapsedS != 42 {
+	if got[0].Status != "done" || got[0].Result != "all good" || !got[0].Read || got[0].ElapsedS != 42 ||
+		!got[0].RequiresRepo || got[0].Repo != row.Repo {
 		t.Fatalf("round trip mismatch: %+v", got[0])
 	}
 	if err := s.AckDispatchRuns(1); err != nil {
 		t.Fatalf("ack: %v", err)
+	}
+}
+
+func TestDispatchLegacyRowMigration(t *testing.T) {
+	s := openTestStore(t)
+	for _, q := range []string{
+		"ALTER TABLE dispatch_runs DROP COLUMN requires_repo",
+		"ALTER TABLE dispatch_runs DROP COLUMN repo",
+		"INSERT INTO dispatch_runs(task, status, result) VALUES('old task', 'done', 'blocked by an earlier step')",
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListDispatchRuns(1)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("load legacy dispatch: %v, %v", rows, err)
+	}
+	if row := rows[0]; row.RequiresRepo || row.Repo != "" || row.Status != "done" || row.Result != "blocked by an earlier step" {
+		t.Fatalf("legacy dispatch changed: %+v", row)
 	}
 }
 
