@@ -201,7 +201,7 @@ type OrchestratorConfig struct {
 	BrainProviderID   string         `json:"brain_provider_id"`   // provider the chat brain talks to; empty = first enabled gateway provider
 	BrainModel        string         `json:"brain_model"`         // model the chat brain uses; empty = the provider default
 	// DispatchTimeoutMinutes caps one dispatched agent run (foreground and
-	// background). 0 = 3 hours; lower it to reclaim stuck slots sooner.
+	// background). 0 = 5 hours; lower it to reclaim stuck slots sooner.
 	DispatchTimeoutMinutes int `json:"dispatch_timeout_minutes"`
 	// CavemanDefault injects the caveman skill activation ruleset into every
 	// brain session and dispatched worker (issue #30). Pointer so an absent

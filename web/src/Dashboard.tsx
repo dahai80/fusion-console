@@ -161,6 +161,11 @@ function UsageTab() {
   const [view, setView] = useState<"chart" | "table">("chart");
   const [err, setErr] = useState("");
   const [hover, setHover] = useState<number | null>(null);
+  // Worker-memory hub status: optional service, neutral when absent.
+  const [mem, setMem] = useState<{ mode: string; healthy: boolean; outbox_pending: number } | null>(null);
+  useEffect(() => {
+    api.memoryStatus().then(setMem).catch(() => setMem(null));
+  }, []);
 
   const load = useMemo(
     () => (r: UsageRange) => {
@@ -200,6 +205,16 @@ function UsageTab() {
     <div className="mx-auto max-w-5xl space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Usage dashboard</h2>
+        {mem && (
+          <span className={`rounded-lg px-2 py-0.5 text-xs ${
+            mem.healthy
+              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+          }`}>
+            memory: {mem.healthy ? "healthy" : "not connected"}
+            {mem.outbox_pending > 0 ? ` · ${mem.outbox_pending} buffered` : ""} · {mem.mode}
+          </span>
+        )}
         <div className="flex items-center gap-1 rounded-xl border border-zinc-200/80 dark:border-zinc-800 p-1">
           {RANGES.map((r) => (
             <button

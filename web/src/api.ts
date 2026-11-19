@@ -97,6 +97,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   login: (user: string, password: string) =>
     req<{ user: string }>("/api/login", { method: "POST", body: JSON.stringify({ user, password }) }),
+  memoryStatus: () =>
+    req<{ mode: string; healthy: boolean; outbox_pending: number }>("/api/memory/status"),
   autoLogin: (token: string) =>
     req<{ user: string }>("/api/autologin", { method: "POST", body: JSON.stringify({ token }) }),
   logout: () => req<{ ok: boolean }>("/api/logout", { method: "POST" }),
