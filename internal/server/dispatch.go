@@ -418,7 +418,7 @@ func (s *Server) dispatchTimeout() time.Duration {
 	if m := s.cfg.Orchestrator.DispatchTimeoutMinutes; m > 0 {
 		return time.Duration(m) * time.Minute
 	}
-	return 180 * time.Minute
+	return 300 * time.Minute
 }
 
 // autoContinueMax caps consecutive brain self-continuations in one chain —
