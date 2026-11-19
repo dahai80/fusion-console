@@ -474,7 +474,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		// Background skips the streaming run: the dispatch is enqueued into
 		// the background registry (worker slots, dispatch card, result
 		// reported into the conversation) exactly like a brain run_agent.
-		Background bool `json:"background"`
+		Background   bool   `json:"background"`
+		RequiresRepo bool   `json:"requires_repo"`
+		Repo         string `json:"repo"` // optional source for background worktree dispatch
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
@@ -506,7 +508,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		if wk != nil && wk.MaxBudgetUSD > 0 {
 			budget = wk.MaxBudgetUSD
 		}
-		args := dispatchArgs{Agent: req.Agent, Task: req.Task, User: user}
+		args := dispatchArgs{Agent: req.Agent, Task: req.Task, User: user, Repo: req.Repo, RequiresRepo: req.RequiresRepo}
 		note, err := s.enqueueBackgroundDispatch(req.ConversationID, user, args, wk, cli, settings, budget)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
@@ -533,6 +535,10 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	if wk != nil && wk.Isolation == "github" && req.Workdir == "" {
 		dir, warn, err := syncRepo(s.cfg.ResolveWorkerDir(*wk), "worker "+req.Agent, wk.Repo, wk.RepoBranch)
 		if err != nil {
+			if req.RequiresRepo {
+				writeJSON(w, http.StatusConflict, repoBlocked(err.Error()))
+				return
+			}
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
@@ -541,7 +547,14 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		}
 		workdir = dir
 	}
-	if fi, err := os.Stat(workdir); err != nil || !fi.IsDir() {
+	if req.RequiresRepo {
+		if err := requireGitWorkspace(r.Context(), workdir); err != nil {
+			if r.Context().Err() == nil {
+				writeJSON(w, http.StatusConflict, err)
+			}
+			return
+		}
+	} else if fi, err := os.Stat(workdir); err != nil || !fi.IsDir() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workdir not accessible: " + workdir})
 		return
 	}
@@ -585,6 +598,9 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	// Model resolution lives in providerEnv (per-agent override > provider
 	// default); empty leaves the CLI's own default.
 	taskText := s.prefixWorkerTask(r.Context(), req.Agent, req.Task, s.workerMemoryModeFor(wk))
+	if req.RequiresRepo {
+		taskText = workerResultContract + "\n" + taskText
+	}
 	if brief := s.workerWorkspaceBrief(req.Agent, wk, workdir); brief != "" {
 		taskText = brief + "\n" + taskText
 	}
@@ -607,6 +623,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	s.runs.start(req.Agent, req.Task)
 	defer s.runs.end(req.Agent)
 	full, result := "", ""
+	var runFailed bool
 	var usage agent.Event
 	for ev := range evCh {
 		switch ev.Type {
@@ -628,6 +645,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		case agent.EventNotice:
 			send(map[string]any{"type": "notice", "text": ev.Text})
 		case agent.EventError:
+			runFailed = true
 			send(map[string]any{"type": "error", "text": ev.Text})
 		case agent.EventDone:
 		}
@@ -639,6 +657,14 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	if final == "" {
 		final = full
 	}
+	var blocked *dispatchBlocked
+	if !runFailed {
+		blocked = blockedResult(final)
+	}
+	if blocked != nil {
+		final = "**blocked:** " + blocked.Reason
+		send(map[string]any{"type": "blocked", "text": final, "reason": blocked.Reason})
+	}
 	if final != "" {
 		meta, _ := json.Marshal(map[string]any{
 			"agent": req.Agent, "workdir": workdir, "session_id": usage.SessionID,
@@ -647,11 +673,13 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		})
 		_, _ = s.store.AppendMessage(req.ConversationID, "assistant", final, string(meta))
 		_ = s.store.LogCost(req.ConversationID, user, "agent:"+req.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
-		if s.workerMemoryMode() == "fusion-memory" {
+		if blocked == nil && s.workerMemoryMode() == "fusion-memory" {
 			s.commitWorkerMemory(r.Context(), req.Agent, req.Task, final)
 		}
 	}
-	send(map[string]any{"type": "done"})
+	if blocked == nil {
+		send(map[string]any{"type": "done"})
+	}
 }
 
 func (s *Server) agentSettings(name string) config.AgentSettings {

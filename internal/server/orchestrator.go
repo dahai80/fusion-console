@@ -35,6 +35,8 @@ type providerOpts struct {
 
 const maxOrchestratorTurns = 8 // bounded planner loop
 
+const contributionWorkflow = "Work on a topic branch and run the relevant tests. Follow the user's publication request. For a requested pull request, push only the topic branch, describe the problem, fix and test results in the PR, and report its URL. Leave the merge to the repository owner."
+
 const orchestratorSystemPrompt = `You are the main brain of a local development console. You can delegate coding work to headless coding agents (claude, fusion-code, codex, opencode), each running in its own dedicated workspace directory.
 
 Tools:
@@ -47,6 +49,7 @@ Tools:
 Rules:
 - Answer simple questions directly; delegate only real coding/execution work.
 - When delegating, write the task in full detail: files to create, behavior, constraints.
+- Set requires_repo=true for work that needs an existing Git checkout. If the worker reports blocked, relay its reason before continuing dependent work.
 - After an agent finishes, verify its result (read_artifact when useful) before reporting to the user.
 - Never invent agent results; report only what run_agent actually returned.
 - Reply in the user's language.`
@@ -89,8 +92,8 @@ func (s *Server) orchestratorPrompt() string {
 		}
 	}
 	b.WriteString("- Repo ownership: a worker only handles work inside its bound repo/work dir (shown above); the console rejects cross-repo dispatches.\n")
-	b.WriteString("- If a task concerns a repository that no worker owns, do not force a dispatch — tell the user to file an issue in that repo instead.\n")
-	b.WriteString("- Dispatch workflow: instruct each worker to fix on a topic branch, run the repo's tests, then merge to the default branch and push — never direct commits to the default branch. Verify the merge landed (read_artifact or the worker's report) before reporting success to the user.\n")
+	b.WriteString("- If no worker owns the required repository, explain how to bind it in Agents > Workers or select a worker with the correct checkout.\n")
+	b.WriteString("- Dispatch workflow: " + contributionWorkflow + "\n")
 	b.WriteString("- Long dispatches: use run_agent with background=true for anything expected to run longer than ~2 minutes. Tell the user it is running in the background; the result is posted into this conversation automatically when done. Do not block the turn waiting on it.\n")
 	b.WriteString("- Dispatch sizing: each run_agent brief covers ONE bounded unit of work — a single issue, or one self-contained change. Never bundle multiple issues or phases into one brief: background dispatches are hard-killed at 30 minutes and a multi-part brief loses all unfinished parts. Split multi-part work into sequential dispatches (one issue per dispatch), verify each result, then dispatch the next.\n")
 	if g := workspaceGuidelines(s.agentsRoot(), 8*1024); g != "" {
@@ -176,6 +179,7 @@ func orchestratorTools() []chat.ToolDecl {
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
 				`"agent":{"type":"string","description":"worker name from list_agents (preferred) or a bare agent type like claude"},` +
 				`"task":{"type":"string","description":"complete self-contained task description"},` +
+				`"requires_repo":{"type":"boolean","description":"Set true when the task requires a Git working tree. Omit or set false for tasks that can run in an empty workspace."},` +
 				`"repo":{"type":"string","description":"absolute path of the target repository; required when the agent uses worktree isolation, must be in the configured whitelist"},` +
 				`"background":{"type":"boolean","description":"true = run in background and report back later; use for tasks expected to take more than a couple of minutes"}` +
 				`},"required":["agent","task"]}`),
@@ -376,7 +380,7 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 				// the per-user Workers tab spend instead of the mcp-brain
 				// legacy bucket.
 				args.User = user
-				return s.enqueueViaServer(args)
+				return s.enqueueViaServer(args, convID)
 			}
 			return s.enqueueBackgroundDispatch(convID, user, args, wk, cli, settings, budget)
 		}
@@ -698,13 +702,18 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 			}
 			send(map[string]any{"type": "tool", "tool": call.Name, "status": "running", "detail": toolDetail(call)})
 			out, execErr := s.executeToolCall(ctx, call, user, prov.convID, send)
-			status := "done"
-			if execErr != nil {
+			status, detail := "done", ""
+			if b, ok := execErr.(*dispatchBlocked); ok {
+				status, detail, out = b.Status, b.Reason, b.Error()
+				full += "\n\n> ↳ blocked: " + b.Reason + "\n\n"
+			} else if execErr != nil {
 				out = "error: " + execErr.Error()
 				status = "error"
 				log.Printf("orchestrator: tool %s failed: %v", call.Name, execErr)
+			} else if call.Name == "run_agent" && callArgs["background"] == true {
+				status = "queued"
 			}
-			send(map[string]any{"type": "tool", "tool": call.Name, "status": status, "detail": ""})
+			send(map[string]any{"type": "tool", "tool": call.Name, "status": status, "detail": detail})
 			msgs = append(msgs, chat.Message{Role: "tool", ToolCallID: call.ID, Content: out})
 		}
 	}
@@ -971,10 +980,10 @@ func (s *Server) workerWorkspaceBrief(name string, wk *config.WorkerConfig, work
 			b.WriteString(" — a fresh worktree branched from local repo " + repo)
 		}
 	default: // standalone
-		b.WriteString(" — a dedicated empty workspace with no repo binding")
+		b.WriteString(" — a dedicated workspace")
 	}
-	b.WriteString(". The workspace is already set up; never ask the user for repo paths or clone locations.")
-	b.WriteString("\n[workflow] Bug fixes and features follow the branch flow: create a topic branch (e.g. fix/<issue>), implement, run the repo's tests, merge into the default branch, push. Never commit directly to the default branch without a branch + test pass.")
+	b.WriteString(". Work inside this directory and report any missing prerequisites.")
+	b.WriteString("\n[workflow] " + contributionWorkflow)
 	// The claude CLI auto-reads CLAUDE.md from the working dir; AGENTS.md is
 	// injected explicitly so both convention files reach the worker.
 	if g := workspaceGuidelines(workdir, 4*1024, "AGENTS.md"); g != "" {
@@ -1170,11 +1179,12 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 		return
 	}
 	settings := s.agentSettings("claude")
-	mcpFile, err := s.ensureBrainMCPConfig()
+	mcpFile, err := s.writeBrainMCPConfig(convID, user)
 	if err != nil {
 		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": "mcp config: " + err.Error()})
 		return
 	}
+	defer os.Remove(mcpFile)
 	allowed := ""
 	for _, t := range orchestratorTools() {
 		allowed += "mcp__fusion-console__" + t.Name + ","
@@ -1271,27 +1281,32 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 	log.Printf("orchestrator: agent-brain turn done conv=%d tokens_in=%d tokens_out=%d", convID, usage.TokensIn, usage.TokensOut)
 }
 
-// ensureBrainMCPConfig writes the MCP config file that points a claude CLI
-// session back at this binary in "mcp" mode, exposing the dispatch tools.
-func (s *Server) ensureBrainMCPConfig() (string, error) {
+// Each brain turn gives its MCP process the originating chat identity.
+// Concurrent turns must not share a mutable config or use model-supplied IDs.
+func (s *Server) writeBrainMCPConfig(convID int64, user string) (string, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(s.cfgDir, "mcp.json")
 	doc := map[string]any{
 		"mcpServers": map[string]any{
-			"fusion-console": map[string]any{"command": self, "args": []string{"mcp"}},
+			"fusion-console": map[string]any{"command": self, "args": []string{"mcp"},
+				"env": map[string]string{"FUSION_DISPATCH_CONV_ID": fmt.Sprint(convID), "FUSION_DISPATCH_USER": user}},
 		},
 	}
-	data, err := json.MarshalIndent(doc, "", "  ")
+	f, err := os.CreateTemp(s.cfgDir, "mcp-turn-*.json")
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", err
+	encodeErr := json.NewEncoder(f).Encode(doc)
+	if closeErr := f.Close(); encodeErr != nil || closeErr != nil {
+		os.Remove(f.Name())
+		if encodeErr != nil {
+			return "", encodeErr
+		}
+		return "", closeErr
 	}
-	return path, nil
+	return f.Name(), nil
 }
 
 // guidelineFiles are the convention files picked up from a workspace.

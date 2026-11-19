@@ -23,19 +23,21 @@ import (
 
 // dispatchArgs is the parsed run_agent tool call payload.
 type dispatchArgs struct {
-	Agent      string `json:"agent"`
-	Task       string `json:"task"`
-	Path       string `json:"path"`
-	Repo       string `json:"repo"`
-	Stored     string `json:"stored"`
-	Offset     int64  `json:"offset"`
-	MaxBytes   int64  `json:"max_bytes"`
-	Background bool   `json:"background"`
+	Agent        string `json:"agent"`
+	Task         string `json:"task"`
+	Path         string `json:"path"`
+	Repo         string `json:"repo"`
+	RequiresRepo bool   `json:"requires_repo,omitempty"`
+	Stored       string `json:"stored"`
+	Offset       int64  `json:"offset"`
+	MaxBytes     int64  `json:"max_bytes"`
+	Background   bool   `json:"background"`
 	// User is the console user the dispatch is attributed to. Cost rows
 	// land under this label so the Dashboard Workers tab (filtered by the
 	// logged-in user) sees the spend; empty falls back to the legacy
 	// "mcp-brain" bucket.
-	User string `json:"user,omitempty"`
+	User    string `json:"user,omitempty"`
+	fromMCP bool   // sidecar handoffs do not start a second agent-brain turn
 }
 
 // bgRun is one background dispatch: queued by the brain's run_agent call,
@@ -47,9 +49,11 @@ type bgRun struct {
 	Worker         string    `json:"worker"`
 	Agent          string    `json:"agent"`
 	Task           string    `json:"task"`
+	Repo           string    `json:"repo,omitempty"`
+	RequiresRepo   bool      `json:"requires_repo,omitempty"`
 	ConversationID int64     `json:"conversation_id"`
 	User           string    `json:"user"`
-	Status         string    `json:"status"` // queued | running | done | error
+	Status         string    `json:"status"` // queued | running | done | blocked | error
 	StartedAt      time.Time `json:"started_at"`
 	FinishedAt     time.Time `json:"finished_at"`
 	ElapsedS       int       `json:"elapsed_s"`
@@ -84,9 +88,14 @@ func dispatchToken(dir string) string {
 	return tok
 }
 
+type dispatchHandoff struct {
+	dispatchArgs
+	ConversationID int64 `json:"conversation_id,omitempty"`
+}
+
 // enqueueViaServer proxies a background dispatch to the main server process
 // (used only in MCP mode, where this process is ephemeral).
-func (s *Server) enqueueViaServer(args dispatchArgs) (string, error) {
+func (s *Server) enqueueViaServer(args dispatchArgs, convID int64) (string, error) {
 	if s.dispatchTok == "" {
 		return "", fmt.Errorf("background dispatch unavailable: no dispatch token")
 	}
@@ -95,10 +104,7 @@ func (s *Server) enqueueViaServer(args dispatchArgs) (string, error) {
 		// rows distinguishable from real users.
 		args.User = "mcp-brain"
 	}
-	body, _ := json.Marshal(map[string]any{
-		"agent": args.Agent, "task": args.Task, "repo": args.Repo,
-		"background": true, "user": args.User,
-	})
+	body, _ := json.Marshal(dispatchHandoff{args, convID})
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 		fmt.Sprintf("http://127.0.0.1:%d/api/dispatches/enqueue", s.cfg.Server.Port), bytes.NewReader(body))
 	if err != nil {
@@ -130,7 +136,7 @@ func (s *Server) handleDispatchEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid dispatch token"})
 		return
 	}
-	var args dispatchArgs
+	var args dispatchHandoff
 	if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
@@ -166,7 +172,14 @@ func (s *Server) handleDispatchEnqueue(w http.ResponseWriter, r *http.Request) {
 	if user == "" {
 		user = "mcp-brain"
 	}
-	msg, err := s.enqueueBackgroundDispatch(0, user, args, wk, cli, settings, budget)
+	if args.ConversationID != 0 {
+		if _, err := s.store.Conversation(user, args.ConversationID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown dispatch conversation"})
+			return
+		}
+	}
+	args.fromMCP = true
+	msg, err := s.enqueueBackgroundDispatch(args.ConversationID, user, args.dispatchArgs, wk, cli, settings, budget)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -210,6 +223,7 @@ func (s *Server) loadPersistedRuns() {
 	for _, row := range rows {
 		run := &bgRun{
 			ID: row.ID, Worker: row.Worker, Agent: row.Agent, Task: row.Task,
+			Repo: row.Repo, RequiresRepo: row.RequiresRepo,
 			ConversationID: row.ConvID, User: row.User, Status: row.Status,
 			CostUSD: row.CostUSD, TokensIn: row.TokensIn, TokensOut: row.TokensOut,
 			Detail: row.Detail, Result: row.Result, Err: row.Error, Read: row.Read,
@@ -234,15 +248,15 @@ func (s *Server) loadPersistedRuns() {
 	}
 }
 
-// persistRun writes one run's current state to the store (best effort —
-// persistence failure never breaks the run itself).
-func (s *Server) persistRun(run *bgRun) {
+// persistRun saves a state transition and any terminal chat receipt together.
+func (s *Server) persistRun(run *bgRun) error {
 	if s.store == nil {
-		return
+		return nil
 	}
 	row := &store.DispatchRunRow{
 		ID: run.ID, ConvID: run.ConversationID, User: run.User,
 		Worker: run.Worker, Agent: run.Agent, Task: run.Task, Status: run.Status,
+		Repo: run.Repo, RequiresRepo: run.RequiresRepo,
 		StartedAt:  run.StartedAt.UTC().Format(time.RFC3339),
 		FinishedAt: run.FinishedAt.UTC().Format(time.RFC3339),
 		ElapsedS:   run.ElapsedS, CostUSD: run.CostUSD,
@@ -255,13 +269,16 @@ func (s *Server) persistRun(run *bgRun) {
 			run.DBID = row.ID
 			run.ID = row.ID // the DB row id is the canonical run id
 		}
+	} else if run.ConversationID > 0 && !run.FinishedAt.IsZero() {
+		meta := fmt.Sprintf(`{"background_run":%d,"status":%q}`, run.ID, run.Status)
+		err = s.store.FinishDispatchWithReceipt(row, summarizeDispatch(run), meta)
 	} else {
-		row.ID = run.DBID
 		err = s.store.SaveDispatchRun(row)
 	}
 	if err != nil {
 		log.Printf("dispatch: persist run #%d: %v", run.ID, err)
 	}
+	return err
 }
 
 // list returns a snapshot copy; conversation filters by convID > 0.
@@ -282,11 +299,9 @@ func (r *dispatchRegistry) list(convID int64) []bgRun {
 	return out
 }
 
-func (r *dispatchRegistry) ack(convID int64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *dispatchRegistry) ackLocked(convID int64) {
 	for _, run := range r.runs {
-		if run.ConversationID == convID && run.Status == "done" {
+		if run.ConversationID == convID && (run.Status == "done" || run.Status == "blocked") {
 			run.Read = true
 		}
 	}
@@ -304,26 +319,24 @@ func (r *dispatchRegistry) dismiss(id int64) {
 	}
 }
 
-// clearFinished removes every done/error run from the registry.
-func (r *dispatchRegistry) clearFinished() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// clearFinished removes terminal runs from the registry.
+func (r *dispatchRegistry) clearFinishedLocked() {
 	keep := r.runs[:0]
 	for _, run := range r.runs {
-		if run.Status != "done" && run.Status != "error" {
+		if run.Status != "done" && run.Status != "blocked" && run.Status != "error" {
 			keep = append(keep, run)
 		}
 	}
 	r.runs = keep
 }
 
-// unreadCounts returns done-but-unseen run counts per conversation.
+// unreadCounts returns unseen results per conversation.
 func (r *dispatchRegistry) unreadCounts() map[int64]int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := map[int64]int{}
 	for _, run := range r.runs {
-		if run.Status == "done" && !run.Read {
+		if (run.Status == "done" || run.Status == "blocked") && !run.Read {
 			out[run.ConversationID]++
 		}
 	}
@@ -345,20 +358,24 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		Worker:         workerName,
 		Agent:          cli,
 		Task:           args.Task,
+		Repo:           args.Repo,
+		RequiresRepo:   args.RequiresRepo,
 		ConversationID: convID,
 		User:           user,
 		Status:         "queued",
 	}
+	if err := s.persistRun(run); err != nil {
+		return "", err
+	}
 	s.bg.enqueue(run)
-	s.persistRun(run)
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
 				log.Printf("orchestrator: background run #%d panicked: %v", run.ID, p)
 				s.bg.mu.Lock()
 				run.Status, run.Err, run.FinishedAt = "error", fmt.Sprintf("internal panic: %v", p), time.Now()
-				s.bg.mu.Unlock()
 				s.persistRun(run)
+				s.bg.mu.Unlock()
 			}
 		}()
 		// Bounded concurrency: acquire one of the worker slots, logging when
@@ -372,8 +389,8 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		defer func() { <-s.agentSema }()
 		s.bg.mu.Lock()
 		run.Status, run.StartedAt = "running", time.Now()
-		s.bg.mu.Unlock()
 		s.persistRun(run)
+		s.bg.mu.Unlock()
 
 		// The brain turn's context dies with its SSE stream; background runs
 		// must outlive it, capped at the same 30 minutes as foreground runs.
@@ -384,29 +401,24 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		s.bg.mu.Lock()
 		run.FinishedAt = time.Now()
 		run.ElapsedS = int(run.FinishedAt.Sub(run.StartedAt).Seconds())
-		if err != nil {
+		if b, ok := err.(*dispatchBlocked); ok {
+			run.Status, run.Detail = b.Status, b.Reason
+		} else if err != nil {
 			run.Status, run.Err = "error", err.Error()
 		} else {
 			run.Status = "done"
 			run.Result = final
 		}
-		s.bg.mu.Unlock()
 		s.persistRun(run)
+		s.bg.mu.Unlock()
 		log.Printf("orchestrator: background run #%d worker=%s status=%s", run.ID, run.Worker, run.Status)
 
-		// Report into the conversation so the chat history carries the
-		// outcome even if the user is on another page. MCP-sidecar handoffs
-		// carry no conversation id (convID 0) — they are dashboard-only.
-		if run.ConversationID > 0 {
-			summary := summarizeDispatch(run)
-			if _, aerr := s.store.AppendMessage(run.ConversationID, "assistant", summary, fmt.Sprintf(`{"background_run":%d}`, run.ID)); aerr != nil {
-				log.Printf("orchestrator: background run #%d: append result message: %v", run.ID, aerr)
-			}
-		}
 		// Chain continuation: wake the brain so a multi-step plan keeps
 		// moving without a human nudge between background runs. Detached —
 		// the worker slot must free before the next turn starts.
-		go s.maybeAutoContinue(run)
+		if !args.fromMCP {
+			go s.maybeAutoContinue(run)
+		}
 	}()
 	return fmt.Sprintf("dispatched as background run #%d (worker %s). It runs after any current agent subprocess and reports back into this conversation when finished; progress is visible in the dispatch panel and via dispatch_status.", run.ID, workerName), nil
 }
@@ -433,7 +445,7 @@ const autoContinueMax = 8
 // autoContinueMax per human turn; chat-brain mode is skipped because its
 // planner loop lives inside the SSE chat handler.
 func (s *Server) maybeAutoContinue(run *bgRun) {
-	if run.ConversationID <= 0 || s.cfg.Orchestrator.Mode == "off" {
+	if run.Status == "blocked" || run.ConversationID <= 0 || s.cfg.Orchestrator.Mode == "off" {
 		return
 	}
 	if s.cfg.Orchestrator.BrainMode != "agent" {
@@ -474,6 +486,8 @@ func summarizeDispatch(run *bgRun) string {
 	switch run.Status {
 	case "done":
 		fmt.Fprintf(&b, "> ✅ background run #%d finished — **%s** · %ds · $%.4f\n\n", run.ID, run.Worker, run.ElapsedS, run.CostUSD)
+	case "blocked":
+		fmt.Fprintf(&b, "> ⏸ background run #%d blocked — **%s**\n\n%s\n\n", run.ID, run.Worker, run.Detail)
 	default:
 		fmt.Fprintf(&b, "> ❌ background run #%d failed — **%s**\n\n", run.ID, run.Worker)
 	}
@@ -508,14 +522,6 @@ func truncateRunes(s string, n int) string {
 // the work is re-deliverable instead of lost.
 func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, callName string, args dispatchArgs, wk *config.WorkerConfig, cli string, settings config.AgentSettings, budget float64, send func(map[string]any)) (result string, err error) {
 	workdir := s.cfg.ResolveWorkDir(cli)
-	// Worktree failure preservation (issue #45 F6c): when the dispatch fails
-	// and the workspace was a created worktree, keep it with a preserved
-	// marker — never a silent loss; re-deliver via the failed run card.
-	defer func() {
-		if err != nil && wk != nil && isolationOf(wk) == "worktree" && strings.HasPrefix(workdir, s.agentsRoot()) {
-			s.preserveFailedWorktree(workdir, err)
-		}
-	}()
 	// Brain code source: keep the configured GitHub repo current before
 	// every dispatch so the brain workspace mirrors upstream. Warnings
 	// surface in the chat tool feed without failing the dispatch.
@@ -551,6 +557,9 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 			// the chat tool feed without failing the dispatch.
 			dir, warn, err := syncRepo(s.cfg.ResolveWorkerDir(*wk), "worker "+args.Agent, wk.Repo, wk.RepoBranch)
 			if err != nil {
+				if args.RequiresRepo {
+					return "", repoBlocked(err.Error())
+				}
 				return "", err
 			}
 			workdir = dir
@@ -568,12 +577,23 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 				repo = wk.Repo
 			}
 			if strings.TrimSpace(repo) != "" {
-				wt, err := s.createWorktree(repo, args.Agent)
-				if err != nil {
-					return "", err
+				wt, createErr := s.createWorktree(repo, args.Agent)
+				if createErr != nil {
+					if args.RequiresRepo {
+						return "", repoBlocked(createErr.Error())
+					}
+					return "", createErr
 				}
 				workdir = wt
+				defer func() { s.preserveFailedWorktree(wt, err) }()
+			} else if args.RequiresRepo {
+				return "", repoBlocked("Worktree isolation requires a source repository")
 			}
+		}
+	}
+	if args.RequiresRepo {
+		if err := requireGitWorkspace(ctx, workdir); err != nil {
+			return "", err
 		}
 	}
 	log.Printf("orchestrator: dispatch worker=%s agent=%s isolation=%s workdir=%s budget=%.2f user=%s",
@@ -592,7 +612,7 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 		return "", fmt.Errorf("unknown agent %q", cli)
 	}
 	opts := agent.RunOpts{
-		Task: taskText, Workdir: workdir, Timeout: s.dispatchTimeout(),
+		Task: workerResultContract + "\n" + taskText, Workdir: workdir, Timeout: s.dispatchTimeout(),
 		Model:           forcedModel,
 		PermissionMode:  settings.PermissionMode,
 		MaxBudgetUSD:    budget,
@@ -671,11 +691,14 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 	// Cost rows stay separate: planner chat vs agent runs.
 	_ = s.store.LogCost(convID, user, "agent:"+args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
 	log.Printf("orchestrator: agent=%s finished cost=%.4f tokens_in=%d tokens_out=%d", args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
+	if b := blockedResult(final); b != nil {
+		return "", b
+	}
 	if s.workerMemoryModeFor(wk) == "fusion-memory" && final != "" {
 		s.commitWorkerMemory(ctx, args.Agent, args.Task, final)
 	}
-	if final == "" {
-		return "agent returned no output", nil
+	if strings.TrimSpace(final) == "" {
+		return "", &dispatchBlocked{Status: "blocked", Reason: "Worker exited without a result. Check the workspace and run details before retrying."}
 	}
 	return final, nil
 }
@@ -705,10 +728,13 @@ func (s *Server) handleDispatchAck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	s.bg.ack(req.ConversationID)
+	s.bg.mu.Lock()
+	defer s.bg.mu.Unlock()
 	if err := s.store.AckDispatchRuns(req.ConversationID); err != nil {
-		log.Printf("dispatch: persist ack conv=%d: %v", req.ConversationID, err)
+		serverError(w, err, http.StatusInternalServerError)
+		return
 	}
+	s.bg.ackLocked(req.ConversationID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -729,10 +755,13 @@ func (s *Server) handleDispatchDismiss(w http.ResponseWriter, r *http.Request) {
 
 // handleDispatchClear removes every finished run (POST /api/dispatches/clear).
 func (s *Server) handleDispatchClear(w http.ResponseWriter, r *http.Request) {
-	s.bg.clearFinished()
+	s.bg.mu.Lock()
+	defer s.bg.mu.Unlock()
 	if err := s.store.ClearFinishedDispatchRuns(); err != nil {
-		log.Printf("dispatch: clear finished: %v", err)
+		serverError(w, err, http.StatusInternalServerError)
+		return
 	}
+	s.bg.clearFinishedLocked()
 	log.Printf("dispatch: finished runs cleared")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

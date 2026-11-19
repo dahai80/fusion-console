@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/dahai80/fusion-console/internal/chat"
 )
@@ -20,6 +21,11 @@ import (
 // chat planner, so budget, guards and repo-binding rules apply identically.
 func ServeMCPBrain(s *Server) {
 	s.mcpMode = true
+	convID, _ := strconv.ParseInt(os.Getenv("FUSION_DISPATCH_CONV_ID"), 10, 64)
+	user := os.Getenv("FUSION_DISPATCH_USER")
+	if user == "" {
+		user = "agent-brain"
+	}
 	dec := json.NewDecoder(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
 	log.SetOutput(os.Stderr) // stdout is the RPC channel; logs go to stderr
@@ -63,8 +69,10 @@ func ServeMCPBrain(s *Server) {
 				result = mcpError(err.Error())
 				break
 			}
-			out, err := s.executeToolCall(context.Background(), call, "agent-brain", 0, nil)
-			if err != nil {
+			out, err := s.executeToolCall(context.Background(), call, user, convID, nil)
+			if b, ok := err.(*dispatchBlocked); ok {
+				out = b.Error() // MCP 2024-11-05 carries tool results as text content.
+			} else if err != nil {
 				log.Printf("mcp: tool %s failed: %v", req.Params.Name, err)
 				result = mcpError(err.Error())
 				break

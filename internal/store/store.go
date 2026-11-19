@@ -135,6 +135,12 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("store: migrate: %w", err)
 		}
 	}
+	if err := addColumn(s.db, "dispatch_runs", "requires_repo", "ALTER TABLE dispatch_runs ADD COLUMN requires_repo INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumn(s.db, "dispatch_runs", "repo", "ALTER TABLE dispatch_runs ADD COLUMN repo TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	return s.migrateConversationModelColumns()
 }
 
@@ -306,10 +312,11 @@ func (s *Store) SetConversationModel(user string, id int64, providerID, model st
 	return nil
 }
 
+const insertMessage = `INSERT INTO messages (conv_id, role, content, meta, created_at) VALUES (?,?,?,?,?)`
+
 // AppendMessage inserts a message row.
 func (s *Store) AppendMessage(convID int64, role, content, meta string) (int64, error) {
-	res, err := s.db.Exec(
-		`INSERT INTO messages (conv_id, role, content, meta, created_at) VALUES (?,?,?,?,?)`,
+	res, err := s.db.Exec(insertMessage,
 		convID, role, content, meta, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return 0, fmt.Errorf("store: append message: %w", err)
@@ -607,33 +614,35 @@ func (s *Store) RenameConversation(user string, id int64, title string) error {
 // DispatchRunRow is one background dispatch, persisted so the run history
 // and unread state survive console restarts.
 type DispatchRunRow struct {
-	ID         int64
-	ConvID     int64
-	User       string
-	Worker     string
-	Agent      string
-	Task       string
-	Status     string
-	StartedAt  string
-	FinishedAt string
-	ElapsedS   int
-	CostUSD    float64
-	TokensIn   int
-	TokensOut  int
-	Detail     string
-	Result     string
-	Error      string
-	Read       bool
+	ID           int64
+	ConvID       int64
+	User         string
+	Worker       string
+	Agent        string
+	Task         string
+	RequiresRepo bool
+	Repo         string
+	Status       string
+	StartedAt    string
+	FinishedAt   string
+	ElapsedS     int
+	CostUSD      float64
+	TokensIn     int
+	TokensOut    int
+	Detail       string
+	Result       string
+	Error        string
+	Read         bool
 }
 
 // CreateDispatchRun inserts a row and returns its ID.
 func (s *Store) CreateDispatchRun(r *DispatchRunRow) (int64, error) {
 	res, err := s.db.Exec(
 		`INSERT INTO dispatch_runs (conv_id, user, worker, agent, task, status, started_at, finished_at,
-		  elapsed_s, cost_usd, tokens_in, tokens_out, detail, result, error, read)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  elapsed_s, cost_usd, tokens_in, tokens_out, detail, result, error, read, requires_repo, repo)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ConvID, r.User, r.Worker, r.Agent, r.Task, r.Status, r.StartedAt, r.FinishedAt,
-		r.ElapsedS, r.CostUSD, r.TokensIn, r.TokensOut, r.Detail, r.Result, r.Error, r.Read)
+		r.ElapsedS, r.CostUSD, r.TokensIn, r.TokensOut, r.Detail, r.Result, r.Error, r.Read, r.RequiresRepo, r.Repo)
 	if err != nil {
 		return 0, fmt.Errorf("store: create dispatch run: %w", err)
 	}
@@ -643,7 +652,28 @@ func (s *Store) CreateDispatchRun(r *DispatchRunRow) (int64, error) {
 // SaveDispatchRun writes the full row back (status transitions and final
 // accounting are the only writers).
 func (s *Store) SaveDispatchRun(r *DispatchRunRow) error {
-	_, err := s.db.Exec(
+	return saveDispatchRun(s.db.Exec, r)
+}
+
+// FinishDispatchWithReceipt makes a chat receipt visible in the same commit
+// as its terminal card, including after a console restart.
+func (s *Store) FinishDispatchWithReceipt(r *DispatchRunRow, content, meta string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := saveDispatchRun(tx.Exec, r); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(insertMessage, r.ConvID, "assistant", content, meta, r.FinishedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func saveDispatchRun(exec func(string, ...any) (sql.Result, error), r *DispatchRunRow) error {
+	_, err := exec(
 		`UPDATE dispatch_runs SET status=?, started_at=?, finished_at=?, elapsed_s=?, cost_usd=?,
 		  tokens_in=?, tokens_out=?, detail=?, result=?, error=?, read=? WHERE id=?`,
 		r.Status, r.StartedAt, r.FinishedAt, r.ElapsedS, r.CostUSD,
@@ -656,7 +686,7 @@ func (s *Store) SaveDispatchRun(r *DispatchRunRow) error {
 
 // AckDispatchRuns marks every finished run of one conversation as seen.
 func (s *Store) AckDispatchRuns(convID int64) error {
-	_, err := s.db.Exec(`UPDATE dispatch_runs SET read=1 WHERE conv_id=? AND status='done'`, convID)
+	_, err := s.db.Exec(`UPDATE dispatch_runs SET read=1 WHERE conv_id=? AND status IN ('done','blocked')`, convID)
 	if err != nil {
 		return fmt.Errorf("store: ack dispatch runs: %w", err)
 	}
@@ -671,7 +701,7 @@ func (s *Store) ListDispatchRuns(limit int) ([]*DispatchRunRow, error) {
 	}
 	rows, err := s.db.Query(
 		`SELECT id, conv_id, user, worker, agent, task, status, started_at, finished_at,
-		  elapsed_s, cost_usd, tokens_in, tokens_out, detail, result, error, read
+		  elapsed_s, cost_usd, tokens_in, tokens_out, detail, result, error, read, requires_repo, repo
 		 FROM dispatch_runs ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list dispatch runs: %w", err)
@@ -682,7 +712,7 @@ func (s *Store) ListDispatchRuns(limit int) ([]*DispatchRunRow, error) {
 		var r DispatchRunRow
 		if err := rows.Scan(&r.ID, &r.ConvID, &r.User, &r.Worker, &r.Agent, &r.Task, &r.Status,
 			&r.StartedAt, &r.FinishedAt, &r.ElapsedS, &r.CostUSD, &r.TokensIn, &r.TokensOut,
-			&r.Detail, &r.Result, &r.Error, &r.Read); err != nil {
+			&r.Detail, &r.Result, &r.Error, &r.Read, &r.RequiresRepo, &r.Repo); err != nil {
 			return nil, fmt.Errorf("store: scan dispatch run: %w", err)
 		}
 		out = append(out, &r)
@@ -703,9 +733,9 @@ func (s *Store) DeleteDispatchRun(id int64) error {
 	return nil
 }
 
-// ClearFinishedDispatchRuns removes every done/error run row.
+// ClearFinishedDispatchRuns removes all terminal run rows.
 func (s *Store) ClearFinishedDispatchRuns() error {
-	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE status IN ('done','error')`)
+	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE status IN ('done','blocked','error')`)
 	if err != nil {
 		return fmt.Errorf("store: clear finished dispatch runs: %w", err)
 	}
