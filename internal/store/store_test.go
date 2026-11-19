@@ -320,3 +320,57 @@ func TestUsageDashboardCountsLegacyMCPBrainWorkerRows(t *testing.T) {
 		t.Errorf("brain_tokens = %v, want 1500", totals["brain_tokens"])
 	}
 }
+
+func TestUsagePeriodsAndParticipants(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now().UTC()
+	add := func(owner, source string, days, in, out int) {
+		t.Helper()
+		_, err := s.db.Exec("INSERT INTO cost_log (conv_id,user,source,created_at,tokens_in,tokens_out) VALUES (0,?,?,?,?,?)", owner, source, now.AddDate(0, 0, -days).Format(time.RFC3339), in, out)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("admin", "brain:claude", 0, 9, 1)
+	add("admin", "chat:gw", 6, 7, 3)
+	add("admin", "agent:one", 0, 100, 1)
+	add("admin", "agent:one", 0, 0, 0)
+	add("admin", "agent:two", 7, 200, 2)
+	add("admin", "agent:old", 30, 300, 3)
+	add("mcp-brain", "agent:two", 29, 5, 1)
+	add("else", "agent:one", 0, 900, 1)
+	for _, tc := range []struct {
+		period            string
+		brain, worker     int64
+		records, measured int64
+	}{
+		{"week", 20, 101, 4, 3}, {"month", 20, 309, 6, 5}, {"all", 20, 612, 7, 6},
+	} {
+		t.Run(tc.period, func(t *testing.T) {
+			report, err := s.UsageDashboard("admin", tc.period, "one", "two", "empty")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tot := report["totals"].(map[string]any)
+			if tot["brain_tokens"] != tc.brain || tot["worker_tokens"] != tc.worker || tot["records"] != tc.records || tot["measured"] != tc.measured {
+				t.Fatalf("unexpected totals: %v", tot)
+			}
+			parts := report["participants"].([]UsageParticipant)
+			if parts[0].Name != "Brain" || parts[0].Input+parts[0].Output != tc.brain {
+				t.Fatalf("brain: %+v", parts[0])
+			}
+			var workers int64
+			seen := map[string]UsageParticipant{}
+			for _, r := range parts[1:] {
+				workers += r.Input + r.Output
+				seen[r.Name] = r
+			}
+			if workers != tc.worker || seen["one"].Measured != 1 || seen["one"].Records != 2 || seen["empty"].Name != "empty" || seen["empty"].Records != 0 {
+				t.Fatalf("participants: %+v", parts)
+			}
+			if _, ok := seen["old"]; ok != (tc.period == "all") {
+				t.Fatalf("historical worker: %v", seen)
+			}
+		})
+	}
+}

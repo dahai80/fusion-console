@@ -153,6 +153,7 @@ function TopBar({
   const { dark, toggle } = useTheme();
   const tab = (id: Page, label: string, Icon: typeof Bot) => (
     <button
+      aria-label={label}
       onClick={() => setPage(id)}
       className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
         page === id

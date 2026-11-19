@@ -34,6 +34,6 @@ export function sampleSnapshot(advanced: boolean): Snapshot {
   });
   return {
     now: Date.parse(at(advanced ? "14:41" : "14:36")), runs, workers,
-    tokens: { brain_tokens: 38600, worker_tokens: advanced ? 134000 : 116200, brain_cost_usd: 0, worker_cost_usd: 0 },
+    sampleTokens: { brain_tokens: 38600, worker_tokens: runs.reduce((sum,r) => sum+r.tokens_in+r.tokens_out,0) },
   };
 }

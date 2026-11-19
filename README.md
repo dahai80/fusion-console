@@ -217,7 +217,7 @@ Open `http://127.0.0.1:11480`, sign in, then:
 1. First run opens the setup wizard: pick a provider, hit **Test call** to
    verify endpoint + key + model, choose the brain agent and workers
    (isolation + budget per worker).
-2. Open **Dashboard → Overview** for the dispatch queue, running tasks, worker availability, the execution timeline and today’s token split (UTC). Finish estimates use the median of the latest 3–10 completed runs for the same worker. Switch to **Sample → Next event** to try a queue transition. **Usage** retains the day/week/month/all reports.
+2. Open **Dashboard → Overview** for the dispatch queue, running tasks, worker availability, the execution timeline and period-selectable brain and per-worker token usage (UTC). Finish estimates use the median of the latest 3–10 completed runs for the same worker. Switch to **Sample → Next event** to try a queue transition. **Usage** retains the day/week/month/all reports.
    Chat → pick the provider, send a message; flip `orchestrate` to let the
    brain dispatch workers (confirm mode asks you per dispatch).
 

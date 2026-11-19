@@ -1130,7 +1130,19 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 // handleDashboard serves brain-vs-worker token/cost series for the home
 // dashboard. range is today|week|month|all (default week).
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	data, err := s.store.UsageDashboard(s.auth.User(r), r.URL.Query().Get("range"))
+	rangeID := r.URL.Query().Get("range")
+	if rangeID == "" {
+		rangeID = "week"
+	}
+	names := make([]string, 0, len(s.cfg.Orchestrator.Workers))
+	for _, worker := range s.cfg.Orchestrator.Workers {
+		name := worker.Name
+		if name == "" {
+			name = worker.Agent
+		}
+		names = append(names, name)
+	}
+	data, err := s.store.UsageDashboard(s.auth.User(r), rangeID, names...)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

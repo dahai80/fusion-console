@@ -503,6 +503,8 @@ export type SkillImport = {
 };
 
 export type DashboardBucket = {
+  brain_measured: number;
+  worker_measured: number;
   bucket: string;
   brain_tokens_in: number;
   brain_tokens_out: number;
@@ -512,11 +514,20 @@ export type DashboardBucket = {
   worker_cost_usd: number;
 };
 
+export type UsageParticipant = {
+  role: "brain" | "worker"; name: string; records: number; measured: number; tokens_in: number; tokens_out: number;
+};
 export type DashboardData = {
+  start: string;
+  end: string;
+  daily: { day: string; tokens: number; measured: number }[];
+  participants: UsageParticipant[];
   range: UsageRange;
   bucket_unit: "hour" | "day" | "month";
   buckets: DashboardBucket[];
   totals: {
+    records: number;
+    measured: number;
     brain_tokens: number;
     worker_tokens: number;
     brain_cost_usd: number;
