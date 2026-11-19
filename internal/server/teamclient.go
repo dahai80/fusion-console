@@ -260,8 +260,11 @@ func (s *Server) pollTeam(team string) *teamSnapshot {
 	}
 
 	// Brief quality panel: reuse the #4 checker on every task's description —
-	// spawn briefs that fail the contract show up as warnings next to the task.
-	// Failed tasks and brief warnings surface as alerts (never silent).
+	// spawn briefs that fail the contract show up as warnings next to the task
+	// (board badge). Brief-quality noise deliberately does NOT go into
+	// alerts: it duplicated the board badge and buried real failures.
+	// Failed tasks alert only for the last 2 hours; older failures stay
+	// visible on the board without flooding the alert strip.
 	now := time.Now().Unix()
 	for _, t := range snap.Tasks {
 		id, _ := t["task_id"].(string)
@@ -274,7 +277,6 @@ func (s *Server) pollTeam(team string) *teamSnapshot {
 		}
 		if w := checkBrief(desc); len(w) > 0 {
 			snap.Brief[id] = w
-			snap.Alerts = append(snap.Alerts, fmt.Sprintf("brief quality on task %s: %d contract items missing", id, len(w)))
 		}
 		status, _ := t["status"].(string)
 		if status == "failed" {
@@ -283,10 +285,16 @@ func (s *Server) pollTeam(team string) *teamSnapshot {
 			if errMsg == "" {
 				errMsg = "no error recorded"
 			}
-			if updated == 0 || now-int64(updated) <= 86400 {
+			if updated == 0 || now-int64(updated) <= 7200 {
 				snap.Alerts = append(snap.Alerts, fmt.Sprintf("task %s failed: %s", id, errMsg))
 			}
 		}
+	}
+	// Alert strip cap: 10 newest items; the rest collapse into one counter
+	// line so a stale backlog cannot flood the panel.
+	if len(snap.Alerts) > 10 {
+		hidden := len(snap.Alerts) - 10
+		snap.Alerts = append(snap.Alerts[:10:10], fmt.Sprintf("+%d older alerts hidden — see the task board", hidden))
 	}
 	// Presence stuck state (issue #45 F5): offline/paused members with open
 	// work are listed as alerts so "offline + queued" is never silent.
