@@ -305,7 +305,7 @@ export default function TeamPage() {
       <div className="flex items-start gap-4">
         {/* Left: grouped tree of live teams. Selection deep-links via ?team=
             so the view stays linkable; groups collapse independently. */}
-        <Card className="w-60 shrink-0 p-3">
+        <Card className="w-72 shrink-0 p-3">
           <h3 className="mb-1 text-sm font-medium">Teams</h3>
           <p className="mb-1 text-xs text-zinc-400">{liveTeams.length} live</p>
           {GROUPS.map((g) => {
@@ -326,16 +326,68 @@ export default function TeamPage() {
                 {open && (
                   <div className="ml-2.5 space-y-0.5 border-l border-zinc-200/60 pl-2 dark:border-zinc-800">
                     {members.map((t) => (
-                      <button
-                        key={t.name}
-                        onClick={() => applyFocus(t.name)}
-                        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
-                          focusTeam === t.name ? "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" : ""
-                        }`}
-                      >
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${g.dot}`} />
-                        <span className="flex-1 truncate">{t.name || "(default team)"}</span>
-                      </button>
+                      <div key={t.name}>
+                        <button
+                          onClick={() => applyFocus(t.name)}
+                          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
+                            focusTeam === t.name ? "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" : ""
+                          }`}
+                        >
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${g.dot}`} />
+                          <span className="flex-1 truncate">{t.name || "(default team)"}</span>
+                        </button>
+                        {focusTeam === t.name && (
+                          <div className="mb-1 space-y-2 rounded-lg bg-zinc-50 p-2 dark:bg-zinc-900/60">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {lifecycle ? (
+                                <span className={`rounded-lg px-2 py-0.5 text-xs ${
+                                  lifecycle === "ACTIVE" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                  : lifecycle === "PAUSED" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                  : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"}`}>
+                                  {lifecycle.toLowerCase()}
+                                </span>
+                              ) : (
+                                <span className="text-xs text-zinc-400">not registered yet</span>
+                              )}
+                              <div className="ml-auto flex items-center gap-1">
+                                {lifecycle !== "PAUSED" ? (
+                                  <Button variant="ghost" className="px-1.5 py-0.5" title="Pause" onClick={() => teamOp("pause")} disabled={busy !== "" || !lifecycle}>
+                                    <Pause size={12} />
+                                  </Button>
+                                ) : (
+                                  <Button variant="ghost" className="px-1.5 py-0.5" title="Resume" onClick={() => teamOp("resume")} disabled={busy !== ""}>
+                                    <Play size={12} />
+                                  </Button>
+                                )}
+                                <Button variant="ghost" className="px-1.5 py-0.5 text-red-500 dark:text-red-400" title="Disband" onClick={disband} disabled={busy !== "" || !lifecycle}>
+                                  <Ban size={12} />
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="border-t border-zinc-200/60 pt-2 dark:border-zinc-800">
+                              <p className="mb-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">Lead loop</p>
+                              {lead?.running ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="min-w-0 flex-1 truncate text-xs text-indigo-600 dark:text-indigo-400">
+                                    round {lead.round ?? 0}{lead.n_stalls ? ` · ${lead.n_stalls} stall(s)` : ""}
+                                  </span>
+                                  <Button variant="ghost" className="px-1.5 py-0.5" title="Stop" onClick={() => teamOp("lead_stop")} disabled={busy !== ""}>
+                                    <Square size={12} />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1">
+                                  <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="goal…"
+                                    className="min-w-0 flex-1 rounded-lg border border-zinc-200/80 bg-transparent px-2 py-1 text-xs dark:border-zinc-700" />
+                                  <Button className="px-2 py-1 text-xs" onClick={() => teamOp("lead_start", { goal })} disabled={busy !== "" || !goal.trim()}>
+                                    <Play size={11} />
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 )}
@@ -373,61 +425,6 @@ export default function TeamPage() {
           </Button>
         </Card>
       </div>
-
-      {/* Lifecycle + lead loop controls (issue #17). Disband is the only
-          destructive one — it confirms with member/open-task counts first. */}
-      <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="mr-1 text-sm font-medium">Team</h3>
-          {lifecycle ? (
-            <span className={`rounded-lg px-2 py-0.5 text-xs ${
-              lifecycle === "ACTIVE" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-              : lifecycle === "PAUSED" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-              : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"}`}>
-              {lifecycle.toLowerCase()}
-            </span>
-          ) : (
-            <span className="text-xs text-zinc-400">not registered yet</span>
-          )}
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            {lifecycle !== "PAUSED" && (
-              <Button variant="ghost" onClick={() => teamOp("pause")} disabled={busy !== "" || !lifecycle}>
-                <Pause size={12} /> Pause
-              </Button>
-            )}
-            {lifecycle === "PAUSED" && (
-              <Button variant="ghost" onClick={() => teamOp("resume")} disabled={busy !== ""}>
-                <Play size={12} /> Resume
-              </Button>
-            )}
-            <Button variant="ghost" className="text-red-500 dark:text-red-400" onClick={disband} disabled={busy !== "" || !lifecycle}>
-              <Ban size={12} /> Disband
-            </Button>
-          </div>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-200/60 pt-3 dark:border-zinc-800">
-          <h3 className="mr-1 text-sm font-medium">Lead loop</h3>
-          {lead?.running ? (
-            <>
-              <span className="rounded-lg bg-indigo-500/10 px-2 py-0.5 text-xs text-indigo-600 dark:text-indigo-400">
-                running · round {lead.round ?? 0}{lead.n_stalls ? ` · ${lead.n_stalls} stall(s)` : ""}
-              </span>
-              {lead.last_verdict && <span className="max-w-72 truncate text-xs text-zinc-400" title={lead.last_verdict}>{lead.last_verdict}</span>}
-              <Button variant="ghost" className="ml-auto" onClick={() => teamOp("lead_stop")} disabled={busy !== ""}>
-                <Square size={12} /> Stop
-              </Button>
-            </>
-          ) : (
-            <>
-              <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="goal for the lead loop…"
-                className="min-w-64 flex-1 rounded-xl border border-zinc-200/80 bg-transparent px-3 py-1.5 text-sm dark:border-zinc-700" />
-              <Button onClick={() => teamOp("lead_start", { goal })} disabled={busy !== "" || !goal.trim()}>
-                <Play size={12} /> Start
-              </Button>
-            </>
-          )}
-        </div>
-      </Card>
 
       {/* Roster is read-only here: adding/removing members happens in the
           chat sidebar team panel (Manage members), the single entry point.
