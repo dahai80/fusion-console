@@ -6,6 +6,8 @@
 
 设计文档见 fusion 主仓 `insight/fusion-console-design-2026-11.md` 与 `insight/fusion-console-remote-access-plan-2026-11.md`。
 
+macOS 用户可以在主页明暗切换旁检查上游版本、手动安装，或启用空闲时自动更新。[安装说明](deploy/README.md#macos-user-installation-with-updates)
+
 ## 编排：聊天指挥 Agent
 
 开启编排（设置 → Orchestration，或配置向导）后，当前聊天就是**大脑**：模型获得 3 个原生工具 — `list_agents`、`run_agent`、`read_artifact` — 自行决定何时把任务派给 headless agent、收回结果、读产出验证、向你汇报（每轮最多 8 次规划迭代）。不需要单独配置"大脑 agent" — 大脑就是你聊天用的那个模型。大脑工作目录（`read_artifact` 读取沙箱 + worktree 父目录）可在 Workers 标签页配置，默认 `~/.fusion/fusion-console/agents`。大脑还可绑定代码源：GitHub URL（每次派发前同步到大脑工作目录：clone / fast-forward pull，本地改动绝不覆盖）或本地仓库路径（直接作为大脑工作区）。

@@ -41,6 +41,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type CodeStatus, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
+import ConsoleUpdate from "./ConsoleUpdate";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
 import Dashboard from "./Dashboard";
@@ -177,7 +178,8 @@ function TopBar({
         </nav>
       </div>
       <div className="flex items-center gap-2 text-sm text-zinc-500">
-        <button onClick={toggle} className="rounded-xl p-2 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
+        <ConsoleUpdate />
+        <button onClick={toggle} aria-label="切换明暗风格" className="rounded-xl p-2 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
           {dark ? <Sun size={16} /> : <Moon size={16} />}
         </button>
         <UserMenu user={user} onLogout={onLogout} onWizard={onWizard} />

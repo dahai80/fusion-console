@@ -21,6 +21,7 @@ import (
 
 // Server holds shared dependencies for all handlers.
 type Server struct {
+	updates       consoleUpdateGate
 	cfg           *config.Config
 	cfgDir        string
 	auth          *auth.Manager
@@ -102,6 +103,7 @@ func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 func (s *Server) routes() {
 	m := s.mux
 	m.HandleFunc("GET /api/health", s.handleHealth)
+	s.consoleUpdateRoutes(m)
 	m.HandleFunc("GET /api/memory/status", s.handleMemoryStatus)
 	m.HandleFunc("GET /api/mlx/status", s.handleMLXStatus)
 	m.HandleFunc("POST /api/mlx/op", s.handleMLXOp)
@@ -226,12 +228,12 @@ func (s *Server) Handler() http.Handler {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error (see console log)"})
 			}
 		}()
-		s.mux.ServeHTTP(w, r)
+		s.serveWithUpdateGate(w, r)
 	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "revision": upstreamRevision})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

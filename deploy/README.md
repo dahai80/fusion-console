@@ -25,6 +25,19 @@ sudo cp deploy/com.dahai.fusion-console.plist /Library/LaunchDaemons/
 sudo launchctl load /Library/LaunchDaemons/com.dahai.fusion-console.plist
 ```
 
+### macOS user installation with updates
+
+From a checkout of this repository, run the following as your normal login user.
+Python 3.9+ and GitHub CLI signed in to github.com with read access to Actions artifacts are required.
+
+```bash
+python3 scripts/install-macos-updater.py
+```
+
+A fresh install downloads the latest successful upstream main build for Apple Silicon or Intel and registers two per-user LaunchAgents. To attach updates to an existing user LaunchAgent, use `--console-plist ~/Library/LaunchAgents/YOUR-CONSOLE.plist`. It must run an updater-capable Console directly, have a writable binary directory with the matching `sidecar/harnessd.py`, and expose its revision at `/api/health`. Older builds need a one-time upgrade to a build containing this feature. The system-wide LaunchDaemon above uses a different installation method.
+
+The update menu next to the theme switch checks every ten minutes and offers manual installation or opt-in automatic updates. It uses the successful main workflow's artifact and verifies its SHA-256 digest. Installation waits for active chat requests and queued or running dispatches. A failed startup restores the previous executable and sidecar. The helper stores its state in the Console data directory under `updater/`. Rerun the installer to refresh the helper. To stop background updates entirely, unload the user job with `launchctl bootout gui/$(id -u)/YOUR-CONSOLE-LABEL-updater`.
+
 ### Ubuntu (systemd)
 
 ```bash
