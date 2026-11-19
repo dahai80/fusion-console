@@ -1959,7 +1959,7 @@ function DispatchPanel({ activity, runs, loaded, stale, convs, busyWorkers, onFo
       <DispatchRail desktop={desktop} open={open} onClose={onClose} headerActions={finished.length > 0 && (
         <Button variant="ghost" className="px-2 py-1 text-xs" onClick={clearFinished} title="Remove all finished cards">Clear</Button>
       )}>
-        <BrainCard activity={activity} />
+        <BrainCard activity={activity} runningCount={running.length} />
         {(!loaded || stale) && <p className="px-1 py-2 text-xs text-zinc-500" role="status">
           {stale ? "任务状态暂时无法刷新" : "正在读取任务状态…"}
         </p>}

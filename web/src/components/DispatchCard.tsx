@@ -44,12 +44,17 @@ function DispatchStages({ run }: { run: DispatchRun }) {
   </ol>;
 }
 
-export function BrainCard({ activity }: { activity: BrainActivity | null }) {
+export function BrainCard({ activity, runningCount }: { activity: BrainActivity | null; runningCount?: number }) {
   const live = !!activity && !activity.finished;
-  return <section className="dispatch-brain" data-live={live} aria-label="Brain activity in this chat">
+  // Background dispatches count as brain activity too: with no streaming
+  // turn in this conversation, show how many dispatched tasks are running.
+  const phase = live ? activity!.phase
+    : runningCount && runningCount > 0 ? `${runningCount} task${runningCount === 1 ? "" : "s"} running`
+    : "No live turn";
+  return <section className="dispatch-brain" data-live={live || (runningCount ?? 0) > 0} aria-label="Brain activity in this chat">
     <div className="brain-line"><Brain size={15} aria-hidden="true" /><strong>Brain</strong>
       <span className="brain-scope">This chat</span>
-      <span className="brain-phase" role="status">{activity?.phase ?? "No live turn"}</span>
+      <span className="brain-phase" role="status">{phase}</span>
     </div>
     {activity && <>
       {(!activity.finished || activity.failed) &&
