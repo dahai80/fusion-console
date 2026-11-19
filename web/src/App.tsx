@@ -353,7 +353,10 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   // H5 (mobile) drawers: the conversation rail and the dispatch rail are
   // hidden below md/lg — on phones they open as overlay drawers instead.
   const [convDrawer, setConvDrawer] = useState(false);
-  const [dispatchDrawer, setDispatchDrawer] = useState(false);
+  // Dispatch rail visibility: overlay drawer on phones, docked third column
+  // on desktop. The toolbar button toggles it at every width (issue: the
+  // rail previously could not be hidden on desktop).
+  const [dispatchDrawer, setDispatchDrawer] = useState(() => typeof window !== "undefined" && window.innerWidth >= 768);
   const [dispatchActive, setDispatchActive] = useState(0);
   const [brainActivity, setBrainActivity] = useState<BrainActivity | null>(null);
 const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
@@ -1233,9 +1236,9 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
             );
           })()}
           <button
-            onClick={() => setDispatchDrawer(true)}
-            title="Dispatches"
-            className="md:hidden ml-auto relative flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+            onClick={() => setDispatchDrawer((o) => !o)}
+            title={dispatchDrawer ? "Hide dispatches" : "Show dispatches"}
+            className="ml-auto relative flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
           >
             <PanelRight size={16} />
             {dispatchActive > 0 && (
@@ -1594,7 +1597,7 @@ function DispatchPanel({ activity, onOpen, drawerOpen, onDrawerClose, onRunningC
       )}
       <aside
         aria-label="Dispatches"
-        className={`dispatch-rail ${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white md:static md:flex md:w-64 lg:w-72 md:shadow-none md:bg-white/40 dark:bg-zinc-900 dark:md:bg-zinc-900/40 p-3`}
+        className={`dispatch-rail ${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl md:static md:w-64 lg:w-72 md:shadow-none" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white md:bg-white/40 dark:bg-zinc-900 dark:md:bg-zinc-900/40 p-3`}
       >
       <div className="flex items-center justify-between px-1 pb-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>
