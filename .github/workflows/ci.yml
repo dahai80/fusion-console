@@ -91,6 +91,8 @@ jobs:
       # committed webdist satisfies go:embed; no SPA build needed.
       - name: Test
         run: go test ./... -count=1
+      - name: Test updater artifact selection and verification
+        run: python3 -m unittest discover -s scripts -p test_console_updater.py
 
   cross-build:
     runs-on: ubuntu-latest
@@ -112,6 +114,10 @@ jobs:
           path: internal/server/webdist
       - name: Cross compile ${{ matrix.target }}
         run: ./scripts/build.sh ${{ matrix.target }}
+      - name: Include the matching harness sidecar
+        run: |
+          mkdir -p bin/sidecar
+          cp sidecar/harnessd.py bin/sidecar/
       - uses: actions/upload-artifact@v4
         with:
           name: fusion-console-${{ matrix.target }}

@@ -10,6 +10,8 @@ tasks to headless coding agents (Claude Code, fusion-code, Codex, OpenCode).
 Design docs: `insight/fusion-console-design-2026-11.md` and
 `insight/fusion-console-remote-access-plan-2026-11.md` in the fusion monorepo.
 
+On macOS, the optional per-user installer adds manual and automatic updates beside the theme switch. [Installation guide](deploy/README.md#macos-user-installation-with-updates)
+
 ## Orchestration: chat commands the agents
 
 Enable orchestration (Settings → Orchestration, or the onboarding wizard) and
