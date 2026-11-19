@@ -145,9 +145,9 @@ func probe(stdin io.WriteCloser, out *bufio.Reader) bool {
 }
 
 type helloResult struct {
-	ProtocolVersion int    `json:"protocol_version"`
-	KernelVersion   string `json:"kernel_version"`
-	Commit          string `json:"commit"`
+	ProtocolVersion int      `json:"protocol_version"`
+	KernelVersion   string   `json:"kernel_version"`
+	Commit          string   `json:"commit"`
 	Methods         []string `json:"methods"`
 	Features        []string `json:"features"`
 }
@@ -160,9 +160,9 @@ func helloOnce(stdin io.WriteCloser, out *bufio.Reader) (*helloResult, error) {
 		return nil, err
 	}
 	type env struct {
-		ID     int              `json:"id"`
-		Error  *rpcError        `json:"error"`
-		Result helloResult      `json:"result"`
+		ID     int         `json:"id"`
+		Error  *rpcError   `json:"error"`
+		Result helloResult `json:"result"`
 	}
 	lineCh := make(chan string, 1)
 	go func() {
@@ -234,9 +234,9 @@ func (c *Client) call(method string, params map[string]any, out any) error {
 			continue
 		}
 		var env struct {
-			ID     int              `json:"id"`
-			Error  *rpcError        `json:"error"`
-			Result json.RawMessage  `json:"result"`
+			ID     int             `json:"id"`
+			Error  *rpcError       `json:"error"`
+			Result json.RawMessage `json:"result"`
 		}
 		if err := json.Unmarshal([]byte(line), &env); err != nil {
 			return fmt.Errorf("harness: bad reply: %w", err)
@@ -349,9 +349,9 @@ func (c *Client) PostLLM(convID int64, budgetTokens, tokens int) (spent int, exc
 		BudgetExceeded bool `json:"budget_exceeded"`
 	}
 	params := map[string]any{
-		"conv_id":      convID,
+		"conv_id":       convID,
 		"budget_tokens": budgetTokens,
-		"usage":        map[string]any{"prompt_tokens": 0, "completion_tokens": tokens},
+		"usage":         map[string]any{"prompt_tokens": 0, "completion_tokens": tokens},
 	}
 	if err = c.call("post_llm", params, &res); err != nil {
 		return 0, false, err
