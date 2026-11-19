@@ -54,7 +54,7 @@ import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme, 
 import RunDrawer from "./components/RunDrawer";
 import { beginBrainTurn, brainEvent, endBrainTurn, type BrainActivity } from "./components/brainActivity";
 import { BrainCard, DispatchCard, DispatchDetails } from "./components/DispatchCard";
-import { DispatchRail, DispatchSummary, useDispatchRail } from "./components/DispatchStatus";
+import { DispatchRail, DispatchReopen, useDispatchRail } from "./components/DispatchStatus";
 
 const chatMarkdownComponents: Components = {
   a({ children, href, title }) {
@@ -451,11 +451,6 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     dispatchVersion.current++;
     setRuns(current => current?.filter(run => id !== undefined ? run.id !== id
       : run.status === "running" || run.status === "queued") ?? null);
-  }
-
-  function closeDispatchRail() {
-    rail.setOpen(false);
-    if (rail.desktop) document.getElementById("dispatch-toggle")?.focus();
   }
 
   const deleteConv = async (c: Conversation) => {
@@ -1009,7 +1004,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   })();
 
   return (
-    <div className="flex h-full">
+    <div className="chat-layout flex h-full">
       {convDrawer && (
         <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setConvDrawer(false)} />
       )}
@@ -1128,7 +1123,55 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
       </aside>
 
       <div className="flex flex-1 flex-col min-w-0">
-        <DispatchSummary runs={runs} stale={dispatchStale} open={rail.open} onToggle={() => rail.setOpen(!rail.open)} />
+        <div className="chat-toolbar border-b border-zinc-200/80 dark:border-zinc-800 text-sm">
+          <button
+            onClick={() => setConvDrawer(true)}
+            title="Conversations"
+            className="lg:hidden flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+          >
+            <Menu size={16} />
+          </button>
+          <div className="chat-tool-settings">
+            <button
+              onClick={() => setOrchestrate((v) => !v)}
+              title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
+              className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors ${
+                orchestrate
+                  ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-500"
+                  : "border-zinc-200/80 text-zinc-400 hover:text-zinc-600 dark:border-zinc-800 dark:hover:text-zinc-300"
+              }`}
+            >
+              <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
+            </button>
+            {brainLabel && (
+              <span
+                title={`Chat brain: ${brainLabel} — change it under Agents > Workers > Brain`}
+                className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+              >
+                <Brain size={14} className="text-indigo-500" /> Brain
+              </span>
+            )}
+            {budget && budget.limit > 0 && (() => {
+              const pct = Math.min(100, Math.round((budget.spent / budget.limit) * 100));
+              return (
+                <span
+                  title={`Conversation token budget: ${budget.spent.toLocaleString()} / ${budget.limit.toLocaleString()} tokens (${pct}%)`}
+                  className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+                >
+                  <Gauge size={14} className={pct >= 90 ? "text-red-500" : pct >= 70 ? "text-amber-500" : "text-emerald-500"} />
+                  <span className="tabular-nums">{pct}%</span>
+                  <span className="h-1 w-14 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
+                    <span
+                      className={`block h-full rounded-full ${pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-emerald-500"}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </span>
+                </span>
+              );
+            })()}
+          </div>
+          {!rail.open && <DispatchReopen runs={runs} stale={dispatchStale} onOpen={() => rail.setOpen(true)} />}
+        </div>
         {active?.Kind === "team" && (
           <div className="border-b border-zinc-200/80 dark:border-zinc-800 bg-indigo-500/5 px-4 py-2">
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -1218,52 +1261,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
             )}
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 px-4 py-2 text-sm">
-          <button
-            onClick={() => setConvDrawer(true)}
-            title="Conversations"
-            className="lg:hidden flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
-          >
-            <Menu size={16} />
-          </button>
-          <button
-            onClick={() => setOrchestrate((v) => !v)}
-            title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
-            className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors ${
-              orchestrate
-                ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-500"
-                : "border-zinc-200/80 text-zinc-400 hover:text-zinc-600 dark:border-zinc-800 dark:hover:text-zinc-300"
-            }`}
-          >
-            <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
-          </button>
-          {brainLabel && (
-            <span
-              title={`Chat brain: ${brainLabel} — change it under Agents > Workers > Brain`}
-              className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
-            >
-              <Brain size={14} className="text-indigo-500" /> Brain
-            </span>
-          )}
-          {budget && budget.limit > 0 && (() => {
-            const pct = Math.min(100, Math.round((budget.spent / budget.limit) * 100));
-            return (
-              <span
-                title={`Conversation token budget: ${budget.spent.toLocaleString()} / ${budget.limit.toLocaleString()} tokens (${pct}%)`}
-                className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
-              >
-                <Gauge size={14} className={pct >= 90 ? "text-red-500" : pct >= 70 ? "text-amber-500" : "text-emerald-500"} />
-                <span className="tabular-nums">{pct}%</span>
-                <span className="h-1 w-14 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
-                  <span
-                    className={`block h-full rounded-full ${pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-emerald-500"}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </span>
-              </span>
-            );
-          })()}
-        </div>
+
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {entries.length === 0 && (
@@ -1484,7 +1482,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
         activity={brainActivity && brainActivity.conversation === active?.ID ? brainActivity : null}
         runs={runs ?? []} loaded={runs !== null} stale={dispatchStale} convs={convs} busyWorkers={busyWorkers}
         onForget={forgetRuns} onOpen={c => { if (!rail.desktop) rail.setOpen(false); openConv(c); }}
-        desktop={rail.desktop} open={rail.open} onClose={closeDispatchRail}
+        desktop={rail.desktop} open={rail.open} onClose={() => rail.setOpen(false)}
       />
       {runDrawerTask && active?.Kind === "team" && (
         <RunDrawer

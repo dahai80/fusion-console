@@ -35,7 +35,8 @@ function DispatchStages({ run }: { run: DispatchRun }) {
   return <ol className="dispatch-stages" aria-label={`Run #${run.id} stages`}>
     {steps.map((label, i) => {
       const reached = i <= current && (i !== 1 || current === 1 || !!time(run.started_at));
-      return <li key={i} data-reached={reached} aria-current={i === current ? "step" : undefined}>
+      const stage = i === 0 ? "queued" : i === 1 ? "running" : run.status;
+      return <li key={i} data-stage={stage} data-reached={reached} aria-current={i === current ? "step" : undefined}>
         <span aria-hidden="true" />{label}
       </li>;
     })}
