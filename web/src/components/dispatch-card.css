@@ -18,11 +18,11 @@
   --dispatch-ink: var(--color-zinc-100);
   --dispatch-secondary: var(--color-zinc-400);
 }
-:is(.dispatch-card,.dispatch-dialog)[data-status=running] { --dispatch-tone: var(--color-indigo-700); }
+:is(.dispatch-card,.dispatch-dialog)[data-status=running] { --dispatch-tone: var(--color-amber-600); }
 :is(.dispatch-card,.dispatch-dialog)[data-status=done] { --dispatch-tone: var(--color-emerald-700); }
 :is(.dispatch-card,.dispatch-dialog)[data-status=blocked] { --dispatch-tone: var(--color-amber-700); }
 :is(.dispatch-card,.dispatch-dialog)[data-status=error] { --dispatch-tone: var(--color-red-700); }
-.dark :is(.dispatch-card,.dispatch-dialog)[data-status=running] { --dispatch-tone: var(--color-indigo-300); }
+.dark :is(.dispatch-card,.dispatch-dialog)[data-status=running] { --dispatch-tone: var(--color-amber-400); }
 .dark :is(.dispatch-card,.dispatch-dialog)[data-status=done] { --dispatch-tone: var(--color-emerald-400); }
 .dark :is(.dispatch-card,.dispatch-dialog)[data-status=blocked] { --dispatch-tone: var(--color-amber-400); }
 .dark :is(.dispatch-card,.dispatch-dialog)[data-status=error] { --dispatch-tone: var(--color-red-400); }
