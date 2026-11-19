@@ -6,6 +6,7 @@ import {
   Copy,
   Menu,
   PanelRight,
+  CirclePause,
   Cpu,
   Brain,
   ChevronDown,
@@ -39,7 +40,7 @@ import {
   FileText,
   Users,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type CodeStatus, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
@@ -52,6 +53,17 @@ import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 import RunDrawer from "./components/RunDrawer";
+
+const chatMarkdownComponents: Components = {
+  a({ children, href, title }) {
+    // Workers often cite files on the console host. A browser would resolve
+    // these absolute paths against the console origin, even on a phone.
+    if (href && /^\/(?:Users|home|Volumes|private|tmp)\//.test(href)) {
+      return <span>{children === href ? null : <>{children} </>}<code className="break-all">{href}</code></span>;
+    }
+    return <a href={href} title={title}>{children}</a>;
+  },
+};
 
 type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "onboard";
 
@@ -326,6 +338,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [uploading, setUploading] = useState(false);
   const [listening, setListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const requiresRepo = useRef<HTMLInputElement>(null);
   const recogRef = useRef<any>(null);
   const [orchestrate, setOrchestrate] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -397,8 +410,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         }
         if (active && !busy) {
           const mr = await api.messages(active.ID);
+          if (stop) return;
           const fresh = (mr.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta }));
-          setEntries((cur) => (fresh.length !== cur.length ? fresh : cur));
+          const latest = fresh.at(-1);
+          const receipt = latest?.meta && JSON.parse(latest.meta).background_run;
+          setEntries((cur) => (fresh.length !== cur.length || (receipt && latest?.meta !== cur.at(-1)?.meta) ? fresh : cur));
         }
       } catch { /* transient — next tick retries */ }
     };
@@ -762,7 +778,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     const mm = text.match(/@([a-zA-Z0-9_-]+)/);
     const mentioned = mm ? detectedAgents.find((a) => a.name === mm[1]) : null;
     if (mentioned?.is_worker) {
-      await dispatchWorkerTask(text, mentioned.name);
+      await dispatchWorkerTask(text, mentioned.name, requiresRepo.current?.checked ?? false);
       return;
     }
     if (mentioned) {
@@ -804,7 +820,9 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
             const detail = (ev.detail as string) ?? "";
             if (status === "running") last.content += `\n\n> ⚙️ dispatch \`${ev.tool}\`${detail ? ` — ${detail}` : ""}\n\n`;
             else if (status === "progress") last.content += `> ⏳ ${detail}\n`;
+            else if (status === "queued") last.content += "> ↳ queued\n\n";
             else if (status === "done") last.content += "> ↳ done\n\n";
+            else if (status === "blocked") last.content += `> ↳ blocked: ${detail}\n\n`;
             else if (status === "denied") last.content += `> ↳ denied: ${detail}\n\n`;
             else if (status === "error") last.content += "> ↳ error\n\n";
           }
@@ -861,7 +879,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   // @worker mention fires a direct background dispatch (POST /api/agent/run
   // with background) — the run lands in the dispatch panel and its result is
   // appended to this conversation when finished, no brain turn in front.
-  const dispatchWorkerTask = async (text: string, worker: string) => {
+  const dispatchWorkerTask = async (text: string, worker: string, requiresRepo: boolean) => {
     if (!text || busy || !worker) return;
     setBusy(true);
     setErr("");
@@ -875,7 +893,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         setActive(conv);
         await refreshConvs();
       }
-      const r = await api.agentRun({ conversation_id: conv.ID, agent: worker, task: text, workdir: "", background: true });
+      const r = await api.agentRun({ conversation_id: conv.ID, agent: worker, task: text, workdir: "", background: true, requires_repo: requiresRepo });
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: r.note || "dispatched as background run — progress in the dispatch panel" }]);
     } catch (ex) {
       setErr((ex as Error).message);
@@ -895,17 +913,23 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         const r = await api.createConversation(text.slice(0, 40), "agent", agent, "");
         conv = { ID: r.id, Title: text.slice(0, 40), Kind: "agent", User: "", AgentName: agent, Workdir: "", CreatedAt: "" };
         setActive(conv);
+        setEntries([]);
         await refreshConvs();
       }
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
+      let streamedText = "";
       await streamPOST("/api/agent/run", { conversation_id: conv.ID, agent, task: text, workdir: "" }, (ev) => {
         const type = ev.type as string;
+        const eventText = typeof ev.text === "string" ? ev.text : "";
+        if (type === "text") streamedText += eventText;
+        if (type === "result" && eventText.trim() === streamedText.trim()) return;
         setEntries((e) => {
           const copy = e.slice();
           const last = copy[copy.length - 1];
-          if (type === "text") last.content += (ev.text as string) ?? "";
+          if (type === "text") last.content += eventText;
           else if (type === "tool") last.content += `\n\n> 🔧 \`${ev.tool}\` ${ev.detail ?? ""}\n`;
-          else if (type === "result") last.content += (ev.text as string) ?? "";
+          else if (type === "result") last.content += eventText;
+          else if (type === "blocked") last.content = String(ev.text);
           else if (type === "usage") last.meta = JSON.stringify(ev);
           else if (type === "notice") last.content += `\n\n> ℹ️ ${ev.text}\n`;
           else if (type === "error") last.content += `\n\n**error:** ${ev.text}`;
@@ -1205,7 +1229,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                   <p className="whitespace-pre-wrap">{m.content}</p>
                 ) : (
                   <div className="md">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || "…"}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={chatMarkdownComponents}>{m.content || "…"}</ReactMarkdown>
                   </div>
                 )}
                 {m.meta && (() => {
@@ -1335,6 +1359,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
               </Button>
             </div>
           </div>
+          {mentionedAgent?.is_worker && (
+            <label className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+              <input key={mentionedAgent.name} type="checkbox" ref={requiresRepo} /> Requires Git repository
+            </label>
+          )}
         </div>
       </div>
       {teamModalOpen && (
@@ -1442,7 +1471,7 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
   }, []);
   const running = runs.filter((r) => r.status === "running");
   const queued = runs.filter((r) => r.status === "queued");
-  const finished = runs.filter((r) => r.status === "done" || r.status === "error").slice(0, 8);
+  const finished = runs.filter((r) => r.status === "done" || r.status === "blocked" || r.status === "error").slice(0, 8);
   // Report active-run count so the mobile toggle button can badge it — the
   // panel itself is a drawer below md and its cards are not visible there.
   useEffect(() => {
@@ -1493,11 +1522,12 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
   };
   // Expanded card view: a fixed overlay showing the full task / detail /
   // error / result of one run — cards in the rail stay a fixed small size.
-  const [expanded, setExpanded] = useState<DispatchRun | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const expanded = runs.find((r) => r.id === expandedId);
   const row = (r: DispatchRun) => (
     <div key={r.id} onClick={() => openRun(r)}
       className={`h-[72px] w-full overflow-hidden rounded-xl border p-2.5 text-left transition-colors select-text ${
-        r.status === "running"
+        r.status === "running" || r.status === "blocked"
           ? "border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10"
           : r.status === "done"
             ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
@@ -1510,28 +1540,30 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
           <RefreshCw size={12} className="shrink-0 animate-spin text-amber-500" />
         ) : r.status === "done" ? (
           <CheckCircle size={12} className="shrink-0 text-emerald-500" />
+        ) : r.status === "blocked" ? (
+          <CirclePause size={12} className="shrink-0 text-amber-500" />
         ) : r.status === "error" ? (
           <XCircle size={12} className="shrink-0 text-red-500" />
         ) : (
           <Clock size={12} className="shrink-0 text-zinc-400" />
         )}
         <span className="truncate text-xs font-medium">{r.worker}</span>
-        <span className={`ml-auto text-[11px] ${r.status === "running" ? "text-amber-600 dark:text-amber-400" : r.status === "done" ? "text-emerald-600 dark:text-emerald-400" : r.status === "error" ? "text-red-500" : "text-zinc-400"}`}>
+        <span className={`ml-auto text-[11px] ${r.status === "running" || r.status === "blocked" ? "text-amber-600 dark:text-amber-400" : r.status === "done" ? "text-emerald-600 dark:text-emerald-400" : r.status === "error" ? "text-red-500" : "text-zinc-400"}`}>
           {r.status === "running" ? `${r.elapsed_s}s`
             : r.status === "queued" ? "queued"
             : r.status === "done" ? `done · $${r.cost_usd.toFixed(2)}`
-            : "error"}
+            : r.status}
         </span>
         {copyBtn(`run:${r.id}`, () => copyRun(r, "run"))}
-        <button onClick={(e) => { e.stopPropagation(); setExpanded(r); }}
+        <button onClick={(e) => { e.stopPropagation(); setExpandedId(r.id); }}
           className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-600 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
           title="Maximize — full details">
           <Maximize2 size={12} />
         </button>
-        {r.status === "error" && (
+        {(r.status === "error" || r.status === "blocked") && (
           <button onClick={(e) => {
             e.stopPropagation();
-            api.agentRun({ conversation_id: r.conversation_id, agent: r.agent, task: r.task, workdir: "", background: true })
+            api.agentRun({ conversation_id: r.conversation_id, agent: r.worker || r.agent, task: r.task, workdir: "", background: true, requires_repo: r.requires_repo, repo: r.repo })
               .catch(() => {});
           }}
             className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-indigo-500 dark:hover:bg-zinc-700"
@@ -1539,7 +1571,7 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
             <RotateCcw size={12} />
           </button>
         )}
-        {(r.status === "done" || r.status === "error") && (
+        {(r.status === "done" || r.status === "blocked" || r.status === "error") && (
           <button onClick={(e) => { e.stopPropagation(); dismissRun(r.id); }}
             className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-red-500 dark:hover:bg-zinc-700"
             title="Dismiss this card">
@@ -1548,7 +1580,7 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
         )}
       </div>
       <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
-      {(r.status === "running" || r.status === "queued") && r.detail && (
+      {(r.status === "running" || r.status === "queued" || r.status === "blocked") && r.detail && (
         <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
       )}
     </div>
@@ -1567,7 +1599,7 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
           <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800">
             {running.length} running · {queued.length} queued
           </span>
-          {(runs.some((r) => r.status === "done" || r.status === "error")) && (
+          {finished.length > 0 && (
             <Button variant="ghost" className="px-1.5 py-0.5 text-[11px]" onClick={clearFinished} title="Remove all finished cards">
               Clear
             </Button>
@@ -1608,19 +1640,20 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
         Finished runs post their outcome into the conversation automatically.
       </p>
       {expanded && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 p-6" onClick={() => setExpanded(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 p-6" onClick={() => setExpandedId(null)}>
           <div className="flex max-h-[80vh] w-[560px] max-w-full flex-col rounded-2xl border border-zinc-200/80 bg-white shadow-lg shadow-zinc-900/10 dark:border-zinc-700 dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 border-b border-zinc-200/80 px-4 py-2.5 dark:border-zinc-800">
               {expanded.status === "running" ? <RefreshCw size={14} className="animate-spin text-amber-500" />
                 : expanded.status === "done" ? <CheckCircle size={14} className="text-emerald-500" />
+                : expanded.status === "blocked" ? <CirclePause size={14} className="text-amber-500" />
                 : expanded.status === "error" ? <XCircle size={14} className="text-red-500" />
                 : <Clock size={14} className="text-zinc-400" />}
               <span className="text-sm font-medium">run #{expanded.id} · {expanded.worker}</span>
               <span className="text-xs text-zinc-400">
                 {expanded.status} · {expanded.elapsed_s}s · ${expanded.cost_usd.toFixed(4)}
               </span>
-              <button className="ml-auto rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" onClick={() => setExpanded(null)} title="Close">
+              <button className="ml-auto rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" onClick={() => setExpandedId(null)} title="Close">
                 <X size={14} />
               </button>
             </div>

@@ -139,19 +139,30 @@ type AgentSettings struct {
 	Builtin         bool   `json:"builtin"`     // built-in entry; re-added by merge when missing from config
 }
 
+// ConfiguredWorkDir expands an explicit workspace path without creating it.
+// An empty setting stays empty.
+func ConfiguredWorkDir(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	dir = expandHome(dir)
+	if !filepath.IsAbs(dir) {
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
+	}
+	return dir
+}
+
 // ResolveWorkDir returns the dedicated workspace for one agent: the explicit
 // override when set, otherwise ~/.fusion-console/agents/<name>. The directory
 // is created on demand.
 func (c *Config) ResolveWorkDir(agentName string) string {
 	for _, a := range c.Agent {
-		if a.Name == agentName && strings.TrimSpace(a.WorkDir) != "" {
-			dir := expandHome(a.WorkDir)
-			if !filepath.IsAbs(dir) {
-				abs, err := filepath.Abs(dir)
-				if err == nil {
-					dir = abs
-				}
-			}
+		if a.Name != agentName {
+			continue
+		}
+		if dir := ConfiguredWorkDir(a.WorkDir); dir != "" {
 			if err := os.MkdirAll(dir, 0o700); err != nil {
 				log.Printf("config: mkdir agent workdir %s: %v", dir, err)
 			}
@@ -531,14 +542,7 @@ func (c *Config) User(name string) (*UserEntry, bool) {
 // (falling back to the agent type for legacy entries without a name). The
 // directory is created on demand.
 func (c *Config) ResolveWorkerDir(w WorkerConfig) string {
-	if strings.TrimSpace(w.WorkDir) != "" {
-		dir := expandHome(w.WorkDir)
-		if !filepath.IsAbs(dir) {
-			abs, err := filepath.Abs(dir)
-			if err == nil {
-				dir = abs
-			}
-		}
+	if dir := ConfiguredWorkDir(w.WorkDir); dir != "" {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			log.Printf("config: mkdir worker workdir %s: %v", dir, err)
 		}

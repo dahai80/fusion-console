@@ -124,7 +124,7 @@ export const api = {
       body: JSON.stringify({ provider_id: providerId, model }),
     }),
   agents: () => req<{ agents: AgentInfo[] }>("/api/agents"),
-  agentRun: (p: { conversation_id: number; agent: string; task: string; workdir?: string; background?: boolean }) =>
+  agentRun: (p: { conversation_id: number; agent: string; task: string; workdir?: string; background?: boolean; requires_repo?: boolean; repo?: string }) =>
     req<{ ok: boolean; note?: string }>("/api/agent/run", { method: "POST", body: JSON.stringify(p) }),
   providers: () => req<{ providers: Provider[] }>("/api/settings/providers"),
   saveProvider: (p: Provider) =>
@@ -389,7 +389,9 @@ export type DispatchRun = {
   task: string;
   conversation_id: number;
   user: string;
-  status: "queued" | "running" | "done" | "error";
+  requires_repo?: boolean;
+  repo?: string;
+  status: "queued" | "running" | "done" | "blocked" | "error";
   started_at: string;
   finished_at: string;
   elapsed_s: number;

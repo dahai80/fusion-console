@@ -59,6 +59,8 @@ keep the CLI default. Worker memory defaults to the zero-dependency `notes`
 convention (NOTES.md in the workspace) and can be switched per worker to the
 fusion-memory hub or off.
 
+A new `@worker` conversation uses the worker’s configured directory when the first message omits one. For tasks that need an existing checkout, select **Requires Git repository** when mentioning a worker, or set `requires_repo: true` on `run_agent`. If the workspace lacks a Git working tree, the dispatch card and conversation show **blocked** before the worker CLI starts. Set the worker’s directory to a checkout or bind its GitHub source in **Agents → Workers**, then retry. Tasks can also report a missing prerequisite with a final JSON object such as `{"status":"blocked","reason":"Need the input dataset"}`.
+
 ## Quickstart (3 commands)
 
 ```bash
