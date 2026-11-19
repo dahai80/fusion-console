@@ -316,3 +316,27 @@ func TestProviderEnvFallbackNotice(t *testing.T) {
 		t.Fatalf("clean binding must have no notice: env=%v notice=%q", env, notice)
 	}
 }
+
+func TestPlannerToolParameters(t *testing.T) {
+	for _, tool := range orchestratorTools() {
+		t.Run(tool.Name, func(t *testing.T) {
+			if _, err := json.Marshal(tool); err != nil {
+				t.Fatalf("encode planner tool: %v", err)
+			}
+			if tool.Name != "create_team" {
+				return
+			}
+			var schema struct {
+				Properties map[string]json.RawMessage
+			}
+			if err := json.Unmarshal(tool.Parameters, &schema); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"team", "spec", "tasks", "lead_start", "lead_goal"} {
+				if _, ok := schema.Properties[name]; !ok {
+					t.Errorf("missing top-level property %q", name)
+				}
+			}
+		})
+	}
+}
