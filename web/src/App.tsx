@@ -6,12 +6,10 @@ import {
   Copy,
   Menu,
   PanelRight,
-  CirclePause,
   Cpu,
   Brain,
   ChevronDown,
   ChevronRight,
-  XCircle,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -27,7 +25,6 @@ import {
   RotateCcw,
   KeyRound,
   Loader2,
-  Maximize2,
   Mic,
   Network,
   Rocket,
@@ -53,6 +50,8 @@ import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 import RunDrawer from "./components/RunDrawer";
+import { beginBrainTurn, brainEvent, endBrainTurn, type BrainActivity } from "./components/brainActivity";
+import { BrainCard, DispatchCard, DispatchDetails } from "./components/DispatchCard";
 
 const chatMarkdownComponents: Components = {
   a({ children, href, title }) {
@@ -350,6 +349,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [convDrawer, setConvDrawer] = useState(false);
   const [dispatchDrawer, setDispatchDrawer] = useState(false);
   const [dispatchActive, setDispatchActive] = useState(0);
+  const [brainActivity, setBrainActivity] = useState<BrainActivity | null>(null);
 const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   // Run drawer (issue #45 F2): "View run" on team-chat bubbles whose meta
@@ -793,6 +793,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     setErr("");
     setInput("");
     setAttachments([]);
+    let brainConversation: number | undefined;
     try {
       let conv = active;
       if (!conv) {
@@ -803,8 +804,15 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       }
       setEntries((e) => [...e, { role: "user", content: full }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
+      if (conv.Kind !== "team") {
+        brainConversation = idx;
+        setBrainActivity(beginBrainTurn(idx, text));
+      }
       await streamPOST("/api/chat", { conversation_id: idx, content: full, orchestrate }, (ev) => {
         const type = ev.type as string;
+        if (brainConversation !== undefined) {
+          setBrainActivity(prev => prev && prev.conversation === brainConversation ? brainEvent(prev, ev) : prev);
+        }
         setEntries((e) => {
           const copy = e.slice();
           const last = copy[copy.length - 1];
@@ -832,8 +840,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         });
       });
     } catch (ex) {
-      setErr((ex as Error).message);
+      const message = (ex as Error).message;
+      setErr(message);
+      setBrainActivity(prev => prev && prev.conversation === brainConversation ? brainEvent(prev, { type: "error", text: message }) : prev);
     } finally {
+      setBrainActivity(prev => prev && prev.conversation === brainConversation ? endBrainTurn(prev) : prev);
       setBusy(false);
     }
   };
@@ -1426,7 +1437,8 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
         </div>
       )}
       <DispatchPanel
-          onRunningCount={setDispatchActive}
+        activity={brainActivity && brainActivity.conversation === active?.ID ? brainActivity : null}
+        onRunningCount={setDispatchActive}
         onOpen={(c) => { setDispatchDrawer(false); openConv(c); }}
         drawerOpen={dispatchDrawer}
         onDrawerClose={() => setDispatchDrawer(false)}
@@ -1445,42 +1457,44 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
 
 // DispatchPanel is the right rail of the chat page: every background run
 // (run_agent background=true) grouped into running / queued / finished.
-// Clicking a finished row opens its conversation.
-function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { onOpen: (c: Conversation) => void; drawerOpen?: boolean; onDrawerClose?: () => void; onRunningCount?: (n: number) => void }) {
+// Cards open live run details, with a link back to the originating conversation.
+function DispatchPanel({ activity, onOpen, drawerOpen, onDrawerClose, onRunningCount }: { activity: BrainActivity | null; onOpen: (c: Conversation) => void; drawerOpen?: boolean; onDrawerClose?: () => void; onRunningCount?: (n: number) => void }) {
   const [runs, setRuns] = useState<DispatchRun[]>([]);
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [busyWorkers, setBusyWorkers] = useState<WorkerStatus[]>([]);
   useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
-      try {
-        const r = await api.dispatches();
-        setRuns(r.dispatches ?? []);
-      } catch { /* server unreachable — keep last snapshot */ }
-      try {
-        const r = await api.conversations();
-        setConvs(r.conversations ?? []);
-      } catch { /* ignore */ }
-      try {
-        const r = await api.workersStatus();
-        setBusyWorkers((r.workers ?? []).filter((w) => w.busy));
-      } catch { /* ignore */ }
+      const [dispatches, conversations, workers] = await Promise.allSettled([
+        api.dispatches(), api.conversations(), api.workersStatus(),
+      ]);
+      if (stopped) return;
+      if (dispatches.status === "fulfilled") setRuns(dispatches.value.dispatches ?? []);
+      if (conversations.status === "fulfilled") setConvs(conversations.value.conversations ?? []);
+      if (workers.status === "fulfilled") setBusyWorkers((workers.value.workers ?? []).filter(w => w.busy));
+      timer = setTimeout(load, 4000);
     };
-    load();
-    const t = setInterval(load, 4000);
-    return () => clearInterval(t);
+    void load();
+    return () => { stopped = true; clearTimeout(timer); };
   }, []);
   const running = runs.filter((r) => r.status === "running");
   const queued = runs.filter((r) => r.status === "queued");
+  // Worker status has no run ID. Only attach a live tool report to a unique
+  // match; otherwise keep the original independent worker strip.
+  const liveByRun = new Map<number, WorkerStatus>();
+  const independentWorkers = busyWorkers.filter(worker => {
+    const matches = running.filter(run => run.worker === worker.name && run.task === worker.task);
+    if (matches.length !== 1) return true;
+    liveByRun.set(matches[0].id, worker);
+    return false;
+  });
   const finished = runs.filter((r) => r.status === "done" || r.status === "blocked" || r.status === "error").slice(0, 8);
   // Report active-run count so the mobile toggle button can badge it — the
   // panel itself is a drawer below md and its cards are not visible there.
   useEffect(() => {
     onRunningCount?.(running.length + queued.length);
   }, [running.length, queued.length, onRunningCount]);
-  const openRun = (r: DispatchRun) => {
-    const c = convs.find((x) => x.ID === r.conversation_id);
-    if (c) onOpen(c);
-  };
   // copyRun puts the full card content on the clipboard for bug reports —
   // one click, no manual text selection across truncated lines.
   const copyRun = async (r: DispatchRun | WorkerStatus, kind: "run" | "worker") => {
@@ -1524,42 +1538,10 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
   // error / result of one run — cards in the rail stay a fixed small size.
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const expanded = runs.find((r) => r.id === expandedId);
+  const conversation = expanded && convs.find((c) => c.ID === expanded.conversation_id);
   const row = (r: DispatchRun) => (
-    <div key={r.id} onClick={() => openRun(r)}
-      className={`h-[72px] w-full overflow-hidden rounded-xl border p-2.5 text-left transition-colors select-text ${
-        r.status === "running" || r.status === "blocked"
-          ? "border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10"
-          : r.status === "done"
-            ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
-            : r.status === "error"
-              ? "border-red-500/30 bg-red-500/5 hover:bg-red-500/10"
-              : "border-zinc-200/80 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-      } ${r.conversation_id === 0 ? "cursor-default" : "cursor-pointer"}`}>
-      <div className="flex items-center gap-2">
-        {r.status === "running" ? (
-          <RefreshCw size={12} className="shrink-0 animate-spin text-amber-500" />
-        ) : r.status === "done" ? (
-          <CheckCircle size={12} className="shrink-0 text-emerald-500" />
-        ) : r.status === "blocked" ? (
-          <CirclePause size={12} className="shrink-0 text-amber-500" />
-        ) : r.status === "error" ? (
-          <XCircle size={12} className="shrink-0 text-red-500" />
-        ) : (
-          <Clock size={12} className="shrink-0 text-zinc-400" />
-        )}
-        <span className="truncate text-xs font-medium">{r.worker}</span>
-        <span className={`ml-auto text-[11px] ${r.status === "running" || r.status === "blocked" ? "text-amber-600 dark:text-amber-400" : r.status === "done" ? "text-emerald-600 dark:text-emerald-400" : r.status === "error" ? "text-red-500" : "text-zinc-400"}`}>
-          {r.status === "running" ? `${r.elapsed_s}s`
-            : r.status === "queued" ? "queued"
-            : r.status === "done" ? `done · $${r.cost_usd.toFixed(2)}`
-            : r.status}
-        </span>
+    <DispatchCard key={r.id} run={r} liveDetail={liveByRun.get(r.id)?.detail} onExpand={() => setExpandedId(r.id)} actions={<>
         {copyBtn(`run:${r.id}`, () => copyRun(r, "run"))}
-        <button onClick={(e) => { e.stopPropagation(); setExpandedId(r.id); }}
-          className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-600 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
-          title="Maximize — full details">
-          <Maximize2 size={12} />
-        </button>
         {(r.status === "error" || r.status === "blocked") && (
           <button onClick={(e) => {
             e.stopPropagation();
@@ -1578,12 +1560,7 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
             <X size={12} />
           </button>
         )}
-      </div>
-      <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={r.task}>▸ {r.task}</p>
-      {(r.status === "running" || r.status === "queued" || r.status === "blocked") && r.detail && (
-        <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={r.detail}>{r.detail}</p>
-      )}
-    </div>
+    </>} />
   );
   return (
     <>
@@ -1591,7 +1568,8 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
         <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onDrawerClose} />
       )}
       <aside
-        className={`${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white md:static md:flex md:w-64 lg:w-72 md:shadow-none md:bg-white/40 dark:bg-zinc-900 dark:md:bg-zinc-900/40 p-3`}
+        aria-label="Dispatches"
+        className={`dispatch-rail ${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white md:static md:flex md:w-64 lg:w-72 md:shadow-none md:bg-white/40 dark:bg-zinc-900 dark:md:bg-zinc-900/40 p-3`}
       >
       <div className="flex items-center justify-between px-1 pb-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>
@@ -1606,12 +1584,13 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
           )}
         </div>
       </div>
+      <BrainCard activity={activity} />
       <div className="flex-1 space-y-2 overflow-y-auto">
         {/* Agent status strip: every worker with a live agent process, even
             one recovered after a console restart (registry lost, process not). */}
-        {busyWorkers.length > 0 && (
+        {independentWorkers.length > 0 && (
           <div className="space-y-1.5">
-            {busyWorkers.map((w) => (
+            {independentWorkers.map((w) => (
               <div key={w.name} className="select-text rounded-xl border border-indigo-500/30 bg-indigo-500/5 px-2.5 py-2">
                 <div className="flex items-center gap-2">
                   <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
@@ -1639,52 +1618,12 @@ function DispatchPanel({ onOpen, drawerOpen, onDrawerClose, onRunningCount }: { 
       <p className="border-t border-zinc-200/80 px-1 pt-2 text-[11px] leading-4 text-zinc-400 dark:border-zinc-800">
         Finished runs post their outcome into the conversation automatically.
       </p>
-      {expanded && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 p-6" onClick={() => setExpandedId(null)}>
-          <div className="flex max-h-[80vh] w-[560px] max-w-full flex-col rounded-2xl border border-zinc-200/80 bg-white shadow-lg shadow-zinc-900/10 dark:border-zinc-700 dark:bg-zinc-900"
-            onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-2 border-b border-zinc-200/80 px-4 py-2.5 dark:border-zinc-800">
-              {expanded.status === "running" ? <RefreshCw size={14} className="animate-spin text-amber-500" />
-                : expanded.status === "done" ? <CheckCircle size={14} className="text-emerald-500" />
-                : expanded.status === "blocked" ? <CirclePause size={14} className="text-amber-500" />
-                : expanded.status === "error" ? <XCircle size={14} className="text-red-500" />
-                : <Clock size={14} className="text-zinc-400" />}
-              <span className="text-sm font-medium">run #{expanded.id} · {expanded.worker}</span>
-              <span className="text-xs text-zinc-400">
-                {expanded.status} · {expanded.elapsed_s}s · ${expanded.cost_usd.toFixed(4)}
-              </span>
-              <button className="ml-auto rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" onClick={() => setExpandedId(null)} title="Close">
-                <X size={14} />
-              </button>
-            </div>
-            <div className="flex-1 space-y-3 overflow-y-auto p-4 text-sm">
-              <section>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Task</p>
-                <p className="select-text whitespace-pre-wrap break-words text-zinc-700 dark:text-zinc-200">{expanded.task}</p>
-              </section>
-              {expanded.detail && (
-                <section>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Detail</p>
-                  <p className="select-text whitespace-pre-wrap break-words text-zinc-500 dark:text-zinc-400">{expanded.detail}</p>
-                </section>
-              )}
-              {expanded.error && (
-                <section>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-400">Error</p>
-                  <pre className="select-text whitespace-pre-wrap break-words rounded-xl bg-red-500/5 p-2.5 text-[12px] leading-5 text-red-600 dark:text-red-400">{expanded.error}</pre>
-                </section>
-              )}
-              {expanded.result && (
-                <section>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-emerald-400">Result</p>
-                  <pre className="select-text whitespace-pre-wrap break-words rounded-xl bg-emerald-500/5 p-2.5 text-[12px] leading-5 text-zinc-700 dark:text-zinc-200">{expanded.result}</pre>
-                </section>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </aside>
+      {expanded && (
+        <DispatchDetails run={expanded} liveDetail={liveByRun.get(expanded.id)?.detail} onClose={() => setExpandedId(null)}
+          onConversation={conversation ? () => { setExpandedId(null); onOpen(conversation); } : undefined}
+        />
+      )}
     </>
   );
 }
