@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,5 +138,40 @@ func TestClientPreLLMBudgetFields(t *testing.T) {
 	}
 	if spent < 500 {
 		t.Errorf("post_llm spent = %d, want >= 500", spent)
+	}
+}
+
+// TestClientResolveDenyAndUnknown (issue #110): the approval round-trip —
+// deny yields human_gate, unknown ids are typed state errors.
+func TestClientResolveDenyAndUnknown(t *testing.T) {
+	skipIfNoHarness(t)
+	wd, _ := os.Getwd()
+	t.Setenv("FUSION_CONSOLE_HARNESS_SIDECAR", filepath.Join(wd, "..", "..", "sidecar", "harnessd.py"))
+
+	c := New()
+	defer c.Close()
+	// Unknown id -> typed state error, never a bare string error.
+	if _, err := c.Resolve(9, "ghost-id", true); err == nil {
+		t.Fatal("unknown approval_id accepted")
+	} else {
+		var rpcErr *RPCError
+		if !errors.As(err, &rpcErr) || rpcErr.Code != "state" {
+			t.Fatalf("want state RPCError, got %v", err)
+		}
+	}
+	// needs_approval -> deny round-trip.
+	admit, err := c.ToolAdmit(9, 0, "rm_rf", map[string]any{})
+	if err != nil {
+		t.Fatalf("tool_admit: %v", err)
+	}
+	if !admit.NeedsApproval || admit.ApprovalID == "" {
+		t.Fatalf("expected needs_approval + approval_id, got %+v", admit)
+	}
+	deny, err := c.Resolve(9, admit.ApprovalID, false)
+	if err != nil {
+		t.Fatalf("resolve deny: %v", err)
+	}
+	if deny.Allowed || deny.BlockedBy != "human_gate" {
+		t.Fatalf("deny verdict wrong: %+v", deny)
 	}
 }

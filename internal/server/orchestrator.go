@@ -594,8 +594,13 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 			hMsgs := toHarnessMessages(msgs)
 			pre, err := s.harness.PreLLM(prov.convID, prov.budget, prov.model, hMsgs)
 			if err != nil {
-				log.Printf("orchestrator: harness pre_llm unavailable, proceeding unguarded: %v", err)
-			} else {
+				// Fail-closed (issue #110): a broken guard stops the
+				// orchestrator turn, it never becomes unguarded planning.
+				log.Printf("orchestrator: harness pre_llm unavailable, failing closed: %v", err)
+				send(map[string]any{"type": "error", "text": "harness guard unavailable: " + err.Error()})
+				return full, total
+			}
+			{
 				send(map[string]any{"type": "budget", "spent": pre.Spent, "limit": pre.Limit})
 				if !pre.Proceed {
 					log.Printf("orchestrator: budget denied planner call conv=%d: %s", prov.convID, pre.Reason)
