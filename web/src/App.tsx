@@ -1134,6 +1134,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
           <div className="chat-tool-settings">
             <button
               onClick={() => setOrchestrate((v) => !v)}
+              aria-pressed={orchestrate}
               title={orchestrate ? "Orchestration ON — the brain can dispatch workers (list_agents / run_agent / read_artifact). Click to turn off." : "Orchestration OFF — plain chat with the brain model. Click to let the brain dispatch workers."}
               className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors ${
                 orchestrate
@@ -1141,20 +1142,21 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
                   : "border-zinc-200/80 text-zinc-400 hover:text-zinc-600 dark:border-zinc-800 dark:hover:text-zinc-300"
               }`}
             >
-              <Network size={14} /> orchestrate: {orchestrate ? "on" : "off"}
+              <Network size={14} aria-hidden="true" /><span className="chat-orchestration-label">orchestrate: {orchestrate ? "on" : "off"}</span>
             </button>
             {brainLabel && (
               <span
                 title={`Chat brain: ${brainLabel} — change it under Agents > Workers > Brain`}
                 className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
               >
-                <Brain size={14} className="text-indigo-500" /> Brain
+                <Brain size={14} className="text-indigo-500" /><span className="chat-brain-label">Brain</span>
               </span>
             )}
             {budget && budget.limit > 0 && (() => {
               const pct = Math.min(100, Math.round((budget.spent / budget.limit) * 100));
               return (
                 <span
+                  data-chat-budget=""
                   title={`Conversation token budget: ${budget.spent.toLocaleString()} / ${budget.limit.toLocaleString()} tokens (${pct}%)`}
                   className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
                 >
@@ -1170,7 +1172,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
               );
             })()}
           </div>
-          {!rail.open && <DispatchReopen runs={runs} stale={dispatchStale} onOpen={() => rail.setOpen(true)} />}
+          {!rail.open && <DispatchReopen runs={runs} stale={dispatchStale} compact={!rail.desktop} onOpen={() => rail.setOpen(true)} />}
         </div>
         {active?.Kind === "team" && (
           <div className="border-b border-zinc-200/80 dark:border-zinc-800 bg-indigo-500/5 px-4 py-2">
