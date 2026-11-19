@@ -5,7 +5,6 @@ import {
   Clock,
   Copy,
   Menu,
-  PanelRight,
   Cpu,
   Brain,
   ChevronDown,
@@ -55,6 +54,7 @@ import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme, 
 import RunDrawer from "./components/RunDrawer";
 import { beginBrainTurn, brainEvent, endBrainTurn, type BrainActivity } from "./components/brainActivity";
 import { BrainCard, DispatchCard, DispatchDetails } from "./components/DispatchCard";
+import { DispatchRail, DispatchSummary, useDispatchRail } from "./components/DispatchStatus";
 
 const chatMarkdownComponents: Components = {
   a({ children, href, title }) {
@@ -360,13 +360,14 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   // H5 (mobile) drawers: the conversation rail and the dispatch rail are
   // hidden below md/lg — on phones they open as overlay drawers instead.
   const [convDrawer, setConvDrawer] = useState(false);
-  // Dispatch rail visibility: overlay drawer on phones, docked third column
-  // on desktop. The toolbar button toggles it at every width (issue: the
-  // rail previously could not be hidden on desktop).
-  const [dispatchDrawer, setDispatchDrawer] = useState(() => typeof window !== "undefined" && window.innerWidth >= 768);
-  const [dispatchActive, setDispatchActive] = useState(0);
+  const rail = useDispatchRail();
+  const [runs, setRuns] = useState<DispatchRun[] | null>(null);
+  const [dispatchStale, setDispatchStale] = useState(false);
+  const [busyWorkers, setBusyWorkers] = useState<WorkerStatus[]>([]);
   const [brainActivity, setBrainActivity] = useState<BrainActivity | null>(null);
-const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
+  const workingWorkers = runs?.some(r => r.status === "running" || r.status === "queued")
+    ? [] : busyWorkers.map(w => w.name);
+  const dispatchVersion = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   // Run drawer (issue #45 F2): "View run" on team-chat bubbles whose meta
   // carries a task_id. Hidden for good once the daemon lacks the run RPCs.
@@ -389,7 +390,6 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
   }, []);
 
   useEffect(() => {
-    refreshConvs().catch(() => {});
     api.providers().then((r) => {
       const list = (r.providers ?? []).filter((p) => p.enabled);
       setProviders(list);
@@ -399,31 +399,39 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     api.agents().then((r) => {
       setAgents(r.agents ?? []);
     }).catch(() => {});
-  }, [refreshConvs]);
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
 
-  // Background dispatches: poll the run list for sidebar badges and refresh
-  // the open conversation so finished runs appear without a manual reload.
+  // The toolbar, badges and rail share a single feed, including while the rail is closed.
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      const version = dispatchVersion.current;
+      await Promise.allSettled([
+        api.dispatches().then(data => {
+          if (stopped || version !== dispatchVersion.current) return;
+          setRuns(data.dispatches ?? []);
+          setUnread(data.unread_by_conv ?? {});
+          setDispatchStale(false);
+        }).catch(() => { if (!stopped) setDispatchStale(true); }),
+        api.workersStatus().then(data => { if (!stopped) setBusyWorkers((data.workers ?? []).filter(w => w.busy)); }),
+        api.conversations().then(data => { if (!stopped) setConvs(data.conversations ?? []); }),
+      ]);
+      if (!stopped) timer = setTimeout(poll, 4000);
+    };
+    void poll();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, []);
+
+  // Completed runs post a receipt into their originating conversation.
   useEffect(() => {
     let stop = false;
     const tick = async () => {
       try {
-        const r = await api.dispatches();
-        if (stop) return;
-        setUnread(r.unread_by_conv ?? {});
-        const hasActiveBg = (r.dispatches ?? []).some((d) => d.status === "running" || d.status === "queued");
-        if (!hasActiveBg) {
-          try {
-            const ws = await api.workersStatus();
-            if (stop) return;
-            setWorkingWorkers((ws.workers ?? []).filter((w) => w.busy).map((w) => w.name));
-          } catch { /* ignore */ }
-        } else {
-          setWorkingWorkers([]);
-        }
         if (active && !busy) {
           const mr = await api.messages(active.ID);
           if (stop) return;
@@ -437,6 +445,18 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
     const t = setInterval(tick, 6000);
     return () => { stop = true; clearInterval(t); };
   }, [active, busy]);
+
+  function forgetRuns(id?: number) {
+    // A poll started before the dismissal must not restore the cleared cards.
+    dispatchVersion.current++;
+    setRuns(current => current?.filter(run => id !== undefined ? run.id !== id
+      : run.status === "running" || run.status === "queued") ?? null);
+  }
+
+  function closeDispatchRail() {
+    rail.setOpen(false);
+    if (rail.desktop) document.getElementById("dispatch-toggle")?.focus();
+  }
 
   const deleteConv = async (c: Conversation) => {
     if (!window.confirm(`Delete "${c.Title || "#" + c.ID}" and its messages?`)) return;
@@ -1108,6 +1128,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       </aside>
 
       <div className="flex flex-1 flex-col min-w-0">
+        <DispatchSummary runs={runs} stale={dispatchStale} open={rail.open} onToggle={() => rail.setOpen(!rail.open)} />
         {active?.Kind === "team" && (
           <div className="border-b border-zinc-200/80 dark:border-zinc-800 bg-indigo-500/5 px-4 py-2">
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -1242,18 +1263,6 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
               </span>
             );
           })()}
-          <button
-            onClick={() => setDispatchDrawer((o) => !o)}
-            title={dispatchDrawer ? "Hide dispatches" : "Show dispatches"}
-            className="ml-auto relative flex items-center rounded-xl border border-zinc-200/80 px-2.5 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
-          >
-            <PanelRight size={16} />
-            {dispatchActive > 0 && (
-              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
-                {dispatchActive}
-              </span>
-            )}
-          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -1473,10 +1482,9 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
       )}
       <DispatchPanel
         activity={brainActivity && brainActivity.conversation === active?.ID ? brainActivity : null}
-        onRunningCount={setDispatchActive}
-        onOpen={(c) => { setDispatchDrawer(false); openConv(c); }}
-        drawerOpen={dispatchDrawer}
-        onDrawerClose={() => setDispatchDrawer(false)}
+        runs={runs ?? []} loaded={runs !== null} stale={dispatchStale} convs={convs} busyWorkers={busyWorkers}
+        onForget={forgetRuns} onOpen={c => { if (!rail.desktop) rail.setOpen(false); openConv(c); }}
+        desktop={rail.desktop} open={rail.open} onClose={closeDispatchRail}
       />
       {runDrawerTask && active?.Kind === "team" && (
         <RunDrawer
@@ -1493,26 +1501,11 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
 // DispatchPanel is the right rail of the chat page: every background run
 // (run_agent background=true) grouped into running / queued / finished.
 // Cards open live run details, with a link back to the originating conversation.
-function DispatchPanel({ activity, onOpen, drawerOpen, onDrawerClose, onRunningCount }: { activity: BrainActivity | null; onOpen: (c: Conversation) => void; drawerOpen?: boolean; onDrawerClose?: () => void; onRunningCount?: (n: number) => void }) {
-  const [runs, setRuns] = useState<DispatchRun[]>([]);
-  const [convs, setConvs] = useState<Conversation[]>([]);
-  const [busyWorkers, setBusyWorkers] = useState<WorkerStatus[]>([]);
-  useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
-      const [dispatches, conversations, workers] = await Promise.allSettled([
-        api.dispatches(), api.conversations(), api.workersStatus(),
-      ]);
-      if (stopped) return;
-      if (dispatches.status === "fulfilled") setRuns(dispatches.value.dispatches ?? []);
-      if (conversations.status === "fulfilled") setConvs(conversations.value.conversations ?? []);
-      if (workers.status === "fulfilled") setBusyWorkers((workers.value.workers ?? []).filter(w => w.busy));
-      timer = setTimeout(load, 4000);
-    };
-    void load();
-    return () => { stopped = true; clearTimeout(timer); };
-  }, []);
+function DispatchPanel({ activity, runs, loaded, stale, convs, busyWorkers, onForget, onOpen, desktop, open, onClose }: {
+  activity: BrainActivity | null; runs: DispatchRun[]; loaded: boolean; stale: boolean;
+  convs: Conversation[]; busyWorkers: WorkerStatus[]; onForget: (id?: number) => void;
+  onOpen: (c: Conversation) => void; desktop: boolean; open: boolean; onClose: () => void;
+}) {
   const running = runs.filter((r) => r.status === "running");
   const queued = runs.filter((r) => r.status === "queued");
   // Worker status has no run ID. Only attach a live tool report to a unique
@@ -1525,11 +1518,6 @@ function DispatchPanel({ activity, onOpen, drawerOpen, onDrawerClose, onRunningC
     return false;
   });
   const finished = runs.filter((r) => r.status === "done" || r.status === "blocked" || r.status === "error").slice(0, 8);
-  // Report active-run count so the mobile toggle button can badge it — the
-  // panel itself is a drawer below md and its cards are not visible there.
-  useEffect(() => {
-    onRunningCount?.(running.length + queued.length);
-  }, [running.length, queued.length, onRunningCount]);
   // copyRun puts the full card content on the clipboard for bug reports —
   // one click, no manual text selection across truncated lines.
   const copyRun = async (r: DispatchRun | WorkerStatus, kind: "run" | "worker") => {
@@ -1560,14 +1548,14 @@ function DispatchPanel({ activity, onOpen, drawerOpen, onDrawerClose, onRunningC
   const clearFinished = async () => {
     try {
       await api.clearDispatches();
-      setRuns((r) => r.filter((x) => x.status === "running" || x.status === "queued"));
+      onForget();
     } catch { /* keep current view */ }
   };
   const dismissRun = async (id: number) => {
-    setRuns((r) => r.filter((x) => x.id !== id));
     try {
       await api.dismissDispatch(id);
-    } catch { /* next poll restores if delete failed */ }
+      onForget(id);
+    } catch { /* keep current view */ }
   };
   // Expanded card view: a fixed overlay showing the full task / detail /
   // error / result of one run — cards in the rail stay a fixed small size.
@@ -1599,61 +1587,47 @@ function DispatchPanel({ activity, onOpen, drawerOpen, onDrawerClose, onRunningC
   );
   return (
     <>
-      {drawerOpen && (
-        <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onDrawerClose} />
-      )}
-      <aside
-        aria-label="Dispatches"
-        className={`dispatch-rail ${drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl md:static md:w-64 lg:w-72 md:shadow-none" : "hidden"} shrink-0 flex-col border-l border-zinc-200/80 dark:border-zinc-800 bg-white md:bg-white/40 dark:bg-zinc-900 dark:md:bg-zinc-900/40 p-3`}
-      >
-      <div className="flex items-center justify-between px-1 pb-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Dispatches</span>
-        <div className="flex items-center gap-1.5">
-          <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800">
-            {running.length} running · {queued.length} queued
-          </span>
-          {finished.length > 0 && (
-            <Button variant="ghost" className="px-1.5 py-0.5 text-[11px]" onClick={clearFinished} title="Remove all finished cards">
-              Clear
-            </Button>
+      <DispatchRail desktop={desktop} open={open} onClose={onClose} headerActions={finished.length > 0 && (
+        <Button variant="ghost" className="px-2 py-1 text-xs" onClick={clearFinished} title="Remove all finished cards">Clear</Button>
+      )}>
+        <BrainCard activity={activity} />
+        {(!loaded || stale) && <p className="px-1 py-2 text-xs text-zinc-500" role="status">
+          {stale ? "任务状态暂时无法刷新" : "正在读取任务状态…"}
+        </p>}
+        <div className="flex-1 space-y-2 overflow-y-auto">
+          {/* Agent status strip: every worker with a live agent process, even
+              one recovered after a console restart (registry lost, process not). */}
+          {independentWorkers.length > 0 && (
+            <div className="space-y-1.5">
+              {independentWorkers.map((w) => (
+                <div key={w.name} className="select-text rounded-xl border border-indigo-500/30 bg-indigo-500/5 px-2.5 py-2">
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
+                    <span className="truncate text-xs font-medium">{w.name}</span>
+                    <span className="ml-auto shrink-0 text-[11px] text-indigo-600 dark:text-indigo-400">
+                      {typeof w.elapsed_s === "number" ? `${w.elapsed_s}s` : "working"}
+                    </span>
+                    {copyBtn(`worker:${w.name}`, () => copyRun(w, "worker"))}
+                  </div>
+                  {w.task && <p className="mt-0.5 break-words text-[11px] text-zinc-500 dark:text-zinc-400" title={w.task}>{w.task}</p>}
+                  {w.detail && <p className="break-words text-[11px] text-zinc-400" title={w.detail}>{w.detail}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+          {running.map(row)}
+          {queued.map(row)}
+          {finished.map(row)}
+          {loaded && runs.length === 0 && busyWorkers.length === 0 && (
+            <p className="px-1 pt-4 text-center text-xs text-zinc-400">
+              No background runs yet. The brain dispatches with background=true for long tasks.
+            </p>
           )}
         </div>
-      </div>
-      <BrainCard activity={activity} />
-      <div className="flex-1 space-y-2 overflow-y-auto">
-        {/* Agent status strip: every worker with a live agent process, even
-            one recovered after a console restart (registry lost, process not). */}
-        {independentWorkers.length > 0 && (
-          <div className="space-y-1.5">
-            {independentWorkers.map((w) => (
-              <div key={w.name} className="select-text rounded-xl border border-indigo-500/30 bg-indigo-500/5 px-2.5 py-2">
-                <div className="flex items-center gap-2">
-                  <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
-                  <span className="truncate text-xs font-medium">{w.name}</span>
-                  <span className="ml-auto shrink-0 text-[11px] text-indigo-600 dark:text-indigo-400">
-                    {typeof w.elapsed_s === "number" ? `${w.elapsed_s}s` : "working"}
-                  </span>
-                  {copyBtn(`worker:${w.name}`, () => copyRun(w, "worker"))}
-                </div>
-                {w.task && <p className="mt-0.5 break-words text-[11px] text-zinc-500 dark:text-zinc-400" title={w.task}>{w.task}</p>}
-                {w.detail && <p className="break-words text-[11px] text-zinc-400" title={w.detail}>{w.detail}</p>}
-              </div>
-            ))}
-          </div>
-        )}
-        {running.map(row)}
-        {queued.map(row)}
-        {finished.map(row)}
-        {runs.length === 0 && busyWorkers.length === 0 && (
-          <p className="px-1 pt-4 text-center text-xs text-zinc-400">
-            No background runs yet. The brain dispatches with background=true for long tasks.
-          </p>
-        )}
-      </div>
-      <p className="border-t border-zinc-200/80 px-1 pt-2 text-[11px] leading-4 text-zinc-400 dark:border-zinc-800">
-        Finished runs post their outcome into the conversation automatically.
-      </p>
-    </aside>
+        <p className="border-t border-zinc-200/80 px-1 pt-2 text-[11px] leading-4 text-zinc-400 dark:border-zinc-800">
+          Finished runs post their outcome into the conversation automatically.
+        </p>
+      </DispatchRail>
       {expanded && (
         <DispatchDetails run={expanded} liveDetail={liveByRun.get(expanded.id)?.detail} onClose={() => setExpandedId(null)}
           onConversation={conversation ? () => { setExpandedId(null); onOpen(conversation); } : undefined}

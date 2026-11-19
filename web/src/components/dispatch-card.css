@@ -1,8 +1,3 @@
-/* At desktop widths give the rail one fifth of the former message column.
-   The existing switcher, history column and rail occupied 3 + 16 + 18 rem. */
-@media (min-width: 64rem) {
-  aside.dispatch-rail { width: clamp(18rem, calc(20% + 10.6rem), 38rem); }
-}
 .dispatch-card,.dispatch-dialog {
   --dispatch-tone: var(--color-zinc-600);
   --dispatch-edge: var(--color-zinc-200);
@@ -76,7 +71,6 @@
   .dispatch-dialog[open] { animation: dispatch-reveal 140ms cubic-bezier(.23,1,.32,1); }
   @keyframes dispatch-reveal { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 }
-.dispatch-card[data-status=running] .dispatch-spin { color: var(--dispatch-tone); }
 @media(pointer:coarse){ .dispatch-actions button,.dispatch-tool { min-width: 36px; min-height: 40px; } }
 .dispatch-top .dispatch-byline { min-width: 0; }
 .dispatch-top .dispatch-id { flex: none; }
@@ -105,4 +99,65 @@
 @media(prefers-reduced-motion:no-preference) {
   .dispatch-stages li span { transition: background-color 160ms ease, box-shadow 160ms ease; }
   .dispatch-stages li[aria-current=step] span,.brain-context { animation: dispatch-reveal 160ms cubic-bezier(.23,1,.32,1); }
+}
+
+.dispatch-summary {
+  display: flex; flex-wrap: wrap; align-items: center; flex: none; gap: 0 .9rem;
+  padding: .16rem 1rem; border-bottom: 1px solid var(--color-zinc-200);
+  color: var(--color-zinc-600); font-size: .75rem;
+}
+.dispatch-summary button,.dispatch-rail-close {
+  display: inline-flex; align-items: center; justify-content: center; gap: .45rem;
+  min-height: 2.25rem; border-radius: .5rem; cursor: pointer;
+}
+.dispatch-summary button { font-weight: 600; color: var(--color-zinc-800); }
+.dispatch-counts,.dispatch-totals,.dispatch-totals > span { display: flex; align-items: center; }
+.dispatch-counts,.dispatch-totals { flex-wrap: wrap; gap: .15rem .75rem; }
+.dispatch-totals > span { gap: .19rem; white-space: nowrap; }
+.dispatch-totals b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.dispatch-totals [data-active=true] { color: var(--color-amber-700); }
+.dispatch-totals [data-issue=true] { color: var(--color-red-700); }
+.dispatch-feed-note { font-size: .7rem; }
+.dispatch-rail,.dispatch-drawer-content { display: flex; flex-direction: column; min-height: 0; padding: .75rem; }
+aside.dispatch-rail {
+  flex: none; width: 16rem; border-left: 1px solid var(--color-zinc-200);
+  background: color-mix(in srgb,var(--color-white) 40%,transparent);
+}
+aside.dispatch-rail[hidden] { display: none; }
+.dispatch-rail-close { width: 2.25rem; color: var(--color-zinc-600); }
+.dispatch-drawer {
+  position: fixed; inset: 0 0 0 auto; margin: 0; width: min(24rem,calc(100% - 2.5rem));
+  max-width: none; height: 100%; max-height: 100%; border: 0; padding: 0;
+  background: var(--color-white); color: inherit;
+}
+.dispatch-drawer-content {
+  height: 100%; padding-top: max(.75rem, env(safe-area-inset-top));
+  padding-bottom: max(.75rem, env(safe-area-inset-bottom));
+}
+.dispatch-drawer::backdrop { background: #09090b70; }
+.dark .dispatch-summary,.dark aside.dispatch-rail { border-color: var(--color-zinc-800); }
+.dark aside.dispatch-rail { background: color-mix(in srgb,var(--color-zinc-900) 40%,transparent); }
+.dark .dispatch-drawer { background: var(--color-zinc-900); }
+.dark .dispatch-summary,.dark .dispatch-rail-close { color: var(--color-zinc-400); }
+.dark .dispatch-summary button { color: var(--color-zinc-200); }
+.dark .dispatch-totals [data-active=true] { color: var(--color-amber-400); }
+.dark .dispatch-totals [data-issue=true] { color: var(--color-red-400); }
+.dispatch-card[data-status=running] .dispatch-spin { color: var(--color-amber-600); }
+.dark .dispatch-card[data-status=running] .dispatch-spin { color: var(--color-amber-400); }
+@media (min-width:64rem) { aside.dispatch-rail { width: clamp(18rem, calc(20% + 10.6rem), 38rem); } }
+@media (max-width:47.999rem) {
+  .dispatch-summary { gap: 0 .6rem; padding: .15rem .65rem; }
+  .dispatch-summary button,.dispatch-rail-close { min-height: 2.75rem; }
+  .dispatch-rail-close { width: 2.75rem; }
+  .dispatch-counts { padding-bottom: .25rem; }
+  .dispatch-totals { gap: .15rem .5rem; }
+}
+@media (hover:hover) {
+  .dispatch-summary button:hover,.dispatch-rail-close:hover { color: var(--color-indigo-600); }
+  .dark .dispatch-summary button:hover,.dark .dispatch-rail-close:hover { color: var(--color-indigo-300); }
+}
+@media (prefers-reduced-motion:no-preference) {
+  .dispatch-active-count svg { animation: spin 1.8s linear infinite; }
+  .dispatch-drawer[open] { animation: dispatch-drawer-in 160ms cubic-bezier(.23,1,.32,1); }
+  @keyframes dispatch-drawer-in { from { transform: translateX(1rem); } }
 }
