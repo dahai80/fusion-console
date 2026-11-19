@@ -20,6 +20,8 @@
 
 护栏常开：worker 可单独禁用、per-worker 预算上限、同一时刻只跑一个 agent 子进程、每次派发都过 fusion-harness 工具准入链（sidecar 不可用时 fail-closed）。`confirm` 模式下每次 `run_agent` 派发都会在浏览器等你审批；`auto` 模式直接派发；`off` 关闭编排工具。每个 worker 还可以绑定指定 provider + 模型覆盖（向导 Workers 步）：console 从钥匙串取密钥注入 `ANTHROPIC_*` 或 `OPENAI_*` 环境变量，覆盖 CLI 自带登录；不选则保持 CLI 默认。worker 记忆默认为零依赖的 `notes` 约定（工作区 NOTES.md），可按 worker 切换为 fusion-memory hub 或关闭。
 
+新会话首次 `@Worker` 时，省略工作目录会使用该 Worker 已配置的目录。需要已有仓库的任务，可在点名 Worker 后勾选 **Requires Git repository**，或在 `run_agent` 中传入 `requires_repo: true`。工作区没有 Git 工作树时，派工卡片和会话会在启动 CLI 前显示 **blocked**。到 **Agents → Workers** 把工作目录设为已有仓库，或绑定 GitHub 来源，然后重新派工。执行中缺少必要材料时，Worker 也可用最终 JSON 回报阻塞，例如 `{"status":"blocked","reason":"缺少输入数据集"}`。
+
 ## 功能
 
 - **聊天**：SSE 流式对话，支持 OpenAI 兼容 / Anthropic 兼容 provider；fusion-gateway（:11432）只是其中一个可选项，不是硬依赖。
