@@ -1,4 +1,4 @@
-import type { DashboardData, DispatchRun, WorkerStatus } from "../api";
+import type { DispatchRun, WorkerStatus } from "../api";
 
 export type Run = Pick<DispatchRun, "id" | "worker" | "agent" | "task" | "started_at" | "finished_at" | "elapsed_s" | "detail" | "error" | "tokens_in" | "tokens_out"> & {
   status: string;
@@ -7,7 +7,7 @@ export type Worker = Pick<WorkerStatus, "name" | "agent" | "enabled" | "detected
 export type Snapshot = {
   runs: Run[];
   workers: Worker[];
-  tokens: DashboardData["totals"];
+  sampleTokens?: { brain_tokens: number; worker_tokens: number };
   now: number;
 };
 export type TaskFilter = "All" | "Running" | "Queued" | "Attention" | "Done";

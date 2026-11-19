@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Brain, Bot, Sigma, RefreshCw, Table2, BarChart3, ShieldAlert, Download } from "lucide-react";
-import { api, type DashboardBucket, type DashboardData, type FailureRow, type UsageRange, type WorkerStatus } from "./api";
+import { Activity, Brain, Bot, Sigma, RefreshCw, BarChart3, ShieldAlert, Download } from "lucide-react";
+import { api, type DashboardBucket, type FailureRow, type UsageRange, type WorkerStatus } from "./api";
+import { ActivityCalendar, PeriodPicker, UsageLedger, tokenNumber, useTokenUsage, type PeriodProps } from "./dashboard/TokenUsage";
 import TaskOverview from "./dashboard/TaskOverview";
 import { formatTokens as fmtTokens } from "./dashboard/overview";
 import { Button, Card, useTheme } from "./components/ui";
@@ -11,13 +12,6 @@ const COLORS = {
   light: { brain: "#4f46e5", worker: "#d97706" },
   dark: { brain: "#6366f1", worker: "#d97706" },
 };
-
-const RANGES: { id: UsageRange; label: string }[] = [
-  { id: "today", label: "Today" },
-  { id: "week", label: "This week" },
-  { id: "month", label: "This month" },
-  { id: "all", label: "All time" },
-];
 
 // Bucket strings come from SQL substr: hour "13", day "2026-11-13",
 // month "2026-11". Turn each into a short display label.
@@ -30,6 +24,7 @@ function bucketLabel(bucket: string, unit: string): string {
 
 export default function Dashboard() {
   const [tab, setTab] = useState<"overview" | "usage" | "workers" | "failures">("overview");
+  const [range, setRange] = useState<UsageRange>("week");
   return (
     <div className="h-full overflow-y-auto">
       <div className="flex overflow-x-auto items-center gap-1 border-b border-zinc-200/80 px-6 pt-4 dark:border-zinc-800">
@@ -48,7 +43,7 @@ export default function Dashboard() {
           </button>
         ))}
       </div>
-      {tab === "overview" ? <TaskOverview /> : tab === "usage" ? <UsageTab /> : tab === "workers" ? <WorkersTab /> : <FailuresTab />}
+      {tab === "overview" ? <TaskOverview range={range} onRange={setRange} onUsage={() => setTab("usage")} /> : tab === "usage" ? <UsageTab range={range} onRange={setRange} /> : tab === "workers" ? <WorkersTab /> : <FailuresTab />}
     </div>
   );
 }
@@ -151,33 +146,16 @@ function WorkersTab() {
   );
 }
 
-function UsageTab() {
+function UsageTab({ range, onRange }: PeriodProps) {
   const { dark } = useTheme();
-  const [range, setRange] = useState<UsageRange>("week");
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [view, setView] = useState<"chart" | "table">("chart");
-  const [err, setErr] = useState("");
+  const { data, error: err, refresh } = useTokenUsage(range);
+  const [view, setView] = useState<"chart" | "table" | "calendar">("calendar");
   const [hover, setHover] = useState<number | null>(null);
   // Worker-memory hub status: optional service, neutral when absent.
   const [mem, setMem] = useState<{ mode: string; healthy: boolean; outbox_pending: number } | null>(null);
   useEffect(() => {
     api.memoryStatus().then(setMem).catch(() => setMem(null));
   }, []);
-
-  const load = useMemo(
-    () => (r: UsageRange) => {
-      setErr("");
-      api
-        .dashboard(r)
-        .then(setData)
-        .catch((e) => setErr((e as Error).message));
-    },
-    []
-  );
-
-  useEffect(() => {
-    load(range);
-  }, [range, load]);
 
   const colors = dark ? COLORS.dark : COLORS.light;
   const buckets = data?.buckets ?? [];
@@ -186,22 +164,13 @@ function UsageTab() {
   const economics = useMemo(() => {
     const inT = buckets.reduce((s, b) => s + b.brain_tokens_in + b.worker_tokens_in, 0);
     const outT = buckets.reduce((s, b) => s + b.brain_tokens_out + b.worker_tokens_out, 0);
-    const brain = totals?.brain_tokens ?? 0;
-    const worker = totals?.worker_tokens ?? 0;
-    const all = brain + worker;
-    return {
-      in: inT,
-      out: outT,
-      inOutRatio: inT === 0 && outT === 0 ? "—" : outT === 0 ? "1 : 0" : (inT / outT).toFixed(1) + " : 1",
-      brainPct: all === 0 ? 0 : Math.round((brain / all) * 100),
-      worker,
-    };
-  }, [buckets, totals]);
+    return { in: inT, out: outT };
+  }, [buckets]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">Usage dashboard</h2>
+        <h2 className="text-lg font-semibold">Token usage</h2>
         {mem && (
           <span className={`rounded-lg px-2 py-0.5 text-xs ${
             mem.healthy
@@ -212,87 +181,42 @@ function UsageTab() {
             {mem.outbox_pending > 0 ? ` · ${mem.outbox_pending} buffered` : ""} · {mem.mode}
           </span>
         )}
-        <div className="flex items-center gap-1 rounded-xl border border-zinc-200/80 dark:border-zinc-800 p-1">
-          {RANGES.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => setRange(r.id)}
-              className={`rounded-lg px-3 py-1 text-sm transition-colors ${
-                range === r.id
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-zinc-500 hover:bg-zinc-200/60 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
-              }`}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
+        <PeriodPicker range={range} onRange={onRange} />
       </div>
 
       {err && <p className="text-sm text-red-500">{err}</p>}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatTile icon={<Brain size={16} />} label="Brain tokens" value={totals ? fmtTokens(totals.brain_tokens) : "—"} sub="chat turns" swatch={colors.brain} />
-        <StatTile icon={<Bot size={16} />} label="Worker tokens" value={totals ? fmtTokens(totals.worker_tokens) : "—"} sub="agent runs" swatch={colors.worker} />
-        <StatTile icon={<Sigma size={16} />} label="Total tokens" value={totals ? fmtTokens(totals.brain_tokens + totals.worker_tokens) : "—"} sub={`${buckets.length} ${data?.bucket_unit ?? ""} buckets`} />
+        <StatTile icon={<Sigma size={16} />} label="Token 总量" value={totals?.measured ? tokenNumber(totals.brain_tokens + totals.worker_tokens) : "—"} sub={data ? `输入 ${totals?.measured ? tokenNumber(economics.in) : "—"} · 输出 ${totals?.measured ? tokenNumber(economics.out) : "—"}` : "读取中…"} />
+        <StatTile icon={<Brain size={16} />} label="Brain · 大脑" value={data?.participants[0]?.measured ? tokenNumber(data.totals.brain_tokens) : "—"} sub="对话与规划" swatch={colors.brain} />
+        <StatTile icon={<Bot size={16} />} label="Workers 合计" value={data?.participants.some(r => r.role === "worker" && r.measured) ? tokenNumber(data.totals.worker_tokens) : "—"} sub="按派工时的 Worker 名称归集" swatch={colors.worker} />
       </div>
-
-      {/* Economics (issue #4, C9): input:output mix and brain-vs-worker share
-          — orchestration overhead is visible as a bloated brain share. */}
+      {data && data.totals.measured > 0 && <p className="token-muted">输入 / 输出比　<b>{economics.out ? (economics.in / economics.out).toFixed(1) + " : 1" : "1 : 0"}</b>
+        <span className="ml-4">Brain 占比　<b>{(100 * data.totals.brain_tokens / (data.totals.brain_tokens + data.totals.worker_tokens)).toFixed(1)}%</b></span>
+        <span className="ml-4">Workers 占比　<b>{(100 * data.totals.worker_tokens / (data.totals.brain_tokens + data.totals.worker_tokens)).toFixed(1)}%</b></span></p>}
       <Card className="p-4">
-        <h3 className="mb-3 text-sm font-medium">Token economics</h3>
-        {buckets.length === 0 ? (
-          <p className="text-sm text-zinc-400">No data yet.</p>
-        ) : (
-          <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-            <div>
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Input : output</dt>
-              <dd className="mt-0.5 font-semibold tabular-nums">{economics.inOutRatio}</dd>
-              <p className="text-xs text-zinc-400">{fmtTokens(economics.in)} in · {fmtTokens(economics.out)} out</p>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Brain share</dt>
-              <dd className="mt-0.5 font-semibold tabular-nums">{economics.brainPct}%</dd>
-              <p className="text-xs text-zinc-400">{economics.brainPct > 50 ? "planner overhead dominates" : "healthy planner ratio"}</p>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Worker share</dt>
-              <dd className="mt-0.5 font-semibold tabular-nums">{100 - economics.brainPct}%</dd>
-              <p className="text-xs text-zinc-400">{fmtTokens(economics.worker)} dispatched</p>
-            </div>
-          </dl>
-        )}
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-1"><h3 className="font-semibold">执行者用量</h3>
+          {totals && <span className="token-muted">{totals.measured} / {totals.records} 条日志有 Token 用量</span>}</div>
+        {data ? <UsageLedger rows={data.participants} total={data.totals.brain_tokens + data.totals.worker_tokens} /> : <p className="token-muted">{err ? "无法读取用量记录。" : "读取中…"}</p>}
       </Card>
-
       <Card className="p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-4 text-xs text-zinc-600 dark:text-zinc-400">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-sm" style={{ background: colors.brain }} /> Brain (chat)
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-sm" style={{ background: colors.worker }} /> Workers (agents)
-            </span>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-semibold">用量趋势</h3>
+          <div className="token-period" role="group" aria-label="趋势视图">
+            {([["calendar", "日历"], ["chart", "柱状"], ["table", "表格"]] as const).map(([id, label]) =>
+              <button key={id} aria-pressed={view === id} onClick={() => { setView(id); setHover(null); }}>{label}</button>)}
           </div>
-          <Button variant="ghost" onClick={() => setView(view === "chart" ? "table" : "chart")}>
-            {view === "chart" ? <Table2 size={14} /> : <BarChart3 size={14} />}
-            {view === "chart" ? "Table" : "Chart"}
-          </Button>
         </div>
-
-        {buckets.length === 0 ? (
-          <p className="flex h-40 items-center justify-center text-sm text-zinc-400">
-            No usage recorded in this window yet.
-          </p>
-        ) : view === "chart" ? (
-          <UsageChart buckets={buckets} unit={data?.bucket_unit ?? "day"} colors={colors} hover={hover} setHover={setHover} />
-        ) : (
-          <UsageTable buckets={buckets} unit={data?.bucket_unit ?? "day"} />
-        )}
+        {!data ? <p className="token-muted">{err ? "暂时无法读取趋势。" : "读取中…"}</p> :
+          view === "calendar" ? <ActivityCalendar data={data} /> :
+          !buckets.length ? <p className="token-muted">此范围没有用量记录。</p> :
+          view === "chart" ? <><p className="token-muted"><i className="token-dot brain" />Brain　<i className="token-dot worker" />Workers · UTC</p>
+          <UsageChart buckets={buckets} unit={data.bucket_unit} colors={colors} hover={hover} setHover={setHover} /></> :
+          <UsageTable buckets={buckets} unit={data.bucket_unit} />}
       </Card>
 
       <div className="flex justify-end">
-        <Button variant="ghost" onClick={() => load(range)}>
+        <Button variant="ghost" onClick={refresh}>
           <RefreshCw size={14} /> Refresh
         </Button>
       </div>
@@ -518,11 +442,11 @@ function UsageChart({
           <p className="mb-1 font-medium text-zinc-700 dark:text-zinc-300">{bucketLabel(hovered.bucket, unit)}</p>
           <p className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
             <span className="h-2 w-2 rounded-sm" style={{ background: colors.brain }} />
-            brain {fmtTokens(hovered.brain_tokens_in + hovered.brain_tokens_out)}
+            Brain {hovered.brain_measured ? tokenNumber(hovered.brain_tokens_in + hovered.brain_tokens_out) : "—"}
           </p>
           <p className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
             <span className="h-2 w-2 rounded-sm" style={{ background: colors.worker }} />
-            workers {fmtTokens(hovered.worker_tokens_in + hovered.worker_tokens_out)}
+            Workers {hovered.worker_measured ? tokenNumber(hovered.worker_tokens_in + hovered.worker_tokens_out) : "—"}
           </p>
         </div>
       )}
@@ -545,8 +469,8 @@ function UsageTable({ buckets, unit }: { buckets: DashboardBucket[]; unit: strin
           {buckets.map((b) => (
             <tr key={b.bucket} className="border-b border-zinc-100 dark:border-zinc-800/50">
               <td className="py-1.5 pr-3 text-zinc-600 dark:text-zinc-400">{bucketLabel(b.bucket, unit)}</td>
-              <td className="py-1.5 pr-3 text-right">{fmtTokens(b.brain_tokens_in + b.brain_tokens_out)}</td>
-              <td className="py-1.5 text-right">{fmtTokens(b.worker_tokens_in + b.worker_tokens_out)}</td>
+              <td className="py-1.5 pr-3 text-right">{b.brain_measured ? tokenNumber(b.brain_tokens_in + b.brain_tokens_out) : "—"}</td>
+              <td className="py-1.5 text-right">{b.worker_measured ? tokenNumber(b.worker_tokens_in + b.worker_tokens_out) : "—"}</td>
             </tr>
           ))}
         </tbody>

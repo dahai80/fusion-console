@@ -31,7 +31,7 @@ macOS 用户可以在主页明暗切换旁检查上游版本、手动安装，�
 - **编排（M1+M2）**：打开聊天工具栏的 `orchestrate` 开关（按轮授权），聊天模型即主大脑：通过原生 tool-calls（`list_agents` / `run_agent` / `read_artifact`）向 headless agent 派活，每个 agent 在自己的专属工作目录运行（默认 `~/.fusion/fusion-console/agents/<name>/`，可在配置里按 agent 覆盖 `work_dir`）。循环有界（8 轮）；每次派活都过 [fusion-harness](https://github.com/dahai80/fusion-console) 工具准入链（deny 优先、sidecar 不可用即 fail-closed），聊天轮次同样受 harness 保护（上下文压缩 + 按会话 token 预算）。成本分行：规划器 `chat:<provider>` 与被派发的 `agent:<name>` 分开记账。
 - **配置界面**：provider + baseURL + 模型（从 /v1/models 拉取）；apiKey 存 OS keychain（Keychain / DPAPI / libsecret），绝不写进配置文件。
 - **成本账**：每轮入 SQLite，按天按来源出报表。
-- **任务总览**：在 Dashboard → Overview 查看后台派工队列、进行中的任务、可用 Worker、执行时间线和当天 Token 用量（UTC）。预计完成时间采用同一 Worker 最近 3 至 10 次已完成任务的耗时中位数。切换到 Sample，点 Next event 可演示任务出队。Usage 保留原有用量报表。
+- **任务总览**：在 Dashboard → Overview 查看后台派工队列、进行中的任务、可用 Worker、执行时间线和可按今日、近 7 天、近 30 天和全部历史切换的大脑与各 Worker Token 用量（UTC）。预计完成时间采用同一 Worker 最近 3 至 10 次已完成任务的耗时中位数。切换到 Sample，点 Next event 可演示任务出队。Usage 提供输入、输出、执行者占比及活动日历。
 - **失败日志（MAST 分类）**：编排失败自动打标 — 派发简报缺失触发 pre-flight 警告（聊天工具流可见）并记 `fc1_brief`，agent 报错记 `fc3_tool`；可手动补记 `fc2_handoff` / `other`。Dashboard 的 **Failures** 页列出全部标签，支持 JSONL 导出（[MAST, arXiv 2503.13657]）。
 - **Token 经济学**：Usage 页显示输入:输出比与 brain/worker token 占比，规划器开销一眼可见；Workers 页显示每个 worker 的单次预算上限与累计消耗。
 - **团队视图（可选 agent-studio 观察端）**：配置 `agentstudio` 段并启用后（默认关闭），console 轮询 fusion-agent-studio 守护进程的 WS JSON-RPC 端点，实时渲染团队看板：任务分列、成员花名册、健康度、限制、简报质量警告与失败告警。纯观察者 — 团队状态不落 console。操作仅限守护进程已暴露的（task cancel/rerun、编排器 limits）。密钥走环境变量（`FUSION_WS_TOKEN`、`FUSION_CONSOLE_APIKEY_AGENT_STUDIO`）或钥匙串。

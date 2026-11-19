@@ -5,6 +5,7 @@ import {
   CircleAlert, ClipboardList, Clock3, Coins, FlaskConical, Layers3, Radio,
   RotateCcw, Timer, UsersRound,
 } from "lucide-react";
+import { PeriodPicker, tokenNumber, useTokenUsage, type PeriodProps } from "./TokenUsage";
 import { api } from "../api";
 import { clock, duration, estimateEnd, formatTokens, matchesFilter, runtimeHistory, timestamp, workerState } from "./overview";
 import type { Run, Snapshot, TaskFilter, Worker } from "./overview";
@@ -16,7 +17,9 @@ const tones: Record<string, string> = { running: "indigo", queued: "amber", done
 const workerName = (r: Run) => r.worker || r.agent;
 type History = ReturnType<typeof runtimeHistory>;
 
-export default function TaskOverview() {
+type UsageControls = PeriodProps & { onUsage: () => void };
+
+export default function TaskOverview(props: UsageControls) {
   const [sample, setSample] = useState(() => new URLSearchParams(location.search).get("dashboard") === "sample");
   const [advanced, setAdvanced] = useState(false);
   const [live, setLive] = useState<Snapshot>();
@@ -29,9 +32,9 @@ export default function TaskOverview() {
       if (loading || document.hidden) return;
       loading = true;
       try {
-        const [dispatch, pool, usage] = await Promise.all([api.dispatches(), api.workersStatus(), api.dashboard("today")]);
+        const [dispatch, pool] = await Promise.all([api.dispatches(), api.workersStatus()]);
         if (alive) {
-          setLive({ runs: dispatch.dispatches ?? [], workers: pool.workers ?? [], tokens: usage.totals, now: Date.now() });
+          setLive({ runs: dispatch.dispatches ?? [], workers: pool.workers ?? [], now: Date.now() });
           setError("");
         }
       } catch (e) {
@@ -66,13 +69,13 @@ export default function TaskOverview() {
         </div>
       </header>
       {!sample && error && <p className="ops-notice" role="status"><CircleAlert size={15} />Refresh failed · {error}{live && " · Showing the last snapshot."}</p>}
-      {data ? <OverviewBody key={sample ? "sample" : "live"} data={data} sample={sample} /> :
+      {data ? <OverviewBody key={sample ? "sample" : "live"} data={data} sample={sample} {...props} /> :
         <p className="ops-empty" role="status">{error ? "Waiting for a successful refresh." : "Loading dispatches, workers and usage…"}</p>}
     </div>
   );
 }
 
-function OverviewBody({ data, sample }: { data: Snapshot; sample: boolean }) {
+function OverviewBody({ data, sample, ...controls }: { data: Snapshot; sample: boolean } & UsageControls) {
   const { runs, workers, now } = data;
   const history = useMemo(() => runtimeHistory(runs), [runs]);
   const queued = runs.filter(r => r.status === "queued");
@@ -94,7 +97,7 @@ function OverviewBody({ data, sample }: { data: Snapshot; sample: boolean }) {
     </div>
     <div className="ops-grid">
       <Timeline runs={runs} now={now} history={history} />
-      <TokenPanel data={data} />
+      <TokenPanel data={data} {...controls} />
       <TaskList runs={runs} history={history} now={now} attention={attention} />
       <WorkerPool workers={workers} />
     </div>
@@ -148,20 +151,33 @@ function Timeline({ runs, now, history }: { runs: Run[]; now: number; history: H
   </section>;
 }
 
-function TokenPanel({ data }: { data: Snapshot }) {
-  const { brain_tokens: brain, worker_tokens: worker } = data.tokens;
-  const total = brain + worker;
-  const percent = total ? brain / total * 100 : 0;
-  const shares = [{ label: "Brain", value: brain, tone: "brain" }, { label: "Workers", value: worker, tone: "worker" }];
-  const shareFormat = new Intl.NumberFormat("en", { style: "percent", maximumFractionDigits: 1 });
-  return <section className="ops-panel ops-token">
-    <PanelTitle icon={<Coins />} title="Token usage" aside={<span className="ops-meta">Today · UTC</span>} />
-    <div className="ops-token-body">
-      <div className="ops-ring" aria-label={`${total.toLocaleString()} tokens`} style={{ background: total ? `conic-gradient(var(--brain) 0% ${percent}%, var(--worker) ${percent}% 100%)` : "var(--line)" }}>
-        <div><strong>{new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(total)}</strong><small>Total tokens</small></div>
+function TokenPanel({ data, range, onRange, onUsage }: {data: Snapshot} & UsageControls) {
+  const sample = data.sampleTokens;
+  const { data: usage, error } = useTokenUsage(range, !sample);
+  const brain = sample?.brain_tokens ?? usage?.totals.brain_tokens ?? 0;
+  const workers = sample?.worker_tokens ?? usage?.totals.worker_tokens ?? 0;
+  const total = brain + workers;
+  const measured = !!sample || !!usage?.totals.measured;
+  const people = sample ? data.workers.map(w => {
+    const runs = data.runs.filter(r => workerName(r) === w.name && (r.tokens_in || r.tokens_out));
+    return { name: w.name, measured: runs.length, value: runs.reduce((n,r) => n+r.tokens_in+r.tokens_out,0) };
+  }) : (usage?.participants ?? []).filter(r => r.role === "worker").map(r => ({ name:r.name, measured:r.measured, value:r.tokens_in+r.tokens_out }));
+  return <section className="ops-panel ops-token" aria-label="Token usage">
+    <PanelTitle icon={<Coins />} title="Token usage" aside={<span className="ops-meta">{sample ? "Sample · UTC" : "UTC"}</span>} />
+    <div className="ops-token-body"><PeriodPicker range={range} onRange={onRange} />
+      {error && <p role="status" className="ops-muted">{error}</p>}
+      <div className="ops-ring" style={{background: total ? `conic-gradient(var(--brain) ${100*brain/total}%, var(--worker) 0)` : "var(--line)"}}>
+        <div><strong title={measured ? tokenNumber(total) : undefined}>{measured ? formatTokens(total) : "—"}</strong><small>Total tokens</small></div>
       </div>
-      <div className="ops-token-key">{shares.map(({ label, value, tone }) =>
-        <div key={label}><span><i className={`ops-key ${tone}`} />{label}</span><b title={value.toLocaleString()}>{formatTokens(value)}</b><small>{total ? shareFormat.format(value / total) : "—"}</small></div>)}</div>
+      <div className="ops-token-key">{[
+        {label:"Brain · 大脑", value:brain, reported:!!sample || !!usage?.participants[0]?.measured, tone:"brain"},
+        {label:"Workers 合计", value:workers, reported:people.some(w=>w.measured), tone:"worker"}
+      ].map(r => <div key={r.tone}><span><i className={`ops-key ${r.tone}`}/>{r.label}</span><b>{r.reported ? tokenNumber(r.value) : "—"}</b>
+        <small>{r.reported && total ? (100*r.value/total).toFixed(1)+"%" : "—"}</small></div>)}</div>
+      {people.length > 0 && <ul className="token-overview-list" aria-label="各 Worker 用量">{people.map(w =>
+        <li key={w.name}><span>{w.name}</span><span title={w.measured ? undefined : "无已报告用量"}>{w.measured ? tokenNumber(w.value) : "—"}</span></li>)}</ul>}
+      <div className="token-overview-foot"><span>{sample ? "示例数据仅覆盖一天" : usage?.start ? usage.start+" — "+usage.end : usage ? "无用量记录" : "读取中…"}</span>
+        {!sample && <button onClick={onUsage}>查看明细 →</button>}</div>
     </div>
   </section>;
 }
