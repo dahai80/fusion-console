@@ -424,13 +424,13 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 }
 
 // dispatchTimeout returns the configured per-run cap for dispatched agent
-// subprocesses (foreground and background). Default 3 hours — long coding
-// tasks outlive the old 30-minute cap.
+// subprocesses (foreground and background). Default 48 hours — long coding
+// tasks outlive the old 5-hour cap.
 func (s *Server) dispatchTimeout() time.Duration {
 	if m := s.cfg.Orchestrator.DispatchTimeoutMinutes; m > 0 {
 		return time.Duration(m) * time.Minute
 	}
-	return 300 * time.Minute
+	return 48 * time.Hour
 }
 
 // autoContinueMax caps consecutive brain self-continuations in one chain —
