@@ -39,7 +39,7 @@ import {
   FileText,
   Users,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type CodeStatus, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
@@ -52,6 +52,17 @@ import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
 import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme } from "./components/ui";
 import RunDrawer from "./components/RunDrawer";
+
+const chatMarkdownComponents: Components = {
+  a({ children, href, title }) {
+    // Workers often cite files on the console host. A browser would resolve
+    // these absolute paths against the console origin, even on a phone.
+    if (href && /^\/(?:Users|home|Volumes|private|tmp)\//.test(href)) {
+      return <span>{children === href ? null : <>{children} </>}<code className="break-all">{href}</code></span>;
+    }
+    return <a href={href} title={title}>{children}</a>;
+  },
+};
 
 type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "onboard";
 
@@ -1205,7 +1216,7 @@ const [workingWorkers, setWorkingWorkers] = useState<string[]>([]);
                   <p className="whitespace-pre-wrap">{m.content}</p>
                 ) : (
                   <div className="md">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || "…"}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={chatMarkdownComponents}>{m.content || "…"}</ReactMarkdown>
                   </div>
                 )}
                 {m.meta && (() => {
