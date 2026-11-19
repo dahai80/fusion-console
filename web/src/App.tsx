@@ -1607,7 +1607,7 @@ function DispatchPanel({ activity, onOpen, drawerOpen, onDrawerClose, onRunningC
           )}
         </div>
       </div>
-      <BrainCard activity={activity} />
+      <BrainCard activity={activity} runningCount={running.length} />
       <div className="flex-1 space-y-2 overflow-y-auto">
         {/* Agent status strip: every worker with a live agent process, even
             one recovered after a console restart (registry lost, process not). */}
