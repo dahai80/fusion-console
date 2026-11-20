@@ -91,6 +91,14 @@ jobs:
       # committed webdist satisfies go:embed; no SPA build needed.
       - name: Test
         run: go test ./... -count=1
+      - name: Test harness guards with and without failure attribution
+        run: |
+          python3 -m venv "$RUNNER_TEMP/harness"
+          export FUSION_CONSOLE_HARNESS_PYTHON="$RUNNER_TEMP/harness/bin/python"
+          for version in 0.22.0 0.26.0; do
+            "$FUSION_CONSOLE_HARNESS_PYTHON" -m pip install "fusion-harness==$version"
+            go test ./internal/harness -count=1
+          done
       - name: Test updater artifact selection and verification
         run: python3 -m unittest discover -s scripts -p test_console_updater.py
 

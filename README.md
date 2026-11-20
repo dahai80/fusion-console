@@ -175,11 +175,14 @@ and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_G
 
 The guards run the real fusion-harness Python implementation (no Go
 re-implementation) through `sidecar/harnessd.py`, spawned with a Python that
-can `import fusion_harness`. Resolution order: `FUSION_CONSOLE_HARNESS_PYTHON`
-env → `<exe-dir>/../.venv/bin/python` → `<cwd>/../.venv` → `python3`. When no
-usable Python is found the console logs it and chat proceeds unguarded —
-degradation is visible, never silent. Disable with `"harness": {"enabled":
-false}` in config.json.
+can `import fusion_harness`. The console checks `FUSION_CONSOLE_HARNESS_PYTHON`
+first, then the installation and workspace virtual environments. On macOS and
+Linux it also tries `python3` and `python` on PATH. With `harness.enabled`
+set in `config.json`, chat stops before the model call if the sidecar cannot start.
+Check the startup log and point `FUSION_CONSOLE_HARNESS_PYTHON` at the
+interpreter with `fusion-harness` installed. Kernel 0.22.0 supports guard
+checks and reports the token budget and lifecycle events. Kernel 0.23.0
+adds LLM metrics and failure attribution.
 
 ## Build
 
