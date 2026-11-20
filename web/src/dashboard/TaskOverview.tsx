@@ -6,10 +6,11 @@ import {
   RotateCcw, Timer, UsersRound,
 } from "lucide-react";
 import { PeriodPicker, tokenNumber, useTokenUsage, type PeriodProps } from "./TokenUsage";
+import { ExecutorUsage, UsageCharts, useUsageSeries } from "./UsageCharts";
 import { api } from "../api";
 import { clock, duration, estimateEnd, formatTokens, matchesFilter, runtimeHistory, timestamp, workerState } from "./overview";
 import type { Run, Snapshot, TaskFilter, Worker } from "./overview";
-import { sampleSnapshot } from "./sample";
+import { sampleSeries, sampleSnapshot } from "./sample";
 import "./overview.css";
 
 const filters: TaskFilter[] = ["All", "Running", "Queued", "Attention", "Done"];
@@ -17,7 +18,7 @@ const tones: Record<string, string> = { running: "indigo", queued: "amber", done
 const workerName = (r: Run) => r.worker || r.agent;
 type History = ReturnType<typeof runtimeHistory>;
 
-type UsageControls = PeriodProps & { onUsage: () => void };
+type UsageControls = PeriodProps;
 
 export default function TaskOverview(props: UsageControls) {
   const [sample, setSample] = useState(() => new URLSearchParams(location.search).get("dashboard") === "sample");
@@ -54,10 +55,13 @@ export default function TaskOverview(props: UsageControls) {
   }, [sample]);
   const demo = useMemo(() => sampleSnapshot(advanced), [advanced]);
   const data = sample ? demo : live;
+  const liveSeries = useUsageSeries(!sample);
+  const demoSeries = useMemo(() => sampleSeries(Date.now()), []);
+  const series = sample ? demoSeries : liveSeries.data;
   return (
     <div className="ops">
       <header className="ops-heading">
-        <div><h1>Task overview</h1><p>Background dispatches and worker availability.</p></div>
+        <h1>Overview</h1>
         <div className="ops-controls">
           <div className="ops-switch" aria-label="Data source" role="group">
             <button aria-pressed={!sample} onClick={() => setSample(false)}><Radio />Live data</button>
@@ -69,6 +73,8 @@ export default function TaskOverview(props: UsageControls) {
         </div>
       </header>
       {!sample && error && <p className="ops-notice" role="status"><CircleAlert size={15} />Refresh failed · {error}{live && " · Showing the last snapshot."}</p>}
+      <UsageCharts data={series} error={sample ? "" : liveSeries.error} />
+      {series && <ExecutorUsage {...props} data={series} workers={data?.workers ?? []} sample={sample} />}
       {data ? <OverviewBody key={sample ? "sample" : "live"} data={data} sample={sample} {...props} /> :
         <p className="ops-empty" role="status">{error ? "Waiting for a successful refresh." : "Loading dispatches, workers and usage…"}</p>}
     </div>
@@ -151,17 +157,14 @@ function Timeline({ runs, now, history }: { runs: Run[]; now: number; history: H
   </section>;
 }
 
-function TokenPanel({ data, range, onRange, onUsage }: {data: Snapshot} & UsageControls) {
+function TokenPanel({ data, range, onRange }: {data: Snapshot} & UsageControls) {
   const sample = data.sampleTokens;
   const { data: usage, error } = useTokenUsage(range, !sample);
   const brain = sample?.brain_tokens ?? usage?.totals.brain_tokens ?? 0;
   const workers = sample?.worker_tokens ?? usage?.totals.worker_tokens ?? 0;
   const total = brain + workers;
   const measured = !!sample || !!usage?.totals.measured;
-  const people = sample ? data.workers.map(w => {
-    const runs = data.runs.filter(r => workerName(r) === w.name && (r.tokens_in || r.tokens_out));
-    return { name: w.name, measured: runs.length, value: runs.reduce((n,r) => n+r.tokens_in+r.tokens_out,0) };
-  }) : (usage?.participants ?? []).filter(r => r.role === "worker").map(r => ({ name:r.name, measured:r.measured, value:r.tokens_in+r.tokens_out }));
+  const workersReported = sample ? true : (usage?.participants ?? []).some(r => r.role === "worker" && r.measured > 0);
   return <section className="ops-panel ops-token" aria-label="Token usage">
     <PanelTitle icon={<Coins />} title="Token usage" aside={<span className="ops-meta">{sample ? "Sample · UTC" : "UTC"}</span>} />
     <div className="ops-token-body"><PeriodPicker range={range} onRange={onRange} />
@@ -171,13 +174,11 @@ function TokenPanel({ data, range, onRange, onUsage }: {data: Snapshot} & UsageC
       </div>
       <div className="ops-token-key">{[
         {label:"Brain · 大脑", value:brain, reported:!!sample || !!usage?.participants[0]?.measured, tone:"brain"},
-        {label:"Workers 合计", value:workers, reported:people.some(w=>w.measured), tone:"worker"}
+        {label:"Workers 合计", value:workers, reported:workersReported, tone:"worker"}
       ].map(r => <div key={r.tone}><span><i className={`ops-key ${r.tone}`}/>{r.label}</span><b>{r.reported ? tokenNumber(r.value) : "—"}</b>
         <small>{r.reported && total ? (100*r.value/total).toFixed(1)+"%" : "—"}</small></div>)}</div>
-      {people.length > 0 && <ul className="token-overview-list" aria-label="各 Worker 用量">{people.map(w =>
-        <li key={w.name}><span>{w.name}</span><span title={w.measured ? undefined : "无已报告用量"}>{w.measured ? tokenNumber(w.value) : "—"}</span></li>)}</ul>}
       <div className="token-overview-foot"><span>{sample ? "示例数据仅覆盖一天" : usage?.start ? usage.start+" — "+usage.end : usage ? "无用量记录" : "读取中…"}</span>
-        {!sample && <button onClick={onUsage}>查看明细 →</button>}</div>
+        <button onClick={() => document.getElementById("usage-executors")?.scrollIntoView({ behavior: "smooth", block: "start" })}>各执行者明细 ↑</button></div>
     </div>
   </section>;
 }

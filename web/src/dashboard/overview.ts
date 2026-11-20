@@ -3,7 +3,8 @@ import type { DispatchRun, WorkerStatus } from "../api";
 export type Run = Pick<DispatchRun, "id" | "worker" | "agent" | "task" | "started_at" | "finished_at" | "elapsed_s" | "detail" | "error" | "tokens_in" | "tokens_out"> & {
   status: string;
 };
-export type Worker = Pick<WorkerStatus, "name" | "agent" | "enabled" | "detected" | "busy" | "task" | "detail">;
+export type Worker = Pick<WorkerStatus, "name" | "agent" | "enabled" | "detected" | "busy" | "task" | "detail"> &
+  Partial<Pick<WorkerStatus, "calls" | "last_run">>;
 export type Snapshot = {
   runs: Run[];
   workers: Worker[];

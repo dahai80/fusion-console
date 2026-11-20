@@ -1,7 +1,7 @@
 .ops {
   --surface: white; --subtle: #f6f6f9; --line: #e4e4e7; --grid: #e8e8f0;
   --text: #18181b; --muted: #62626e; --soft: #484854; --brand: #4f46e5;
-  --brain: #7161e8; --worker: #d59032; --green: #167958; --amber: #995d0b;
+  --brain: #6250d6; --worker: #d59032; --green: #167958; --amber: #995d0b;
   --red: #b83b50; --finished: #aaa8c4; --issue: #bb7841;
   --ease: cubic-bezier(.23,1,.32,1);
   max-width: 1392px; margin-inline: auto; padding: 30px clamp(16px,3.4vw,50px) 22px;
@@ -10,7 +10,7 @@
 .dark .ops {
   --surface: #151518; --subtle: #1d1d23; --line: #2b2b32; --grid: #2e2e39;
   --text: #f5f5f7; --muted: #a1a1ae; --soft: #c2c2ce; --brand: #a698ff;
-  --brain: #8c78fd; --worker: #d9a258; --green: #65cba5; --amber: #e4af69;
+  --brain: #9085e9; --worker: #d9a258; --green: #65cba5; --amber: #e4af69;
   --red: #ed95a5; --finished: #66647f; --issue: #b17f55;
 }
 .ops-heading,.ops-controls,.ops-panel-head,.ops-metric-title,.ops-panel-head h2,.ops-legend,.ops-footer,.ops-footer span,.ops-tabs,.ops-state,.ops-status,.ops-attention,.ops-switch,.ops-switch button,.ops-action,.ops-more { display: flex; align-items: center; }

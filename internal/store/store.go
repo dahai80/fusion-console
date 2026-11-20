@@ -506,6 +506,148 @@ func (s *Store) UsageDashboard(user, rangeID string, workers ...string) (map[str
 		"totals": map[string]any{"brain_tokens": brain.Input + brain.Output, "worker_tokens": workerTokens, "brain_cost_usd": round4(brainUSD), "worker_cost_usd": round4(workerUSD), "records": records, "measured": measured}}, nil
 }
 
+// UsageSeriesDays is how far back UsageSeries reaches: 53 full weeks, enough
+// for a year-long activity calendar that starts on a Monday.
+const UsageSeriesDays = 371
+
+// UsageSeries buckets the user's token log by local day and participant for
+// the last UsageSeriesDays days, plus hourly totals for today and yesterday.
+// tzOffsetMin is the viewer's UTC offset in minutes (Taipei = 480), so "today"
+// and the hour axis match the viewer's wall clock instead of UTC.
+func (s *Store) UsageSeries(user string, tzOffsetMin int, workers ...string) (map[string]any, error) {
+	return s.usageSeriesAt(time.Now(), user, tzOffsetMin, workers...)
+}
+
+func (s *Store) usageSeriesAt(now time.Time, user string, tzOffsetMin int, workers ...string) (map[string]any, error) {
+	if tzOffsetMin < -14*60 || tzOffsetMin > 14*60 {
+		return nil, fmt.Errorf("store: tz offset %d out of range", tzOffsetMin)
+	}
+	loc := time.FixedZone("viewer", tzOffsetMin*60)
+	local := now.In(loc)
+	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	yesterday := today.AddDate(0, 0, -1).Format(time.DateOnly)
+	todayID := today.Format(time.DateOnly)
+	since := today.AddDate(0, 0, -(UsageSeriesDays - 1))
+	modifier := fmt.Sprintf("%+d minutes", tzOffsetMin)
+	rows, err := s.db.Query(`SELECT strftime('%Y-%m-%d %H', created_at, ?) AS h, source,
+          SUM(tokens_in) + SUM(tokens_out), COUNT(*),
+          SUM(CASE WHEN tokens_in > 0 OR tokens_out > 0 THEN 1 ELSE 0 END)
+        FROM cost_log WHERE (user = ? OR user = 'mcp-brain') AND created_at >= ?
+        GROUP BY 1, 2 ORDER BY 1`, modifier, user, since.UTC().Format(time.RFC3339))
+	if err != nil {
+		return nil, fmt.Errorf("store: usage series: %w", err)
+	}
+	defer rows.Close()
+	type series struct {
+		Name  string `json:"name"`
+		Role  string `json:"role"`
+		Total int64  `json:"total"`
+		index int
+	}
+	type day struct {
+		Day      string  `json:"day"`
+		Total    int64   `json:"total"`
+		Records  int64   `json:"records"`
+		Measured int64   `json:"measured"`
+		Values   []int64 `json:"values"`
+	}
+	keys := map[string]*series{"brain": {Name: "Brain", Role: "brain"}}
+	order := []*series{keys["brain"]}
+	pick := func(source string) *series {
+		name, ok := strings.CutPrefix(source, "agent:")
+		if !ok {
+			return keys["brain"]
+		}
+		if keys["w:"+name] == nil {
+			keys["w:"+name] = &series{Name: name, Role: "worker", index: len(order)}
+			order = append(order, keys["w:"+name])
+		}
+		return keys["w:"+name]
+	}
+	for _, name := range workers {
+		if name != "" {
+			pick("agent:" + name)
+		}
+	}
+	type cell struct {
+		day     string
+		who     *series
+		tokens  int64
+		records int64
+		measure int64
+	}
+	var cells []cell
+	hours := map[string][]int64{todayID: make([]int64, 24), yesterday: make([]int64, 24)}
+	for rows.Next() {
+		var stamp sql.NullString
+		var source string
+		var tokens, n, m int64
+		if err := rows.Scan(&stamp, &source, &tokens, &n, &m); err != nil {
+			return nil, err
+		}
+		if !stamp.Valid || len(stamp.String) < 13 {
+			continue // unparsable legacy timestamp
+		}
+		d, h := stamp.String[:10], stamp.String[11:13]
+		if hh, ok := hours[d]; ok {
+			var hour int
+			fmt.Sscanf(h, "%d", &hour)
+			if hour >= 0 && hour < 24 {
+				hh[hour] += tokens
+			}
+		}
+		who := pick(source)
+		who.Total += tokens
+		cells = append(cells, cell{d, who, tokens, n, m})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Brain stays first; workers by total so the biggest stack sits next to it.
+	workersOnly := order[1:]
+	sort.SliceStable(workersOnly, func(i, j int) bool {
+		if workersOnly[i].Total == workersOnly[j].Total {
+			return workersOnly[i].Name < workersOnly[j].Name
+		}
+		return workersOnly[i].Total > workersOnly[j].Total
+	})
+	for i, sr := range order {
+		sr.index = i
+	}
+	days := []day{}
+	byDay := map[string]int{}
+	for _, c := range cells {
+		i, ok := byDay[c.day]
+		if !ok {
+			i = len(days)
+			byDay[c.day] = i
+			days = append(days, day{Day: c.day, Values: make([]int64, len(order))})
+		}
+		d := &days[i]
+		d.Total += c.tokens
+		d.Records += c.records
+		d.Measured += c.measure
+		d.Values[c.who.index] += c.tokens
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Day < days[j].Day })
+	firstDay := ""
+	var first sql.NullString
+	if err := s.db.QueryRow(`SELECT MIN(created_at) FROM cost_log WHERE user = ? OR user = 'mcp-brain'`, user).Scan(&first); err == nil && first.Valid {
+		if t, err := time.Parse(time.RFC3339, first.String); err == nil {
+			firstDay = t.In(loc).Format(time.DateOnly)
+		}
+	}
+	out := make([]series, len(order))
+	for i, sr := range order {
+		out[i] = *sr
+	}
+	return map[string]any{
+		"tz_offset_min": tzOffsetMin, "today": todayID, "start": since.Format(time.DateOnly), "first_day": firstDay,
+		"series": out, "days": days,
+		"hours": map[string]any{"today": hours[todayID], "yesterday": hours[yesterday]},
+	}, nil
+}
+
 // CostReport aggregates cost per day for a user.
 func (s *Store) CostReport(user string) ([]map[string]any, error) {
 	rows, err := s.db.Query(
