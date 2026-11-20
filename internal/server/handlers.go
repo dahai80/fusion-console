@@ -187,6 +187,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Model          string `json:"model"` // per-conversation chat model (design v2)
 		Content        string `json:"content"`
 		Orchestrate    bool   `json:"orchestrate"` // chat as main brain: allow agent dispatch tools this turn
+		TurnID         string `json:"turn_id"`     // browser-chosen id to find this turn again after a dropped stream
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
@@ -302,6 +303,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		log.Printf("server: persist conversation model failed (non-fatal): %v", err)
 	}
 
+	turn, err := s.turns.begin(req.ConversationID, user0, req.TurnID, "chat", req.Content)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	defer s.turns.finish(turn)
 	if _, err := s.store.AppendMessage(req.ConversationID, "user", req.Content, "{}"); err != nil {
 		serverError(w, err, http.StatusInternalServerError)
 		return
@@ -353,16 +360,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	flusher := w.(http.Flusher)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	send := func(ev map[string]any) {
-		data, _ := json.Marshal(ev)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
+	// From here the turn belongs to the conversation, not to this request:
+	// a dropped stream leaves it running and the browser reconnects to it.
+	send, stopStream := s.turnStream(w, turn)
+	defer stopStream()
+	ctx, cancel := s.turnContext(r)
+	defer cancel()
 
 	user := s.auth.User(r)
 	// Budget meter seed (issue #66): the pre_llm gate's spent/limit snapshot.
@@ -391,12 +394,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
-			s.runAgentBrainTurn(r.Context(), req.ConversationID, user, msg, send)
+			s.runAgentBrainTurn(ctx, req.ConversationID, user, msg, send)
 			send(map[string]any{"type": "done"})
 			return
 		} else if tp, ok := provider.(chat.ToolProvider); ok {
 			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: model, user: user}
-			full, total := s.runPlannerLoop(r.Context(), tp, &opts, apiKey, chatMsgs, send)
+			full, total := s.runPlannerLoop(ctx, tp, &opts, apiKey, chatMsgs, send)
 			if full != "" {
 				meta, _ := json.Marshal(map[string]any{
 					"provider": prov.ID, "model": model, "orchestrated": true,
@@ -420,7 +423,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		if tp, ok := provider.(chat.ToolProvider); ok {
 			log.Printf("server: rag tools active conv=%d", req.ConversationID)
 			opts := providerOpts{convID: req.ConversationID, budget: s.cfg.Harness.BudgetTokens, model: model, user: user}
-			full, total := s.runRAGChatLoop(r.Context(), tp, &opts, apiKey, chatMsgs, send)
+			full, total := s.runRAGChatLoop(ctx, tp, &opts, apiKey, chatMsgs, send)
 			if full != "" {
 				meta, _ := json.Marshal(map[string]any{
 					"provider": prov.ID, "model": model, "rag": true,
@@ -436,7 +439,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	evCh, err := provider.ChatStream(r.Context(), model, apiKey, chatMsgs)
+	evCh, err := provider.ChatStream(ctx, model, apiKey, chatMsgs)
 	if err != nil {
 		send(map[string]any{"type": "error", "text": err.Error()})
 		return
@@ -491,7 +494,8 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		// reported into the conversation) exactly like a brain run_agent.
 		Background   bool   `json:"background"`
 		RequiresRepo bool   `json:"requires_repo"`
-		Repo         string `json:"repo"` // optional source for background worktree dispatch
+		Repo         string `json:"repo"`    // optional source for background worktree dispatch
+		TurnID       string `json:"turn_id"` // browser-chosen id to find a streamed run again after a dropped stream
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
@@ -581,6 +585,12 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	turn, err := s.turns.begin(req.ConversationID, s.auth.User(r), req.TurnID, "agent", req.Task)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	defer s.turns.finish(turn)
 	if _, err := s.store.AppendMessage(req.ConversationID, "user", req.Task, "{}"); err != nil {
 		serverError(w, err, http.StatusInternalServerError)
 		return
@@ -590,15 +600,11 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	// hold slots for their whole run, and a manual agent run must not queue
 	// behind them. The slots only bound background workers against each other.
 
-	flusher := w.(http.Flusher)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	send := func(ev map[string]any) {
-		data, _ := json.Marshal(ev)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
+	// Like a chat turn, the run outlives a dropped stream (see chatturn.go).
+	send, stopStream := s.turnStream(w, turn)
+	defer stopStream()
+	ctx, cancel := s.turnContext(r)
+	defer cancel()
 
 	user := s.auth.User(r)
 	log.Printf("server: agent=%s conv=%d workdir=%s user=%s", req.Agent, req.ConversationID, workdir, user)
@@ -619,7 +625,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// Model resolution lives in providerEnv (per-agent override > provider
 	// default); empty leaves the CLI's own default.
-	taskText := s.prefixWorkerTask(r.Context(), req.Agent, req.Task, s.workerMemoryModeFor(wk))
+	taskText := s.prefixWorkerTask(ctx, req.Agent, req.Task, s.workerMemoryModeFor(wk))
 	if req.RequiresRepo {
 		taskText = workerResultContract + "\n" + taskText
 	}
@@ -636,7 +642,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		Command:         settings.Command,
 		Env:             pEnv,
 	}
-	evCh, err := adapter.Run(r.Context(), opts)
+	evCh, err := adapter.Run(ctx, opts)
 	if err != nil {
 		send(map[string]any{"type": "error", "text": err.Error()})
 		return
@@ -696,7 +702,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 		_, _ = s.store.AppendMessage(req.ConversationID, "assistant", final, string(meta))
 		_ = s.store.LogCost(req.ConversationID, user, "agent:"+req.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
 		if blocked == nil && s.workerMemoryMode() == "fusion-memory" {
-			s.commitWorkerMemory(r.Context(), req.Agent, req.Task, final)
+			s.commitWorkerMemory(ctx, req.Agent, req.Task, final)
 		}
 	}
 	if blocked == nil {

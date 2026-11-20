@@ -40,7 +40,8 @@ import {
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
+import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type ChatTurn, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
+import { applyAgentEvent, applyChatEvent, approvalAfter, emptyTurn, followDelay, FOLLOW_MAX_FAILURES, isNetworkError, newTurnId, replayTurn, type TurnKind, type TurnView } from "./chatTurn";
 import Onboarding from "./Onboarding";
 import { progress as setupProgress, useSetupStatus } from "./setupStatus";
 import ConsoleUpdate from "./ConsoleUpdate";
@@ -401,6 +402,11 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
 
 type ChatEntry = { role: string; content: string; meta?: string };
 
+const RESUME_RECONNECTING = "连接断了，正在重连… 这一轮在后台继续，不用重发";
+const RESUME_FOLLOWING = "已重新连上，回复还在后台生成";
+const NETWORK_DOWN = "连不上 console，请检查网络后重试";
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
 function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [convs, setConvs] = useState<Conversation[]>([]);
   // Sidebar history tabs: chats vs teams. The Teams tab bootstraps the
@@ -428,6 +434,13 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   // pre_llm/post_llm gate events.
   const [budget, setBudget] = useState<{ spent: number; limit: number } | null>(null);
   const [err, setErr] = useState("");
+  // Shown while a turn is followed after its stream broke (phone locked,
+  // network switched): the server keeps running it, the bubble keeps filling.
+  const [resumeNote, setResumeNote] = useState("");
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const followTok = useRef(0);
+  const followingConv = useRef<number | null>(null);
   const [unread, setUnread] = useState<Record<string, number>>({});
   // H5 (mobile) drawers: the conversation rail and the dispatch rail are
   // hidden below md/lg — on phones they open as overlay drawers instead.
@@ -548,6 +561,99 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     }
   };
 
+  // Leaving a conversation stops following its turn there (the server keeps
+  // running it; coming back picks it up again).
+  useEffect(() => {
+    if (followingConv.current !== null && followingConv.current !== active?.ID) {
+      followTok.current++;
+      followingConv.current = null;
+      setResumeNote("");
+      setBusy(false);
+    }
+  }, [active?.ID]);
+
+  // showTurn renders the in-progress turn into the trailing assistant bubble.
+  const showTurn = (view: TurnView) => setEntries((e) => {
+    const i = e.length - 1;
+    if (i < 0 || e[i].role !== "assistant") return e;
+    const copy = e.slice();
+    copy[i] = { ...copy[i], content: view.content, meta: view.meta };
+    return copy;
+  });
+
+  // followTurn keeps showing a turn the server runs on after its stream broke,
+  // or one that was already running when the conversation was opened. It
+  // returns false when a conversation switch took over (busy is not ours to
+  // clear then). sent/restore: the message this browser just sent — when it
+  // never reached the server it goes back into the input box.
+  const followTurn = async (f: { conv: number; kind: TurnKind; turnId: string | null; sent: string | null; restore: string | null }) => {
+    const tok = ++followTok.current;
+    followingConv.current = f.conv;
+    const mine = () => followTok.current === tok && activeRef.current?.ID === f.conv;
+    let failures = 0;
+    setErr("");
+    setResumeNote(RESUME_RECONNECTING);
+    try {
+      while (mine()) {
+        let turn: ChatTurn | null;
+        try {
+          turn = (await api.conversationTurn(f.conv)).turn;
+        } catch (ex) {
+          if (!isNetworkError(ex) || ++failures >= FOLLOW_MAX_FAILURES) {
+            if (mine()) setErr(isNetworkError(ex) ? "一直连不上 console。这一轮可能还在后台跑，网络恢复后刷新页面查看结果" : (ex as Error).message);
+            return mine();
+          }
+          if (mine()) setResumeNote(RESUME_RECONNECTING);
+          await sleep(followDelay(failures));
+          continue;
+        }
+        failures = 0;
+        if (!mine()) break;
+        if (!turn || (f.turnId !== null && turn.id !== f.turnId)) {
+          // No turn of ours on the server: show what it kept.
+          const r = await api.messages(f.conv).catch(() => null);
+          if (r && mine()) {
+            const fresh = (r.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta }));
+            setEntries(fresh);
+            if (f.sent !== null && fresh.filter((m) => m.role === "user").at(-1)?.content !== f.sent) {
+              if (f.restore) setInput((cur) => cur || f.restore!);
+              setErr("消息没发出去，已放回输入框，网络恢复后再发");
+            }
+          }
+          return mine();
+        }
+        const replay = replayTurn(f.kind, turn.events);
+        showTurn(replay.view);
+        if (f.kind === "chat") {
+          setApproval(replay.approval);
+          if (replay.budget) setBudget(replay.budget);
+          const act = turn.events.reduce<BrainActivity>((a, ev) => brainEvent(a, ev), beginBrainTurn(f.conv, turn.request));
+          setBrainActivity(turn.running ? act : endBrainTurn(act));
+        }
+        if (!turn.running) return mine();
+        setResumeNote(RESUME_FOLLOWING);
+        await sleep(2000);
+      }
+      return false;
+    } finally {
+      if (followTok.current === tok) {
+        followingConv.current = null;
+        setResumeNote("");
+      }
+    }
+  };
+
+  // A turn still running on the server (another tab, or this page reloaded
+  // after the phone dropped it) is picked up when its conversation opens.
+  const resumeRunningTurn = async (c: Conversation) => {
+    const r = await api.conversationTurn(c.ID).catch(() => null);
+    const turn = r?.turn;
+    if (!turn?.running || activeRef.current?.ID !== c.ID || followingConv.current !== null) return;
+    setBusy(true);
+    setEntries((e) => [...e, { role: "assistant", content: "" }]);
+    if (await followTurn({ conv: c.ID, kind: turn.kind, turnId: turn.id, sent: null, restore: null })) setBusy(false);
+  };
+
   const openConv = async (c: Conversation) => {
     setActive(c);
     setErr("");
@@ -558,6 +664,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     if (unread[c.ID] > 0) {
       api.ackDispatches(c.ID).then(() => setUnread((u) => ({ ...u, [c.ID]: 0 }))).catch(() => {});
     }
+    if (c.Kind !== "team" && !busy) void resumeRunningTurn(c);
   };
 
   // Studio bootstrap + live teams polling for the Teams sidebar tab.
@@ -955,6 +1062,8 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
     setInput("");
     setAttachments([]);
     let brainConversation: number | undefined;
+    let ownBusy = true;
+    const turnId = newTurnId();
     try {
       let conv = active;
       if (!conv) {
@@ -969,45 +1078,29 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         brainConversation = idx;
         setBrainActivity(beginBrainTurn(idx, text));
       }
-      await streamPOST("/api/chat", { conversation_id: idx, content: full, orchestrate }, (ev) => {
-        const type = ev.type as string;
+      let view = emptyTurn();
+      await streamPOST("/api/chat", { conversation_id: idx, content: full, orchestrate, turn_id: turnId }, (ev) => {
         if (brainConversation !== undefined) {
           setBrainActivity(prev => prev && prev.conversation === brainConversation ? brainEvent(prev, ev) : prev);
         }
-        setEntries((e) => {
-          const copy = e.slice();
-          const last = copy[copy.length - 1];
-          if (type === "delta") last.content += (ev.text as string) ?? "";
-          else if (type === "notice") last.content += `\n\n> ℹ️ ${ev.text}\n`;
-          else if (type === "approval") {
-            setApproval({ id: (ev.id as string) ?? "", detail: (ev.detail as string) ?? "" });
-            last.content += `\n\n> ⏸ awaiting your approval: ${ev.detail ?? ""}\n\n`;
-          }
-          else if (type === "tool") {
-            const status = (ev.status as string) ?? "";
-            setApproval(null);
-            const detail = (ev.detail as string) ?? "";
-            if (status === "running") last.content += `\n\n> ⚙️ dispatch \`${ev.tool}\`${detail ? ` — ${detail}` : ""}\n\n`;
-            else if (status === "progress") last.content += `> ⏳ ${detail}\n`;
-            else if (status === "queued") last.content += "> ↳ queued\n\n";
-            else if (status === "done") last.content += "> ↳ done\n\n";
-            else if (status === "blocked") last.content += `> ↳ blocked: ${detail}\n\n`;
-            else if (status === "denied") last.content += `> ↳ denied: ${detail}\n\n`;
-            else if (status === "error") last.content += "> ↳ error\n\n";
-          }
-          else if (type === "error") last.content += `\n\n**error:** ${ev.text}`;
-          else if (type === "usage") last.meta = JSON.stringify(ev);
-          else if (type === "budget") setBudget({ spent: (ev.spent as number) ?? 0, limit: (ev.limit as number) ?? 0 });
-          return copy;
-        });
+        view = applyChatEvent(view, ev);
+        showTurn(view);
+        if (ev.type === "approval" || ev.type === "tool") setApproval((cur) => approvalAfter(cur, ev));
+        if (ev.type === "budget") setBudget({ spent: (ev.spent as number) ?? 0, limit: (ev.limit as number) ?? 0 });
       });
     } catch (ex) {
-      const message = (ex as Error).message;
-      setErr(message);
-      setBrainActivity(prev => prev && prev.conversation === brainConversation ? brainEvent(prev, { type: "error", text: message }) : prev);
+      if (isNetworkError(ex) && brainConversation !== undefined) {
+        // The stream broke, not the turn: the server keeps running it.
+        ownBusy = await followTurn({ conv: brainConversation, kind: "chat", turnId, sent: full, restore: text });
+      } else {
+        const message = isNetworkError(ex) ? NETWORK_DOWN : (ex as Error).message;
+        if (isNetworkError(ex)) setInput((cur) => cur || text);
+        setErr(message);
+        setBrainActivity(prev => prev && prev.conversation === brainConversation ? brainEvent(prev, { type: "error", text: message }) : prev);
+      }
     } finally {
       setBrainActivity(prev => prev && prev.conversation === brainConversation ? endBrainTurn(prev) : prev);
-      setBusy(false);
+      if (ownBusy) setBusy(false);
     }
   };
 
@@ -1080,6 +1173,9 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
     setBusy(true);
     setErr("");
     setInput("");
+    let convId: number | undefined;
+    let ownBusy = true;
+    const turnId = newTurnId();
     try {
       let conv = active;
       if (!conv || conv.Kind !== "agent" || conv.AgentName !== agent) {
@@ -1090,29 +1186,21 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         await refreshConvs();
       }
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
-      let streamedText = "";
-      await streamPOST("/api/agent/run", { conversation_id: conv.ID, agent, task: text, workdir: "" }, (ev) => {
-        const type = ev.type as string;
-        const eventText = typeof ev.text === "string" ? ev.text : "";
-        if (type === "text") streamedText += eventText;
-        if (type === "result" && eventText.trim() === streamedText.trim()) return;
-        setEntries((e) => {
-          const copy = e.slice();
-          const last = copy[copy.length - 1];
-          if (type === "text") last.content += eventText;
-          else if (type === "tool") last.content += `\n\n> 🔧 \`${ev.tool}\` ${ev.detail ?? ""}\n`;
-          else if (type === "result") last.content += eventText;
-          else if (type === "blocked") last.content = String(ev.text);
-          else if (type === "usage") last.meta = JSON.stringify(ev);
-          else if (type === "notice") last.content += `\n\n> ℹ️ ${ev.text}\n`;
-          else if (type === "error") last.content += `\n\n**error:** ${ev.text}`;
-          return copy;
-        });
+      convId = conv.ID;
+      let view = emptyTurn();
+      await streamPOST("/api/agent/run", { conversation_id: conv.ID, agent, task: text, workdir: "", turn_id: turnId }, (ev) => {
+        view = applyAgentEvent(view, ev);
+        showTurn(view);
       });
     } catch (ex) {
-      setErr((ex as Error).message);
+      if (isNetworkError(ex) && convId !== undefined) {
+        ownBusy = await followTurn({ conv: convId, kind: "agent", turnId, sent: text, restore: text });
+      } else {
+        if (isNetworkError(ex)) setInput((cur) => cur || text);
+        setErr(isNetworkError(ex) ? NETWORK_DOWN : (ex as Error).message);
+      }
     } finally {
-      setBusy(false);
+      if (ownBusy) setBusy(false);
     }
   };
 
@@ -1509,6 +1597,12 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
           </div>
         )}
 
+        {resumeNote && (
+          <p role="status" className="flex items-center gap-1.5 px-4 pb-1 text-sm text-amber-600 dark:text-amber-400">
+            <Loader2 size={14} className="shrink-0 animate-spin" />
+            {resumeNote}
+          </p>
+        )}
         {err && <p className="px-4 pb-1 text-sm text-red-500">{err}</p>}
 
         <div className="relative border-t border-zinc-200/80 dark:border-zinc-800 p-3">
