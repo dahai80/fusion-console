@@ -1,6 +1,6 @@
 # Remote access: Tailscale + a self-hosted relay
 
-[中文（更详细）](TAILSCALE_CN.md)
+[中文（更详细）](TAILSCALE_CN.md) · First time? Start with the [quickstart](TAILSCALE_QUICKSTART.md).
 
 Goal: use the console on the office machine from a phone or laptop anywhere,
 without changing its guarantees — it listens on `127.0.0.1:11480` only, no

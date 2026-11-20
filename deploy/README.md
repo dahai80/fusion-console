@@ -58,7 +58,8 @@ schtasks /Create /TN "fusion-console" /TR "C:\Tools\fusion-console.exe" /SC ONLO
 
 Step-by-step guide, including a self-hosted relay on a small VPS for
 networks where peer-to-peer fails: [TAILSCALE.md](TAILSCALE.md) ·
-[中文](TAILSCALE_CN.md). Short version, on the office host:
+[中文](TAILSCALE_CN.md). First time? [Quickstart](TAILSCALE_QUICKSTART.md) ·
+[小白版](TAILSCALE_QUICKSTART_CN.md). Short version, on the office host:
 
 ```bash
 tailscale serve --bg 11480
