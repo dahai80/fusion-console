@@ -198,9 +198,9 @@ type WorkerConfig struct {
 // decisions. The architect session and dispatch loop are NOT implemented by
 // this prototype — this section only persists what the wizard collected.
 type OrchestratorConfig struct {
-	Mode              string         `json:"mode"`       // "off" | "confirm" | "auto"
-	BrainMode         string         `json:"brain_mode"` // "chat" (default) | "agent" — brain implementation
-	BrainAgent        string         `json:"brain_agent"`
+	Mode              string         `json:"mode"`        // "off" | "confirm" | "auto"
+	BrainMode         string         `json:"brain_mode"`  // "chat" (default) | "agent" — brain implementation
+	BrainAgent        string         `json:"brain_agent"` // always "claude": the only CLI that can run the agent brain; kept for older clients
 	Repos             []string       `json:"repos"`
 	Workers           []WorkerConfig `json:"workers"`
 	Configured        bool           `json:"configured"`
