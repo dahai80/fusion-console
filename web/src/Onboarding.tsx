@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bot,
+  CircleAlert,
   Check,
   ChevronDown,
   Circle,
@@ -21,6 +22,7 @@ import {
 import { api, type Orchestrator } from "./api";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import WorkersSection from "./agents/WorkersSection";
+import { updateOrchestrator } from "./agents/parts";
 import { Badge, Button, Card, Input, Select } from "./components/ui";
 import {
   directProviders,
@@ -447,6 +449,13 @@ function VerifyStep({ status, refresh }: { status: SetupStatus; refresh: () => P
   );
 }
 
+// The agent brain always runs Claude Code (the backend drives its MCP flags),
+// so the wizard offers how the brain works, not which agent it is.
+const BRAIN_MODES: { id: "chat" | "agent"; title: string; desc: string }[] = [
+  { id: "chat", title: "直接用模型", desc: "推荐。Brain 拆任务、派给 Worker、检查结果，自己不改文件。快，也省钱。" },
+  { id: "agent", title: "用 Claude Code 当 Brain", desc: "Brain 自己也能翻代码、跑命令，看清楚再派活。更慢，花费更高。" },
+];
+
 const MODES: { id: Orchestrator["mode"]; title: string; desc: string }[] = [
   { id: "confirm", title: "每次派工先问我", desc: "推荐。Brain 想让 Worker 动手时弹出确认。" },
   { id: "auto", title: "预算内自动派工", desc: "不再询问，受每个 Worker 的预算上限约束。" },
@@ -460,12 +469,13 @@ function TeamStep({ status, refresh }: { status: SetupStatus; refresh: () => Pro
   const detected = status.agents.filter((x) => x.detected);
   const missing = status.agents.filter((x) => !x.detected);
   const workers = orch?.workers ?? [];
+  const brainMode = orch?.brain_mode === "agent" ? "agent" : "chat";
+  const claudeReady = status.agents.some((x) => x.name === "claude" && x.detected);
 
   // Save one field on top of the server's current settings so the Workers
   // panel's edits are never overwritten by a stale copy.
   const save = (patch: Partial<Orchestrator>, note: string) => a.run("save", async () => {
-    const cur = (await api.orchestration()).orchestrator;
-    await api.saveOrchestration({ ...cur, ...patch });
+    await updateOrchestrator((cur) => ({ ...cur, ...patch }));
     await refresh();
     return note;
   });
@@ -503,14 +513,30 @@ function TeamStep({ status, refresh }: { status: SetupStatus; refresh: () => Pro
         </div>
       </div>
 
-      {detected.length > 1 && (
-        <label className="block text-xs text-zinc-500">Brain 用哪个 Agent（agent 模式下生效）
-          <Select className="mt-1 sm:w-72" value={orch?.brain_agent || detected[0].name} disabled={!orch || !!a.busy}
-            onChange={(e) => save({ brain_agent: e.target.value }, `Brain Agent 已设为 ${e.target.value}`)}>
-            {detected.map((x) => <option key={x.name} value={x.name}>{x.name}（{x.command}）</option>)}
-          </Select>
-        </label>
-      )}
+      <div>
+        <p className="mb-1.5 text-xs font-medium text-zinc-500">Brain 怎么工作</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {BRAIN_MODES.map((m) => {
+            const on = brainMode === m.id;
+            const blocked = m.id === "agent" && !claudeReady;
+            return (
+              <button key={m.id} disabled={!orch || !!a.busy || (blocked && !on)} aria-pressed={on}
+                onClick={() => !on && save({ brain_mode: m.id }, `Brain 已改为「${m.title}」`)}
+                className={`flex flex-col justify-start rounded-xl border p-3 text-left transition-colors disabled:opacity-60 ${
+                  on ? "border-indigo-500 bg-indigo-500/5" : "border-zinc-200/80 hover:border-indigo-300 dark:border-zinc-800"}`}>
+                <span className={`block text-sm font-medium ${on ? "text-indigo-600 dark:text-indigo-400" : ""}`}>{m.title}</span>
+                <span className="mt-0.5 block text-xs leading-5 text-zinc-500">{m.desc}</span>
+                {blocked && status.loaded && (
+                  <span className="mt-1.5 flex items-start gap-1 text-xs leading-5 text-amber-700 dark:text-amber-400">
+                    <CircleAlert size={13} className="mt-0.5 shrink-0" />
+                    {on ? "这台电脑没检测到 Claude Code，Brain 现在用不了，先装好或换回「直接用模型」。" : "这台电脑还没装 Claude Code，装好后才能选。"}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       <StatusRow ok={workers.length > 0} pending={!status.loaded}
         action={<Button variant={workers.length ? "outline" : "default"} onClick={() => setOpen(!open)}>

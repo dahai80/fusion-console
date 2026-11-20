@@ -1344,12 +1344,17 @@ func (s *Server) handleSaveOrchestration(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be off, confirm or auto"})
 		return
 	}
-	if orch.BrainAgent != "" {
-		if _, ok := s.agents[orch.BrainAgent]; !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown brain agent " + orch.BrainAgent})
-			return
-		}
+	switch orch.BrainMode {
+	case "", "chat", "agent":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "brain_mode must be chat or agent"})
+		return
 	}
+	// The agent brain is always claude code (runAgentBrainTurn drives the
+	// claude CLI's MCP flags), so brain_agent is not a choice: pin it instead
+	// of validating it. Validating rejected every orchestration save — worker
+	// edits included — once the claude agent was disabled in Agent tools.
+	orch.BrainAgent = agentBrainCLI
 	if bp := strings.TrimSpace(orch.BrainProviderID); bp != "" {
 		if _, ok := s.providerByID(bp); !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or disabled brain provider " + bp})
@@ -1395,6 +1400,6 @@ func (s *Server) handleSaveOrchestration(w http.ResponseWriter, r *http.Request)
 		serverError(w, err, http.StatusInternalServerError)
 		return
 	}
-	log.Printf("server: orchestration saved mode=%s brain=%s workers=%d", orch.Mode, orch.BrainAgent, len(orch.Workers))
+	log.Printf("server: orchestration saved mode=%s brain_mode=%s workers=%d", orch.Mode, orch.BrainMode, len(orch.Workers))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -1199,16 +1199,20 @@ func fromHarnessMessages(msgs []harness.Message) []chat.Message {
 	return out
 }
 
+// agentBrainCLI is the only agent that can run as the brain: the turn below
+// relies on claude's --mcp-config / --allowedTools flags and session resume.
+const agentBrainCLI = "claude"
+
 // runAgentBrainTurn executes one orchestrated turn with claude code as the
 // brain: a claude CLI session in the brain work dir, wired to the console's
 // dispatch tools over MCP. Its own agentic loop replaces the planner loop.
 func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg string, send func(map[string]any)) {
-	ad, ok := s.agents["claude"]
+	ad, ok := s.agents[agentBrainCLI]
 	if !ok {
-		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": "claude CLI not available"})
+		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": "claude CLI not available — enable Claude Code in Agents > tools, or switch the brain back to the chat model"})
 		return
 	}
-	settings := s.agentSettings("claude")
+	settings := s.agentSettings(agentBrainCLI)
 	mcpFile, err := s.writeBrainMCPConfig(convID, user)
 	if err != nil {
 		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": "mcp config: " + err.Error()})
