@@ -88,6 +88,11 @@ function themeMode(value?: string | null): ThemeMode {
   return value === "light" || value === "dark" ? value : "system";
 }
 
+// The top-bar button cycles light → dark → system → light on each click.
+const THEME_CYCLE: ThemeMode[] = ["light", "dark", "system"];
+export const nextThemeMode = (mode: ThemeMode): ThemeMode => THEME_CYCLE[(THEME_CYCLE.indexOf(mode) + 1) % THEME_CYCLE.length];
+export const THEME_LABELS: Record<ThemeMode, string> = { system: "跟随系统", light: "浅色", dark: "深色" };
+
 const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
 function subscribeToScheme(notify: () => void) {
   colorScheme.addEventListener("change", notify);
