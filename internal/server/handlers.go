@@ -1223,11 +1223,13 @@ func (s *Server) handleWorkersStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAuthHint tells the login page whether to prefill the factory default
-// credentials. Loopback-only: on any remote deployment the answer is a flat
-// "no", so the endpoint leaks nothing about password state to the network.
+// credentials. Direct loopback only: on any remote deployment the answer is a
+// flat "no", so the endpoint leaks nothing about password state to the
+// network. A local reverse proxy (tailscale serve, nginx) also connects from
+// 127.0.0.1, so requests carrying proxy headers count as remote.
 func (s *Server) handleAuthHint(w http.ResponseWriter, r *http.Request) {
 	hint := map[string]any{"user": "admin", "factory_default": false}
-	if isLoopback(r.RemoteAddr) && len(s.cfg.Users) > 0 {
+	if isLoopback(r.RemoteAddr) && !viaProxy(r) && len(s.cfg.Users) > 0 {
 		for _, u := range s.cfg.Users {
 			if u.Name != "admin" {
 				continue
@@ -1238,6 +1240,18 @@ func (s *Server) handleAuthHint(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, hint)
+}
+
+// viaProxy reports whether the request was relayed by a reverse proxy.
+// tailscale serve (HTTPS/HTTP mode) adds X-Forwarded-For and, for tailnet
+// users, the Tailscale-User-Login identity header.
+func viaProxy(r *http.Request) bool {
+	for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Forwarded", "Tailscale-User-Login"} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func isLoopback(addr string) bool {
