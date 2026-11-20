@@ -60,7 +60,7 @@ export default function ConsoleUpdate() {
   if ((!status && !error) || status?.enabled === false) return null;
   const busy = Boolean(phases[status?.phase || ""]);
   const message = phases[status?.phase || ""] || (status?.available ? "有可用更新" : status?.checked ? "已是最新可用版本" : "等待检查上游");
-  return <div ref={root} className="relative shrink-0">
+  return <div ref={root} className="shrink-0 sm:relative">
     <button ref={trigger} onClick={() => setOpen(v => !v)} aria-expanded={open} aria-controls="console-update-panel"
       aria-label={status?.available ? "更新 Console，有可用更新" : "更新 Console"} title="更新 Console"
       className="relative flex items-center gap-1 rounded-xl p-2 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
@@ -68,7 +68,7 @@ export default function ConsoleUpdate() {
       {status?.available && <span className="absolute right-0.5 top-1 h-2 w-2 rounded-full bg-indigo-500" />}
     </button>
     {open && <section id="console-update-panel" aria-label="Console 更新"
-      className="absolute right-0 z-50 mt-2 w-64 max-w-[calc(100vw-5rem)] space-y-3 rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-800 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100">
+      className="absolute right-3 top-full z-50 mt-1 max-h-[calc(100dvh-4rem)] w-64 max-w-[calc(100vw-1.5rem)] space-y-3 overflow-y-auto sm:right-0 sm:top-auto sm:mt-2 rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-800 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100">
       <div className="flex items-center justify-between"><strong>Console 更新</strong><span className="text-xs text-zinc-500">上游 main</span></div>
       <p aria-live="polite" className="flex items-center gap-2">{!busy && !status?.available && Boolean(status?.checked) && !status?.error && !error && <Check size={15} />}{error || status?.error || message}</p>
       <div className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
