@@ -48,7 +48,9 @@ macOS 用户可以在主页明暗切换旁检查上游版本、手动安装，�
 
 ### Harness sidecar
 
-防护跑的是真正的 fusion-harness Python 实现（不做 Go 重写），经 `sidecar/harnessd.py`，用能 `import fusion_harness` 的 Python 启动。解析顺序：`FUSION_CONSOLE_HARNESS_PYTHON` 环境变量 → `<exe目录>/../.venv/bin/python` → `<cwd>/../.venv` → `python3`。找不到可用 Python 时打日志、聊天不设防继续——降级可见，绝不静默。在 config.json 加 `"harness": {"enabled": false}` 可关闭。
+防护由 `sidecar/harnessd.py` 调用 fusion-harness 的 Python 实现。控制台先查找环境变量 `FUSION_CONSOLE_HARNESS_PYTHON` 指定的解释器，再查找安装目录和工作区的虚拟环境。macOS 和 Linux 还会尝试 PATH 中的 `python3` 和 `python`。
+
+在 `config.json` 中启用 `harness.enabled` 时，如果 sidecar 启动失败，聊天会在调用模型前停止。可查看启动日志，并将 `FUSION_CONSOLE_HARNESS_PYTHON` 指向已安装 `fusion-harness` 的解释器。内核 0.22.0 支持防护检查，报告可显示 token 预算和运行事件。内核 0.23.0 起还支持模型调用指标和失败归因。
 
 ## 构建
 

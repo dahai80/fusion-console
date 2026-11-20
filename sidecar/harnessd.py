@@ -33,7 +33,7 @@ import subprocess
 import sys
 import uuid
 
-from fusion_harness import KERNEL_VERSION, Compactor, FailureAnalyzer, LLMFunnel, LifecycleBus, ToolFunnel
+from fusion_harness import KERNEL_VERSION, Compactor, LLMFunnel, LifecycleBus, ToolFunnel
 from fusion_harness.compactor import CompactionConfig
 from fusion_harness.permissions import PermissionEngine, PermissionRule
 
@@ -99,6 +99,10 @@ class ConvState:
         self.tool_funnel = ToolFunnel(lifecycle_bus=self.bus, permissions=engine)
         self.tool_funnel.set_budget_ref(self.budget)
         self.pending_approvals = {}
+
+    def llm_meter(self) -> dict:
+        # Kernel 0.22 exposes budget and lifecycle events but no funnel meter.
+        return self.llm_funnel.meter() if hasattr(self.llm_funnel, "meter") else {}
 
 
 class Harnessd:
@@ -239,7 +243,7 @@ class Harnessd:
     async def _meter(self, req_id, p) -> dict:
         conv = int(p.get("conv_id", 0))
         st = self.state(conv, int(p.get("budget_tokens", 0)))
-        meter = st.llm_funnel.meter()
+        meter = st.llm_meter()
         meter["budget_spent_tokens"] = st.budget.spent_tokens
         meter["budget_exceeded"] = st.budget.is_exceeded()
         return {"id": req_id, "result": meter}
@@ -254,7 +258,7 @@ class Harnessd:
         conv = int(p.get("conv_id", 0))
         st = self.state(conv, int(p.get("budget_tokens", 0)))
         snapshot = {
-            "llm_meter": st.llm_funnel.meter(),
+            "llm_meter": st.llm_meter(),
             "budget": {
                 "spent": st.budget.spent_tokens,
                 "limit": st.budget.limit,
@@ -265,6 +269,8 @@ class Harnessd:
         attribution = {"runs": {}, "mode_counts": {}, "cluster_counts": {}}
         try:
             from types import SimpleNamespace
+            from fusion_harness import FailureAnalyzer  # Optional on older kernels.
+
             analyzer = FailureAnalyzer()
             records = []
             for ev in st.bus.replay():

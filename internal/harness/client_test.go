@@ -192,6 +192,12 @@ func TestClientReport(t *testing.T) {
 	if _, _, err := c.PostLLM(11, 100000, 300); err != nil {
 		t.Fatalf("post_llm: %v", err)
 	}
+	var meter struct {
+		Spent int `json:"budget_spent_tokens"`
+	}
+	if err := c.call("meter", map[string]any{"conv_id": 11}, &meter); err != nil || meter.Spent != 300 {
+		t.Fatalf("meter: spent=%d, want 300, err=%v", meter.Spent, err)
+	}
 	rep, err := c.Report(11, 100000)
 	if err != nil {
 		t.Fatalf("report: %v", err)
