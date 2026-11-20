@@ -270,6 +270,11 @@ export const api = {
   teamOp: (body: { op: string; task_id?: string; entry_id?: string; max_concurrent?: number; max_depth?: number; agent_id?: string; name?: string; team?: string; status?: string; capabilities?: string[]; goal?: string; max_rounds?: number; team_budget?: unknown; cleanup_inboxes?: boolean; text?: string; wakeup?: Record<string, unknown>; message_id?: string; decision?: string; answered?: boolean; }) =>
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
+  memoryHubStatus: () => req<MemoryHubStatus>("/api/memoryhub/status"),
+  memoryHubInstall: () =>
+    req<{ status: string }>("/api/memoryhub/install", { method: "POST", body: "{}" }),
+  memoryHubStart: () => req<{ running: boolean }>("/api/memoryhub/start", { method: "POST", body: "{}" }),
+  memoryHubStop: () => req<{ running: boolean }>("/api/memoryhub/stop", { method: "POST", body: "{}" }),
   codeInstall: (agent: string) =>
     req<{ status: string }>("/api/code/install", { method: "POST", body: JSON.stringify({ agent }) }),
   codeStart: () => req<{ running: boolean }>("/api/code/start", { method: "POST" }),
@@ -462,6 +467,17 @@ export type CodeStatus = {
     web_port: number;
     key_configured: boolean;
   };
+};
+
+export type MemoryHubStatus = {
+  installed: boolean;
+  enabled: boolean;
+  running: boolean;
+  detail?: string;
+  phase: "idle" | "downloading" | "installing" | "done" | "error" | string;
+  logs?: string[];
+  error?: string;
+  port: number;
 };
 
 export type WorkerSettings = {

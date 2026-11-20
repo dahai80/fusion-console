@@ -304,6 +304,22 @@ func DefaultRag() RagConfig {
 	return RagConfig{Installed: false, Enabled: false, Port: 11436, InstallDir: filepath.Join(DefaultDir(), "fusion-rag")}
 }
 
+// MemoryConfig is the optional fusion-memory hub integration. Nothing is
+// downloaded or started until the user installs it from the Agents > Memory
+// tab; the section only records the decision. fm-server serves JSON-RPC and
+// a public GET /healthz on 127.0.0.1:11435 (registered port, fixed).
+type MemoryConfig struct {
+	Installed  bool   `json:"installed"`
+	Enabled    bool   `json:"enabled"`
+	Port       int    `json:"port"`        // fm-server HTTP port (registered 11435)
+	InstallDir string `json:"install_dir"` // where the git clone is built
+}
+
+// DefaultMemory returns the opt-in default: nothing installed, nothing enabled.
+func DefaultMemory() MemoryConfig {
+	return MemoryConfig{Installed: false, Enabled: false, Port: 11435, InstallDir: filepath.Join(DefaultDir(), "fusion-memory")}
+}
+
 // AgentStudioConfig is the optional team-view integration (T4b, issue #6).
 // The console observes and drives the agent-studio daemon over its UDS
 // JSON-RPC socket (newline-delimited, _auth JWT enforced). No team state is
@@ -336,6 +352,7 @@ type Config struct {
 	Orchestrator  OrchestratorConfig `json:"orchestrator"`
 	Rag           RagConfig          `json:"rag"`
 	Code          CodeConfig         `json:"code"`
+	Memory        MemoryConfig       `json:"memory"`
 	AgentStudio   AgentStudioConfig  `json:"agentstudio"`
 	MLX           MLXConfig          `json:"mlx"`
 }
@@ -434,6 +451,17 @@ func Load(dir string) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.Code.InstallDir) == "" {
 		cfg.Code.InstallDir = DefaultCode().InstallDir
+	}
+	// Memory integration mirrors the RAG/Code defaults: absent section =
+	// opt-in defaults, present section gets missing port/dir filled.
+	if !bytes.Contains(data, []byte("\"memory\"")) {
+		cfg.Memory = DefaultMemory()
+	}
+	if cfg.Memory.Port == 0 {
+		cfg.Memory.Port = 11435
+	}
+	if strings.TrimSpace(cfg.Memory.InstallDir) == "" {
+		cfg.Memory.InstallDir = DefaultMemory().InstallDir
 	}
 	// Team view (T4b): absent section = opt-in defaults; never enable by
 	// default since the daemon holds no console-visible state.
