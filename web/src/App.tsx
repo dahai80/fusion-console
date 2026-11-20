@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Bot,
   CheckCircle,
@@ -81,6 +81,29 @@ function Shell() {
   // undefined = session check in flight, null = logged out, string = logged in
   const [user, setUser] = useState<string | null | undefined>(undefined);
   const [page, setPage] = useState<Page>(() => new URLSearchParams(window.location.search).has("dashboard") ? "dashboard" : "chat");
+  const shellRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    const viewport = window.visualViewport;
+    if (!shell || page !== "chat" || !viewport || !matchMedia("(pointer: coarse)").matches) return;
+
+    // iOS shrinks and can pan the visual viewport while its keyboard is open.
+    const fitChat = () => {
+      if (Math.abs(viewport.scale - 1) > 0.01) return; // Preserve manual pinch zoom.
+      shell.style.height = `${viewport.height}px`;
+      shell.style.top = `${viewport.offsetTop}px`;
+    };
+    fitChat();
+    viewport.addEventListener("resize", fitChat);
+    viewport.addEventListener("scroll", fitChat);
+    return () => {
+      viewport.removeEventListener("resize", fitChat);
+      viewport.removeEventListener("scroll", fitChat);
+      shell.style.removeProperty("height");
+      shell.style.removeProperty("top");
+    };
+  }, [page, user]);
 
   useEffect(() => {
     // One-time auto-login token (console launched with --open puts it in the
@@ -125,7 +148,7 @@ function Shell() {
   if (!user) return <Login onDone={setUser} />;
 
   return (
-    <div className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+    <div ref={shellRef} className={`flex h-dvh flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 ${page === "chat" ? "pointer-coarse:fixed pointer-coarse:inset-x-0 pointer-coarse:top-0" : ""}`}>
       <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} onWizard={() => setPage("onboard")} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
@@ -368,7 +391,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const workingWorkers = runs?.some(r => r.status === "running" || r.status === "queued")
     ? [] : busyWorkers.map(w => w.name);
   const dispatchVersion = useRef(0);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
   // Run drawer (issue #45 F2): "View run" on team-chat bubbles whose meta
   // carries a task_id. Hidden for good once the daemon lacks the run RPCs.
   const [runDrawerTask, setRunDrawerTask] = useState<string | null>(null);
@@ -402,7 +425,8 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const list = messageListRef.current;
+    if (list) list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
   }, [entries]);
 
   // The toolbar, badges and rail share a single feed, including while the rail is closed.
@@ -784,6 +808,9 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
+    if (matchMedia("(pointer: coarse)").matches && document.activeElement instanceof HTMLTextAreaElement) {
+      document.activeElement.blur();
+    }
     // Mid-run steering (issue #45 F3): while the open team has a running
     // task, a plain send becomes a supplement into that run instead of a new
     // task — receipt states render on the steer bubble.
@@ -1265,7 +1292,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
         )}
 
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div ref={messageListRef} className="min-h-0 flex-1 overflow-y-auto p-4 space-y-3">
           {entries.length === 0 && (
             <div className="flex h-full items-center justify-center text-sm text-zinc-400">
               Send a message to chat — type @ to hand the task to a coding agent.
@@ -1336,7 +1363,6 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
               {workingWorkers.length} agent{workingWorkers.length > 1 ? "s" : ""} working in background: {workingWorkers.join(", ")}
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
 
         {approval && (
@@ -1388,7 +1414,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
                 // IME safety: while the input method is composing (e.g.
                 // typing English inside a Chinese IME), Enter confirms the
                 // composition — it must never send the message.
-                if (e.nativeEvent.isComposing) return;
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
                 if (mentionOptions.length > 0 && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) {
                   e.preventDefault();
                   insertMention(mentionOptions[0].name);

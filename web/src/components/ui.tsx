@@ -29,7 +29,7 @@ export function Button({
 export function Input({ className = "", ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className={`w-full rounded-xl border border-zinc-200/80 dark:border-zinc-700/80 bg-white dark:bg-zinc-900 px-3 py-2 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${className}`}
+      className={`w-full rounded-xl border border-zinc-200/80 dark:border-zinc-700/80 bg-white dark:bg-zinc-900 px-3 py-2 text-sm pointer-coarse:text-base placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${className}`}
       {...props}
     />
   );
@@ -38,7 +38,7 @@ export function Input({ className = "", ...props }: React.InputHTMLAttributes<HT
 export function Textarea({ className = "", ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      className={`w-full rounded-xl border border-zinc-200/80 dark:border-zinc-700/80 bg-white dark:bg-zinc-900 px-3 py-2 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none ${className}`}
+      className={`w-full rounded-xl border border-zinc-200/80 dark:border-zinc-700/80 bg-white dark:bg-zinc-900 px-3 py-2 text-sm pointer-coarse:text-base placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none ${className}`}
       {...props}
     />
   );
