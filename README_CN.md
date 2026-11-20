@@ -1,6 +1,6 @@
 # fusion-console
 
-[English](README.md) | [中文](README_CN.md) · [启动指南](docs/START_GUIDE_CN.md) · [远程访问](deploy/TAILSCALE_CN.md) · [下载](https://github.com/dahai80/fusion-console/releases)
+[English](README.md) | [中文](README_CN.md) · [启动指南](docs/START_GUIDE_CN.md) · [手机远程访问](deploy/TAILSCALE_QUICKSTART_CN.md) · [下载](https://github.com/dahai80/fusion-console/releases)
 
 一个给编程 Agent 用的浏览器控制台，整个就是一个 Go 二进制。装在办公室任意一台机器上（macOS、Ubuntu、Windows），电脑浏览器或手机都能打开：和云端或本地大模型聊天，并让对话模型把真正的写代码工作交给这台机器上装好的 Agent 命令行——Claude Code、Codex、OpenCode、fusion-code。
 
@@ -116,7 +116,7 @@ fusion-console 从不开放公网端口。在办公室外使用：
 
 手机在运营商 NAT 后面打不通洞时，流量会走中继。Tailscale 官方共享中继从大陆访问常常很慢，所以指南里也写了怎么用一个脚本 [`deploy/tailscale/setup-derp.sh`](deploy/tailscale/setup-derp.sh) 在一台香港小 VPS 上自建中继（DERP）。
 
-完整步骤：**[deploy/TAILSCALE_CN.md](deploy/TAILSCALE_CN.md)**。
+第一次配置看小白版：**[deploy/TAILSCALE_QUICKSTART_CN.md](deploy/TAILSCALE_QUICKSTART_CN.md)**；完整步骤：**[deploy/TAILSCALE_CN.md](deploy/TAILSCALE_CN.md)**。
 
 ## 编排详解
 

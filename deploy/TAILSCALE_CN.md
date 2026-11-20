@@ -1,6 +1,6 @@
 # 远程访问：Tailscale + 自建香港中继
 
-[English](TAILSCALE.md)
+[English](TAILSCALE.md) · 第一次配置？先看[小白版](TAILSCALE_QUICKSTART_CN.md)。
 
 目标：人在外面，用手机或笔记本打开办公室那台机器上的 fusion-console，像在本机一样用。约束不变：console 只监听 `127.0.0.1:11480`，公网上不开任何端口给它；远程只走 Tailscale；应用自己的登录始终开着。
 

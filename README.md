@@ -1,6 +1,6 @@
 # fusion-console
 
-[English](README.md) | [中文](README_CN.md) · [Start guide](docs/START_GUIDE.md) · [Remote access](deploy/TAILSCALE.md) · [Releases](https://github.com/dahai80/fusion-console/releases)
+[English](README.md) | [中文](README_CN.md) · [Start guide](docs/START_GUIDE.md) · [Phone access](deploy/TAILSCALE_QUICKSTART.md) · [Releases](https://github.com/dahai80/fusion-console/releases)
 
 A browser console for coding agents, shipped as one Go binary. Run it on any
 office machine (macOS, Ubuntu, Windows), open it from a desktop browser or your
@@ -157,6 +157,7 @@ Tailscale's shared relays can be slow from mainland China, so the guide also
 shows how to run your own relay (DERP) on a small Hong Kong VPS with one
 script, [`deploy/tailscale/setup-derp.sh`](deploy/tailscale/setup-derp.sh).
 
+First time: **[quickstart](deploy/TAILSCALE_QUICKSTART.md)** · **[小白版](deploy/TAILSCALE_QUICKSTART_CN.md)**.
 Full walkthrough: **[deploy/TAILSCALE.md](deploy/TAILSCALE.md)** ·
 **[中文版](deploy/TAILSCALE_CN.md)** (more detailed).
 

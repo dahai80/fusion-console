@@ -52,7 +52,7 @@ const STEPS: { id: StepId; label: string; optional?: boolean }[] = [
   { id: "done", label: "完成" },
 ];
 
-const REMOTE_GUIDE = "https://github.com/dahai80/fusion-console/blob/main/deploy/TAILSCALE_CN.md";
+const REMOTE_GUIDE = "https://github.com/dahai80/fusion-console/blob/main/deploy/TAILSCALE_QUICKSTART_CN.md";
 
 function firstOpenStep(s: SetupStatus): StepId {
   for (const id of ["gateway", "models", "verify"] as const) {
