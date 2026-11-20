@@ -1,0 +1,63 @@
+/* Overview usage charts. Categorical slots validated with the dataviz
+   validator (light on #fff, dark on #151518); s7 is the neutral 其他 lane. */
+.ops {
+  --s0: #6250d6; --s1: #eb6834; --s2: #1baf7a; --s3: #eda100; --s4: #e87ba4; --s5: #2a78d6; --s6: #008300; --s7: #a1a1aa;
+  --heat-0: #ececf1; --heat-1: #d5d1fa; --heat-2: #a9a1f2; --heat-3: #7a6de3; --heat-4: #4b3bc0;
+  --band: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.dark .ops {
+  --s0: #9085e9; --s1: #d95926; --s2: #199e70; --s3: #c98500; --s4: #d55181; --s5: #3987e5; --s6: #0ca30c; --s7: #71717a;
+  --heat-0: #26262d; --heat-1: #2f2a5e; --heat-2: #4a3fa0; --heat-3: #6f61dd; --heat-4: #a99ffc;
+}
+.uc-row { display: grid; grid-template-columns: minmax(0,1.85fr) minmax(280px,1fr); gap: 16px; margin-bottom: 16px; }
+.ops .uc-panel { position: relative; overflow: visible; }
+.uc-activity, #usage-executors { margin-bottom: 16px; }
+.uc-plot { position: relative; padding: 0 14px 10px 8px; min-height: 240px; touch-action: pan-y; }
+.uc-year { min-height: 220px; }
+.uc-plot svg, .uc-cal svg { display: block; overflow: visible; }
+.uc-grid { stroke: var(--grid); stroke-width: 1; }
+.uc-axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.uc-band { fill: var(--band); }
+.uc-yesterday { fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 4 3; pointer-events: none; }
+.uc-yearbar { fill: var(--heat-3); }
+.uc-yearbar.on { fill: var(--heat-4); }
+.uc-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--soft); }
+.uc-legend span, .uc-tip p { display: inline-flex; align-items: center; gap: 6px; }
+.uc-legend i, .uc-tip i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.uc-legend i.dashed, .uc-tip i.dashed { width: 14px; height: 0; border-radius: 0; border-top: 2px dashed var(--muted); }
+.uc-sub { font-size: 13px; font-weight: 450; color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+.uc-tip {
+  position: absolute; z-index: 3; transform: translateX(-50%); pointer-events: none;
+  min-width: 168px; max-width: 220px; padding: 9px 12px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--line); box-shadow: 0 8px 24px #18181b1f;
+  font-size: 12px; line-height: 1.75; color: var(--text);
+}
+.uc-tip p { display: flex; width: 100%; }
+.uc-tip b { margin-left: auto; padding-left: 12px; font-weight: 550; }
+.uc-tip-head { font-weight: 600; white-space: nowrap; }
+.uc-cal { position: relative; padding: 2px 16px 14px 14px; }
+.uc-cal-scroll { overflow-x: auto; scrollbar-width: thin; }
+.uc-heat { fill: var(--heat-0); background: var(--heat-0); }
+.uc-heat.l1 { fill: var(--heat-1); background: var(--heat-1); }
+.uc-heat.l2 { fill: var(--heat-2); background: var(--heat-2); }
+.uc-heat.l3 { fill: var(--heat-3); background: var(--heat-3); }
+.uc-heat.l4 { fill: var(--heat-4); background: var(--heat-4); }
+.uc-heat.today { stroke: var(--text); stroke-width: 1.5; }
+.uc-key { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+.uc-key i { width: 11px; height: 11px; border-radius: 3px; }
+.uc-key span { margin-inline: 4px; }
+.uc-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.uc-chip { font-size: 11px; border-radius: 7px; padding: 2px 8px; color: var(--tone); background: color-mix(in srgb, var(--tone) 12%, transparent); }
+.uc-inset { padding: 0 19px 10px; }
+.uc-table { padding: 0 12px 6px; }
+.uc-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 8px; }
+.uc-trend { display: inline-flex; align-items: center; gap: 8px; }
+.uc-trend span { min-width: 56px; text-align: right; }
+.uc-spark { display: block; }
+@media (hover: hover) and (pointer: fine) { .uc-heat:hover { stroke: var(--soft); stroke-width: 1; } .uc-heat.today:hover { stroke: var(--text); stroke-width: 1.5; } }
+@media (max-width: 880px) { .uc-row { grid-template-columns: minmax(0,1fr); gap: 12px; margin-bottom: 12px; } }
+.uc-activity .ops-panel-head h2 { flex-wrap: wrap; }
+@media (max-width: 710px) {
+  .ops .ops-token-body { flex-wrap: wrap; justify-content: center; } .ops .ops-token-body > .token-period { flex-basis: 100%; justify-content: center; } .ops .ops-token-key { flex: 1; min-width: 0; }
+  .uc-plot { padding-inline: 2px 8px; } .uc-cal { padding-inline: 10px; } .uc-sub { flex-basis: 100%; margin: 0 0 0 25px; font-size: 12px; } }
+.uc-table .token-ledger small { padding-left: 17px; }

@@ -1146,6 +1146,38 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if rangeID == "" {
 		rangeID = "week"
 	}
+	data, err := s.store.UsageDashboard(s.auth.User(r), rangeID, s.workerNames()...)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// handleDashboardSeries serves the year of per-day, per-participant token
+// totals and today's hourly curve behind the overview usage charts. tz is
+// the viewer's UTC offset in minutes (JS: -new Date().getTimezoneOffset()).
+func (s *Server) handleDashboardSeries(w http.ResponseWriter, r *http.Request) {
+	tz := 0
+	if v := r.URL.Query().Get("tz"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tz must be minutes east of UTC"})
+			return
+		}
+		tz = n
+	}
+	data, err := s.store.UsageSeries(s.auth.User(r), tz, s.workerNames()...)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// workerNames lists configured worker names as they appear in the cost log
+// (source agent:<name>), falling back to the agent type for unnamed workers.
+func (s *Server) workerNames() []string {
 	names := make([]string, 0, len(s.cfg.Orchestrator.Workers))
 	for _, worker := range s.cfg.Orchestrator.Workers {
 		name := worker.Name
@@ -1154,12 +1186,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		names = append(names, name)
 	}
-	data, err := s.store.UsageDashboard(s.auth.User(r), rangeID, names...)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, data)
+	return names
 }
 
 // handleWorkersStatus backs the dashboard Workers tab: every configured

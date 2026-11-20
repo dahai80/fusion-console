@@ -1,4 +1,6 @@
+import type { UsageSeriesData } from "../api";
 import type { Run, Snapshot, Worker } from "./overview";
+import { addDays, localDay, mondayIndex } from "./usageSeries";
 
 const day = "2026-11-19T";
 const at = (hhmm: string) => day + hhmm + ":00Z";
@@ -35,5 +37,36 @@ export function sampleSnapshot(advanced: boolean): Snapshot {
   return {
     now: Date.parse(at(advanced ? "14:41" : "14:36")), runs, workers,
     sampleTokens: { brain_tokens: 38600, worker_tokens: runs.reduce((sum,r) => sum+r.tokens_in+r.tokens_out,0) },
+  };
+}
+
+// Deterministic year of usage for the Sample switch: weekday rhythm, a
+// ramp-up since early August, and a daytime hourly curve.
+export function sampleSeries(now: number): UsageSeriesData {
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const today = localDay(now);
+  const names = ["codex-1", "claude-1", "claude-2", "codex-2"];
+  const first = addDays(today, -109);
+  const days: UsageSeriesData["days"] = [];
+  const totals = [0, 0, 0, 0, 0];
+  for (let d = first; d <= today; d = addDays(d, 1)) {
+    const weekend = mondayIndex(d) >= 5;
+    if (rand() < (weekend ? 0.45 : 0.08)) continue;
+    const ramp = 0.35 + 0.65 * (Date.parse(d) - Date.parse(first)) / (Date.parse(today) - Date.parse(first) || 1);
+    const scale = 1.6e8 * ramp * (weekend ? 0.35 : 1) * (0.4 + rand());
+    const shares = [0.32 + rand() * 0.3, rand() * 0.5, rand() * 0.35, rand() * 0.2, rand() < 0.3 ? rand() * 0.15 : 0];
+    const sum = shares.reduce((a, b) => a + b, 0);
+    const values = shares.map(s => Math.round(scale * s / sum));
+    values.forEach((v, i) => (totals[i] += v));
+    days.push({ day: d, total: values.reduce((a, b) => a + b, 0), records: 40, measured: 40, values });
+  }
+  const hourNow = new Date(now).getHours();
+  const curve = (h: number) => Math.max(0, Math.sin((h - 7) / 13 * Math.PI)) * (0.6 + rand() * 0.8) * 3.2e7;
+  return {
+    tz_offset_min: -new Date(now).getTimezoneOffset(), today, start: addDays(today, -370), first_day: first,
+    series: [{ name: "Brain", role: "brain", total: totals[0] }, ...names.map((name, i) => ({ name, role: "worker" as const, total: totals[i + 1] }))],
+    days,
+    hours: { today: Array.from({ length: 24 }, (_, h) => h <= hourNow ? Math.round(curve(h)) : 0), yesterday: Array.from({ length: 24 }, (_, h) => Math.round(curve(h))) },
   };
 }

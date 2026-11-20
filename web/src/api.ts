@@ -165,6 +165,9 @@ export const api = {
   costs: () => req<{ report: Record<string, unknown>[] }>("/api/costs"),
   dashboard: (range: UsageRange) =>
     req<DashboardData>(`/api/dashboard?range=${encodeURIComponent(range)}`),
+  // Year of per-day, per-participant tokens bucketed in the viewer's time zone.
+  dashboardSeries: () =>
+    req<UsageSeriesData>(`/api/dashboard/series?tz=${-new Date().getTimezoneOffset()}`),
   approve: (id: string, approve: boolean) =>
     req<{ ok: boolean }>(`/api/approvals/${encodeURIComponent(id)}`, {
       method: "POST",
@@ -543,6 +546,15 @@ export type DashboardBucket = {
 
 export type UsageParticipant = {
   role: "brain" | "worker"; name: string; records: number; measured: number; tokens_in: number; tokens_out: number;
+};
+export type UsageSeriesData = {
+  tz_offset_min: number;
+  today: string;
+  start: string;
+  first_day: string;
+  series: { name: string; role: "brain" | "worker"; total: number }[];
+  days: { day: string; total: number; records: number; measured: number; values: number[] }[];
+  hours: { today: number[]; yesterday: number[] };
 };
 export type DashboardData = {
   start: string;
