@@ -42,6 +42,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type CodeStatus, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
+import { progress as setupProgress, useSetupStatus } from "./setupStatus";
 import ConsoleUpdate from "./ConsoleUpdate";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import { WorkersPanel } from "./WorkersPanel";
@@ -152,7 +153,7 @@ function Shell() {
       <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} onWizard={() => setPage("onboard")} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
-          <Onboarding onDone={() => setPage("gateway")} />
+          <Onboarding onExit={(to) => setPage(to)} />
         )}
         {page === "dashboard" && <Dashboard />}
         {page === "chat" && <ChatPage onPage={setPage} />}
@@ -219,16 +220,34 @@ function TopBar({
   );
 }
 
-// UserMenu is the top-right account dropdown. Besides logout it offers the
-// wizard's one-click gateway API key creation so users who skipped the
-// wizard can mint (and copy) a key from any page, plus a re-run of the
-// setup wizard itself.
+// UserMenu is the top-right account dropdown: avatar trigger, live setup
+// progress with a one-click way back into the onboarding wizard, the
+// one-click gateway API key (for users who skipped the wizard), and logout.
 function UserMenu({ user, onLogout, onWizard }: { user: string; onLogout: () => void; onWizard: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rawKey, setRawKey] = useState("");
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState("");
+  const { status, refresh } = useSetupStatus();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const p = setupProgress(status);
+  const setupDone = status.loaded && p.done === p.total;
+  const initial = (user || "?").slice(0, 1).toUpperCase();
+
+  useEffect(() => {
+    if (!open) return;
+    void refresh();
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open, refresh]);
 
   const provision = async () => {
     setBusy(true); setErr(""); setRawKey(""); setCopied(false);
@@ -251,48 +270,69 @@ function UserMenu({ user, onLogout, onWizard }: { user: string; onLogout: () => 
   };
 
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <button
         onClick={() => { setOpen(!open); if (!open) { setRawKey(""); setErr(""); } }}
-        className="flex items-center gap-1 rounded-xl px-2 py-1.5 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
+        aria-label={`账户菜单 · ${user}`}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 rounded-xl py-1 pl-1 pr-1.5 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
       >
+        <span className="relative flex size-7 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
+          {initial}
+          {status.loaded && !setupDone && (
+            <span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-white bg-amber-500 dark:border-zinc-900" />
+          )}
+        </span>
         <span className="hidden sm:inline">{user}</span>
         <ChevronDown size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 z-50 mt-1 w-80 rounded-xl border border-zinc-200/80 bg-white p-3 shadow-md shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-900">
-          {rawKey ? (
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
-                Copy and save this key now — it is shown only once (the console keeps its copy in the OS keychain).
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="min-w-0 flex-1 truncate rounded-lg bg-zinc-100 px-2 py-1.5 font-mono text-xs dark:bg-zinc-800">{rawKey}</code>
-                <Button variant="outline" onClick={copy} disabled={copied}>
-                  {copied ? "copied" : "Copy"}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <Button onClick={provision} disabled={busy} className="w-full">
-                {busy ? "Creating..." : "Create API key"}
-              </Button>
-              <p className="text-xs text-zinc-400">
-                Issues a gateway API key via one click (stored in the OS keychain). Also available on the Gateway page.
-              </p>
-              <Button variant="outline" onClick={() => { setOpen(false); onWizard(); }} className="w-full">
-                <Sparkles size={14} /> Run setup wizard
-              </Button>
-            </div>
-          )}
-          {err && <p className="mt-2 text-xs text-red-500">{err}</p>}
+        <div className="absolute right-0 z-50 mt-1 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-zinc-200/80 bg-white p-3 shadow-md shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-900">
           <button
-            onClick={onLogout}
-            className="mt-2 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            onClick={() => { setOpen(false); onWizard(); }}
+            className="w-full rounded-xl border border-indigo-200 bg-indigo-500/5 p-3 text-left transition-colors hover:bg-indigo-500/10 dark:border-indigo-500/30"
           >
-            <LogOut size={14} /> Sign out
+            <span className="flex items-center gap-2 text-sm font-medium text-indigo-700 dark:text-indigo-300">
+              <Sparkles size={14} /> {setupDone ? "新手引导" : "继续新手引导"}
+              <span className="ml-auto text-xs font-normal text-zinc-500">{status.loaded ? `${p.done}/${p.total}` : "…"}</span>
+            </span>
+            <span className="mt-2 block h-1 overflow-hidden rounded-full bg-indigo-500/15">
+              <span className="block h-full rounded-full bg-indigo-500 transition-[width] duration-500"
+                style={{ width: `${(p.done / p.total) * 100}%` }} />
+            </span>
+            <span className="mt-1.5 block text-xs text-zinc-500">
+              {!status.loaded ? "检查中…" : setupDone ? "网关、模型、测试调用都已就绪，可以重新检查或配置 Worker" : "网关 → 模型 → 试一次，几分钟就能开始对话"}
+            </span>
           </button>
+          <div className="mt-3 space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+            {rawKey ? (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                  这把 key 只显示这一次（console 已在系统钥匙串里存了一份）。
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded-lg bg-zinc-100 px-2 py-1.5 font-mono text-xs dark:bg-zinc-800">{rawKey}</code>
+                  <Button variant="outline" onClick={copy} disabled={copied}>
+                    {copied ? "已复制" : "复制"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={provision} disabled={busy}
+                title="给网关发一把新的 API key（存进系统钥匙串），给 Claude Code、Codex 等外部工具用"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
+                {busy ? "创建中…" : "创建网关 API key"}
+              </button>
+            )}
+            {err && <p className="text-xs text-red-500">{err}</p>}
+            <button
+              onClick={onLogout}
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              <LogOut size={14} /> 退出登录
+            </button>
+          </div>
         </div>
       )}
     </div>

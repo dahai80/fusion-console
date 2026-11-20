@@ -8,103 +8,80 @@ uses the prebuilt packages from the
 
 ## 1. Download
 
-From [v0.1.0](https://github.com/dahai80/fusion-console/releases/tag/v0.1.0),
+From the [latest release](https://github.com/dahai80/fusion-console/releases/latest),
 pick the package for your office host:
 
-| Host | File | Contains |
-|---|---|---|
-| macOS (Apple Silicon / Intel) | `fusion-console-0.1.0-darwin-universal.dmg` | universal binary + docs |
-| Windows x64 | `fusion-console-0.1.0-windows-amd64.zip` | `fusion-console.exe` + docs |
-| Ubuntu x64 | `fusion-console-0.1.0-linux-amd64.tar.gz` | binary + systemd unit + docs |
+| Host | File |
+|---|---|
+| macOS (Apple Silicon / Intel) | `fusion-console-<version>-darwin-universal.dmg` |
+| Linux x86_64 / arm64 | `fusion-console-<version>-linux-amd64.tar.gz` / `-linux-arm64.tar.gz` |
+| Windows x64 | `fusion-console-<version>-windows-amd64.zip` |
+
+Every package contains `fusion-console`, the matching `fusion-gateway`, the
+harness sidecar (`sidecar/harnessd.py`), a ready-to-run gateway
+`config.yaml`, and `startup.sh` / `startup.cmd`.
 
 ## 2. Install
 
-### macOS
+Keep the package folder together — the console starts the gateway sitting
+next to it.
 
-Open the DMG, copy the `fusion-console` binary anywhere (e.g.
-`/usr/local/bin`):
-
-```bash
-hdiutil attach fusion-console-0.1.0-darwin-universal.dmg
-sudo cp /Volumes/fusion-console/fusion-console/fusion-console /usr/local/bin/
-hdiutil detach /Volumes/fusion-console
-```
-
-### Windows
-
-Unzip `fusion-console-0.1.0-windows-amd64.zip` to a folder, e.g.
-`C:\Tools\fusion-console\`. The only file you need is `fusion-console.exe`.
-
-### Ubuntu
-
-```bash
-tar xzf fusion-console-0.1.0-linux-amd64.tar.gz
-sudo mv fusion-console /usr/local/bin/
-sudo mv fusion-console.service /etc/systemd/system/fusion-console@.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now fusion-console@$USER   # optional: auto-start
-```
+- **macOS**: open the DMG and copy the `fusion-console` folder somewhere
+  permanent, e.g. `~/Applications/fusion-console`.
+- **Linux**: `tar xzf fusion-console-<version>-linux-amd64.tar.gz -C ~/` .
+- **Windows**: unzip to e.g. `C:\Tools\fusion-console\`.
 
 ## 3. First run and login
 
 ```bash
-fusion-console                 # macOS / Ubuntu
-fusion-console.exe             # Windows
+cd ~/Applications/fusion-console   # the package folder
+./startup.sh                       # Windows: startup.cmd
 ```
 
-The first start:
+`startup.sh` starts the bundled gateway and the console, then opens your
+default browser already signed in. Behind the scenes the first start:
 
 1. Creates `~/.fusion/fusion-console/` (config + SQLite database)
 2. Creates user `admin` with the factory default password
-   `fusion-admin-2026` (override with the `FUSION_CONSOLE_ADMIN_PASSWORD`
-   env var before first start)
+   `fusion-admin-2026` (override with `FUSION_CONSOLE_ADMIN_PASSWORD`
+   before the first start)
 3. Listens on `http://127.0.0.1:11480`
 
-Open `http://127.0.0.1:11480` in a browser (same machine or any machine
-that can reach the host), sign in as `admin` / `fusion-admin-2026`.
+To sign in manually, open `http://127.0.0.1:11480` and use
+`admin` / `fusion-admin-2026` (prefilled when opened on the same machine).
 
-> The factory default password is for local development convenience only.
-> If the console is reachable beyond localhost (e.g. over Tailscale), set
-> `FUSION_CONSOLE_ADMIN_PASSWORD` before first start, or change the
-> password after login (add users by editing
-> `~/.fusion/fusion-console/config.json` with a bcrypt hash and restarting).
+> The factory default password is for local use only. Before the console is
+> reachable from other devices (e.g. over Tailscale), change it — see
+> [Security model](../README.md#security-model).
 
-That's it — the only required configuration is the LLM (next section).
+## 4. Setup wizard
 
-## 4. Connect an LLM — fusion-gateway
+With no model configured, the browser opens the setup wizard. You can
+reopen it at any time from the avatar menu (top right), which also shows
+setup progress.
 
-Release packages ship the matching-platform `fusion-gateway` binary next to
-`fusion-console` (separate repo, bundled at packaging time) — no second
-download needed. The Gateway menu's **Download & install** uses the bundled
-copy first and only falls back to GitHub.
+1. **Start the gateway** — the gateway should already be running; click
+   **One-click create** to issue the console's gateway API key. It is stored
+   in the OS keychain and a `fusion-gateway` model source is added for you.
+2. **Add a model** — pick a vendor, paste its API key and the model ids
+   (comma separated, exactly as the vendor names them). Common vendors fill
+   the base URL for you; for others enter it **without** `/v1`.
+3. **Try it** — sends a short prompt. A reply means the whole path works.
+4. **Brain & workers** (optional) — choose dispatch approval, see detected
+   agent CLIs, add workers. Skip it if you only want to chat.
 
-If you run [fusion-gateway](https://github.com/dahai80/fusion-gateway) in
-the office (recommended — model keys stay in the gateway):
+Then click **Start chatting**.
 
-1. **Get a gateway client key** — from the gateway admin, or from
-   `fusion-gateway/config.yaml` → `auth.api_keys`. The key's
-   `allowed_models` must cover the model you want (e.g. `glm*` for
-   `glm-5`).
-2. **Console UI → Settings → API key**: key id `gw-main`, secret = the
-   gateway key (starts with `fsx-`).
-3. **Settings → Edit / add provider**:
-   - id: `gw-main` (same as the key id)
-   - type: `fusion-gateway`
-   - base URL: `http://<gateway-host>:11432/v1`
-   - model: `glm-5`
-   - enabled: ✓
-   - Save provider → Fetch models → pick the model
-4. **Chat page** → select `fusion-gateway` → send a message. Streaming
-   reply + token usage = working.
+## 5. Other model sources
 
-## 5. Connect an LLM — cloud provider (no gateway)
-
-Any OpenAI-compatible or Anthropic-compatible API works the same way:
-
-1. Settings → API key: key id e.g. `cloud-main`, secret = the provider key
-2. Edit / add provider: type `openai_compat` (or `anthropic_compat`),
-   base URL `https://api.example.com/v1`, model from the provider
-3. Save → Fetch models → chat
+- **A gateway on another machine**: Gateway page → **Models** tab →
+  **Add model source**, type `fusion-gateway`, base URL
+  `http://<gateway-host>:11432/v1`, and a client key from that gateway's
+  `config.yaml` → `auth.api_keys` (its `allowed_models` must cover the
+  model).
+- **Direct, without the gateway**: same page, type `openai_compat` or
+  `anthropic_compat`, the provider's base URL, model and API key. Usage then
+  bypasses the gateway ledger.
 
 ## 6. Run a coding agent
 

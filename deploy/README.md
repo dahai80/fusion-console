@@ -54,23 +54,25 @@ schtasks /Create /TN "fusion-console" /TR "C:\Tools\fusion-console.exe" /SC ONLO
 
 (NSSM service install is an alternative if a pre-logon service is required.)
 
-## 3. Tailscale serve (HTTPS on the tailnet)
+## 3. Remote access (Tailscale)
 
-Same command on all three platforms:
+Step-by-step guide, including a self-hosted relay on a small VPS for
+networks where peer-to-peer fails: [TAILSCALE.md](TAILSCALE.md) ·
+[中文](TAILSCALE_CN.md). Short version, on the office host:
 
 ```bash
-tailscale serve --bg 127.0.0.1:11480
+tailscale serve --bg 11480
 ```
 
 The console is then reachable at `https://<host>.<tailnet>.ts.net` with an
-automatic certificate. All tailnet devices (laptop, phone) use this URL.
+automatic certificate. Use this HTTPS form, not `tailscale serve --tcp`.
 
 ## 4. Security checklist (non-negotiable)
 
 - [ ] Inbound firewall: allow the console port only on the Tailscale interface
       (Windows: Defender Firewall scoped to the Tailscale adapter;
       Ubuntu: `ufw` default deny in on non-`tailscale0` interfaces)
-- [ ] Tailscale ACL: members → office hosts on port 11480 only
+- [ ] Tailscale ACL: members → office hosts on port 443 (tailscale serve) only
 - [ ] Tailscale device approval enabled; remove devices when people leave
 - [ ] App-level login stays on (shared/per-user passwords) — the tailnet is
       network-layer insurance, not a replacement for authentication
@@ -78,13 +80,15 @@ automatic certificate. All tailnet devices (laptop, phone) use this URL.
 
 ## 5. First run
 
-On first start the server creates an `admin` user with a generated password
-and prints it once to the log. Change it after the first login. Additional
-users: edit `<data-dir>/config.json`, add an entry under `users` with a
-bcrypt hash (`htpasswd -bnBC 10 "" 'password'` prints one), then restart.
+On first start the server creates `admin` with the factory default password
+`fusion-admin-2026` (or `FUSION_CONSOLE_ADMIN_PASSWORD` if set before the
+first start). Change it before enabling remote access: generate a hash with
+`htpasswd -bnBC 10 "" 'password' | tr -d ':\n'`, put it in the `admin`
+entry's `password_hash` in `<data-dir>/config.json`, restart. Additional
+users: add entries under `users` the same way.
 
 ## 6. Host naming
 
 Name office hosts `office-win-01`, `office-ubuntu-01`, `office-mac-01` in
-Tailscale. Config + SQLite live under `~/.fusion-console` and can be copied
+Tailscale. Config + SQLite live under `~/.fusion/fusion-console` and can be copied
 between hosts (rsync/scp) to migrate — the server is otherwise stateless.
