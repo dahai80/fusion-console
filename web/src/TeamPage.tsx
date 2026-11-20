@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlarmClock, AlertTriangle, Ban, BookOpen, ChevronDown, ChevronRight, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
-import { api, ApiError, type LeadStatus, type TeamSnapshot } from "./api";
+import { api, ApiError, type HarnessReport, type LeadStatus, type TeamSnapshot } from "./api";
 import { Button, Card, Select } from "./components/ui";
 import ReasonCard from "./components/ReasonCard";
 import RunDrawer from "./components/RunDrawer";
@@ -184,6 +184,26 @@ export default function TeamPage() {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, [focusTeam]);
+  // console#79 R5: harness guard report for the focused team's conversation
+  // (report RPC from #78). Conversation lookup happens once per focus; the
+  // report refreshes on its own slower cadence. Errors hide the panel.
+  const [rep, setRep] = useState<HarnessReport | null>(null);
+  const [repConv, setRepConv] = useState<number | null>(null);
+  useEffect(() => {
+    setRep(null);
+    setRepConv(null);
+    api.conversations().then((r) => {
+      const c = (r.conversations ?? []).find((x) => x.Kind === "team" && x.AgentName === focusTeam);
+      setRepConv(c ? c.ID : null);
+    }).catch(() => setRepConv(null));
+  }, [focusTeam]);
+  useEffect(() => {
+    if (!repConv) return;
+    const read = () => api.harnessReport(repConv).then(setRep).catch(() => setRep(null));
+    read();
+    const t = setInterval(read, 10000);
+    return () => clearInterval(t);
+  }, [repConv]);
   // Tree nav options — the daemon's live teams (teams.list) with lifecycle for
   // grouping. Chat-created teams land here with the next refresh.
   useEffect(() => {
@@ -447,6 +467,12 @@ export default function TeamPage() {
                 <div key={m.member_id || m.name || i} className="flex flex-wrap items-center gap-2 text-sm">
                   <span className="font-medium">{name}</span>
                   {m.role && <span className="rounded-lg bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{m.role}</span>}
+                  {!!m.budget_tokens && (
+                    <span className="rounded-lg border border-zinc-200/80 px-1.5 py-0.5 text-xs tabular-nums text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+                      title="Configured member token budget (kernel TeamMember.budget_tokens); the kernel does not yet report per-member spend">
+                      budget {Number(m.budget_tokens).toLocaleString()}
+                    </span>
+                  )}
                   {stuck ? (
                     <span className="rounded-lg bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-600 dark:text-red-400">
                       stuck · {(m.presence || "offline").toLowerCase()} · {wl.queued + wl.running} open
@@ -470,6 +496,55 @@ export default function TeamPage() {
           </div>
         )}
       </Card>
+
+      {/* console#79 R5: guard report — the #78 harness sidecar report for the
+          team's operator conversation (funnel + budget + attribution).
+          Hidden when the guard is off or the sidecar is down. */}
+      {rep && (() => {
+        const meter = rep.snapshot.llm_meter ?? {};
+        const num = (k: string) => (typeof meter[k] === "number" ? (meter[k] as number) : null);
+        const stats = [
+          ["LLM calls", num("calls")], ["Prompt tokens", num("prompt_tokens")],
+          ["Failures", num("failures")], ["Loops", num("loops_detected")],
+          ["Budget", rep.snapshot.budget.limit > 0
+            ? `${rep.snapshot.budget.spent.toLocaleString()} / ${rep.snapshot.budget.limit.toLocaleString()}${rep.snapshot.budget.exceeded ? " (exceeded)" : ""}`
+            : null],
+        ].filter(([, v]) => v !== null && v !== undefined) as [string, string | number][];
+        const runs = Object.entries(rep.attribution.runs ?? {});
+        if (!stats.length && !runs.length) return null;
+        return (
+          <Card className="p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <Eye size={14} className="text-indigo-500" />
+              <h3 className="text-sm font-medium">Guard report</h3>
+              <span className="text-xs text-zinc-400">conversation #{repConv} · sidecar funnel + failure attribution</span>
+            </div>
+            {stats.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                {stats.map(([label, value]) => (
+                  <span key={label} className="text-zinc-500 dark:text-zinc-400">
+                    {label} <span className="font-medium tabular-nums text-zinc-800 dark:text-zinc-200">{value}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            {runs.map(([runId, run]) => (
+              <div key={runId} className="mt-1.5 rounded-xl border border-zinc-200/80 px-3 py-2 text-xs dark:border-zinc-800">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{runId}</span>
+                  {run.responsible_agent && <span className="text-indigo-600 dark:text-indigo-300">{run.responsible_agent}</span>}
+                  {(run.verdicts ?? []).map((v, i) => v.mode && (
+                    <span key={i} className="rounded-full border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">{v.mode}</span>
+                  ))}
+                </div>
+                {run.decisive_moment && Object.keys(run.decisive_moment).length > 0 && (
+                  <p className="mt-1 break-words text-zinc-500 dark:text-zinc-400">Decisive: {JSON.stringify(run.decisive_moment)}</p>
+                )}
+              </div>
+            ))}
+          </Card>
+        );
+      })()}
 
       {/* Playbook panel (issue #14) — entries + trace provenance from the
           daemon only; hidden entirely for playbook:false teams. */}

@@ -139,6 +139,11 @@ func (s *Server) teamChatPullMessages(user string, id int64) ([]map[string]any, 
 		mid, _ := m["msg_id"].(string)
 		from, _ := m["from"].(string)
 		body, _ := m["body"].(string)
+		// console#79 R4: kernel-typed messages must not degrade into chat
+		// text — they surface as actionable cards via inbox_typed instead.
+		if mt, _ := m["type"].(string); mt == "plan_approval" || mt == "shutdown_request" {
+			continue
+		}
 		if mid == "" || seen[mid] || strings.TrimSpace(body) == "" {
 			continue
 		}

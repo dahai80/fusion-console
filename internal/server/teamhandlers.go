@@ -34,6 +34,9 @@ type teamOpReq struct {
 	MaxRounds      int            `json:"max_rounds"`
 	TeamBudget     any            `json:"team_budget"`
 	CleanupInboxes *bool          `json:"cleanup_inboxes"`
+	MessageID      string         `json:"message_id"`
+	Decision       string         `json:"decision"`
+	Answered       *bool          `json:"answered"`
 }
 
 // teamOpMethod maps a console team op to the daemon JSON-RPC method and
@@ -145,6 +148,31 @@ func teamOpMethod(req teamOpReq, defTeam string) (string, map[string]any, error)
 			return "", nil, errTeamOp("text required")
 		}
 		return "teams.spec_write", map[string]any{"team": team, "text": req.Text}, nil
+	case "inbox_typed":
+		// console#79 R4: kernel-typed inbox cards (plan_approval /
+		// shutdown_request) for the operator member — the daemon's #781
+		// projection, answered cards excluded unless explicitly requested.
+		answered := false
+		if req.Answered != nil {
+			answered = *req.Answered
+		}
+		return "teams.inbox_typed", map[string]any{
+			"team": team, "member": chatOperatorMember, "answered": answered,
+		}, nil
+	case "inbox_respond":
+		// console#79 R4: operator decision on a typed card — the daemon maps
+		// shutdown_request to the typed shutdown_response reply and anchors
+		// plan_approval decisions with reply_to.
+		if req.MessageID == "" {
+			return "", nil, errTeamOp("message_id required")
+		}
+		if req.Decision != "approve" && req.Decision != "reject" {
+			return "", nil, errTeamOp("decision must be approve or reject")
+		}
+		return "teams.inbox_respond", map[string]any{
+			"team": team, "member": chatOperatorMember,
+			"message_id": req.MessageID, "decision": req.Decision,
+		}, nil
 	default:
 		return "", nil, errTeamOp("unknown op: " + req.Op)
 	}
