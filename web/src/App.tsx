@@ -49,7 +49,7 @@ import Dashboard from "./Dashboard";
 import { RagPage } from "./RagPage";
 import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
-import { Badge, Button, Card, Input, Select, Textarea, ThemeProvider, useTheme, type ThemeMode } from "./components/ui";
+import { Badge, Button, Card, Input, Select, Textarea, THEME_LABELS, ThemeProvider, nextThemeMode, useTheme } from "./components/ui";
 import RunDrawer from "./components/RunDrawer";
 import { beginBrainTurn, brainEvent, endBrainTurn, type BrainActivity } from "./components/brainActivity";
 import { BrainCard, DispatchCard, DispatchDetails } from "./components/DispatchCard";
@@ -174,7 +174,15 @@ function TopBar({
   user: string; page: Page; setPage: (p: Page) => void; onLogout: () => void; onWizard: () => void;
 }) {
   const { mode, setMode } = useTheme();
-  const themeLabel = { system: "跟随系统", light: "浅色", dark: "深色" }[mode];
+  const nextMode = nextThemeMode(mode);
+  const themeHint = `外观：${THEME_LABELS[mode]}，点击切换为${THEME_LABELS[nextMode]}`;
+  // Phones have no hover tooltip: name the new mode briefly after each tap.
+  const [themeToast, setThemeToast] = useState(false);
+  useEffect(() => {
+    if (!themeToast) return;
+    const t = setTimeout(() => setThemeToast(false), 1200);
+    return () => clearTimeout(t);
+  }, [themeToast, mode]);
   const tab = (id: Page, label: string, Icon: typeof Bot) => (
     <button
       aria-label={label}
@@ -205,13 +213,15 @@ function TopBar({
       </div>
       <div className="flex items-center gap-2 text-sm text-zinc-500">
         <ConsoleUpdate />
-        <label title={`外观 · ${themeLabel}`} className="relative inline-flex shrink-0 items-center rounded-xl p-2 hover:bg-zinc-200/60 focus-within:ring-2 focus-within:ring-indigo-500 dark:hover:bg-zinc-800/60">
+        <button type="button" onClick={() => { setMode(nextMode); setThemeToast(true); }} title={themeHint} aria-label={themeHint}
+          className="relative inline-flex shrink-0 items-center rounded-xl p-2 hover:bg-zinc-200/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-zinc-800/60">
           {mode === "system" ? <Monitor size={16} /> : mode === "dark" ? <Moon size={16} /> : <Sun size={16} />}
-          <select aria-label="页面外观" value={mode} onChange={e => setMode(e.target.value as ThemeMode)}
-            className="absolute inset-0 h-full w-full cursor-pointer opacity-0">
-            <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
-          </select>
-        </label>
+          {themeToast && (
+            <span role="status" className="pointer-events-none absolute right-0 top-full mt-1.5 whitespace-nowrap rounded-lg bg-zinc-900 px-2 py-1 text-xs text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900">
+              {THEME_LABELS[mode]}
+            </span>
+          )}
+        </button>
         <UserMenu user={user} onLogout={onLogout} onWizard={onWizard} />
       </div>
     </header>
