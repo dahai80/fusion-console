@@ -111,7 +111,7 @@ function WakeupCard({
         <span className="text-zinc-400">expiry</span>
       </div>
       {err && <p className="mt-1 text-xs text-red-500">{err}</p>}
-      <div className="mt-2 flex gap-1">
+      <div className="mt-2 flex flex-wrap gap-1">
         <Button variant="ghost" className="px-2 py-1 text-xs" onClick={arm} disabled={busy}>
           <AlarmClock size={12} /> Arm wakeup
         </Button>
@@ -284,10 +284,10 @@ export default function TeamPage() {
   ];
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 p-6">
+    <div className="mx-auto max-w-6xl space-y-4 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold flex items-center gap-2"><Users size={18} /> Teams</h2>
-        <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
           {snap?.connected ? (
             <span className="rounded-lg bg-emerald-500/10 px-2 py-0.5 text-emerald-600 dark:text-emerald-400">live</span>
           ) : (
@@ -302,10 +302,10 @@ export default function TeamPage() {
 
       {err && <ReasonCard error={err} />}
 
-      <div className="flex items-start gap-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start">
         {/* Left: grouped tree of live teams. Selection deep-links via ?team=
             so the view stays linkable; groups collapse independently. */}
-        <Card className="w-72 shrink-0 p-3">
+        <Card className="w-full p-3 md:w-72 md:shrink-0">
           <h3 className="mb-1 text-sm font-medium">Teams</h3>
           <p className="mb-1 text-xs text-zinc-400">{liveTeams.length} live</p>
           {GROUPS.map((g) => {
@@ -406,7 +406,7 @@ export default function TeamPage() {
           {snap?.health ? (
             <dl className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
               {Object.entries(snap.health).filter(([, v]) => typeof v !== "object").slice(0, 8).map(([k, v]) => (
-                <div key={k} className="flex gap-2"><dt className="w-32 shrink-0">{k}</dt><dd className="tabular-nums">{String(v)}</dd></div>
+                <div key={k} className="flex gap-2"><dt className="w-32 shrink-0 truncate" title={k}>{k}</dt><dd className="min-w-0 break-all tabular-nums">{String(v)}</dd></div>
               ))}
             </dl>
           ) : <p className="text-sm text-zinc-400">—</p>}
@@ -416,7 +416,7 @@ export default function TeamPage() {
           {snap?.limits ? (
             <dl className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
               {Object.entries(snap.limits).filter(([, v]) => typeof v !== "object").map(([k, v]) => (
-                <div key={k} className="flex gap-2"><dt className="w-32 shrink-0">{k}</dt><dd className="tabular-nums">{String(v)}</dd></div>
+                <div key={k} className="flex gap-2"><dt className="w-32 shrink-0 truncate" title={k}>{k}</dt><dd className="min-w-0 break-all tabular-nums">{String(v)}</dd></div>
               ))}
             </dl>
           ) : <p className="text-sm text-zinc-400">—</p>}
@@ -431,7 +431,7 @@ export default function TeamPage() {
           Badges are dual-axis (issue #45 F5): availability x workload, with
           "offline + queued" as a distinct red stuck state. */}
       <Card className="p-4">
-        <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
           <h3 className="text-sm font-medium">Members</h3>
           <span className="text-xs text-zinc-400">manage members from the chat sidebar team panel</span>
         </div>
@@ -496,8 +496,8 @@ export default function TeamPage() {
                 return (
                   <div key={id} className="rounded-xl border border-zinc-200/80 p-2.5 dark:border-zinc-800">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">{id}</span>
-                      <span className="flex-1 truncate text-sm" title={String(e.title || e.summary || "")}>
+                      <span className="max-w-[40%] shrink-0 truncate font-mono text-xs text-zinc-500 dark:text-zinc-400" title={id}>{id}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm" title={String(e.title || e.summary || "")}>
                         {String(e.title || e.summary || e.lesson || id)}
                       </span>
                       <Button variant="ghost" onClick={() => (open ? setTrace(null) : loadTrace(id))} disabled={busy !== ""}>
@@ -537,7 +537,7 @@ export default function TeamPage() {
       )}
 
       {/* Board */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {COLUMNS.map((col) => {
           const colTasks = tasks.filter((t) => columnFor(t.status) === col.id);
           return (
@@ -571,7 +571,7 @@ export default function TeamPage() {
                       </p>
                     )}
                     {(col.id === "failed" || col.id === "running") && (
-                      <div className="mt-2 flex gap-1">
+                      <div className="mt-2 flex flex-wrap gap-1">
                         {col.id === "failed" && (
                           <Button variant="ghost" onClick={() => op("rerun", t.task_id || t.id)} disabled={busy !== ""}>
                             <RotateCcw size={12} /> Rerun
