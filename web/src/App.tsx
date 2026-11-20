@@ -169,7 +169,7 @@ function TopBar({
     </button>
   );
   return (
-    <header className="flex items-center justify-between border-b border-zinc-200/80 dark:border-zinc-800 bg-white/60 dark:bg-zinc-900/60 px-4 py-2 backdrop-blur">
+    <header className="relative z-20 flex items-center justify-between border-b border-zinc-200/80 dark:border-zinc-800 bg-white/60 dark:bg-zinc-900/60 px-4 py-2 backdrop-blur">
       <div className="flex min-w-0 items-center gap-4">
         <span className="hidden shrink-0 font-semibold tracking-tight sm:inline">fusion-console</span>
         <nav className="flex gap-1 overflow-x-auto">
