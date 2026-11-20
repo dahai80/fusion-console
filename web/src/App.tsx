@@ -689,6 +689,17 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   // passed through to teams.register, the daemon seeds SPEC.md with it.
   const [teamSpec, setTeamSpec] = useState("");
   const [teamSpecOpen, setTeamSpecOpen] = useState(false);
+  // console#79 R1/R2/R3: per-member economics (budget/permission/allowlist),
+  // playbook toggle, and the kernel #124 fan-out ladder. All opt-in —
+  // defaults match the previous hardcoded payload byte-for-byte.
+  const [teamMemberCfg, setTeamMemberCfg] = useState<Record<string, { budget: number; mode: string; tools: string[] }>>({});
+  const [teamLeadBudget, setTeamLeadBudget] = useState(200000);
+  const [teamPlaybook, setTeamPlaybook] = useState(false);
+  const TEAM_FANOUT = { simpleMax: 5, complexMax: 15, hardMax: 20 };
+  const TEAM_TOOLS = ["file_read", "file_write", "shell_exec", "web_search", "kb_search"];
+  const memberCfg = (wn: string) => teamMemberCfg[wn] ?? { budget: 50000, mode: teamMode, tools: ["file_read"] };
+  const setMemberCfg = (wn: string, patch: Partial<{ budget: number; mode: string; tools: string[] }>) =>
+    setTeamMemberCfg((m) => ({ ...m, [wn]: { ...memberCfg(wn), ...patch } }));
   useEffect(() => {
     if (!teamModalOpen) return;
     api.orchestration().then((r) => setTeamWorkers(r.orchestrator?.workers ?? [])).catch(() => setTeamWorkers([]));
@@ -709,33 +720,48 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const createTeam = async () => {
     const nm = teamName.trim();
     if (!nm) { setTeamErr("team name required"); return; }
+    // console#79 R3: client-side pre-validation of the kernel #124 ladder —
+    // validate_brief hard-errors above FANOUT_HARD_MAX server-side.
+    if (teamPicked.length > TEAM_FANOUT.hardMax) {
+      setTeamErr(`fan-out ${teamPicked.length} exceeds the kernel hard max ${TEAM_FANOUT.hardMax} — split into phases or subteams`);
+      return;
+    }
     const members = teamPicked.map((wn) => {
       const w = teamWorkers.find((x) => (x.name || x.agent) === wn);
+      const cfg = memberCfg(wn);
       return {
         name: (w?.name || w?.agent || wn).replace(/[^A-Za-z0-9_-]/g, "-"),
         role: w?.agent || "",
         skills: [] as string[],
         // file_read by default (issue #41): members without it cannot read
         // the full SPEC.md and degrade to the injected section only.
-        tool_allowlist: ["file_read"] as string[],
-        permission_mode: teamMode,
-        budget_tokens: 50000,
+        tool_allowlist: cfg.tools.length > 0 ? cfg.tools : ["file_read"],
+        permission_mode: cfg.mode,
+        budget_tokens: cfg.budget,
         max_concurrency: 1,
         context: workerContext(w, wn),
       };
     });
     if (members.length === 0) { setTeamErr("pick at least one worker"); return; }
+    // console#79 R1: mirror the kernel TeamDefError rule (member budget must
+    // stay <= lead budget, Deadline.child semantics) before the server does.
+    const over = members.filter((m) => m.budget_tokens > teamLeadBudget);
+    if (over.length > 0) {
+      setTeamErr(`member budget exceeds lead budget ${teamLeadBudget}: ${over.map((m) => m.name).join(", ")}`);
+      return;
+    }
     setTeamCreating(true);
     setTeamErr("");
     try {
       await api.teamCreate({
-        team: { name: nm, namespace_key: nm, members, lead_budget_tokens: 200000, playbook: false, max_depth: 2, metadata: {} },
+        team: { name: nm, namespace_key: nm, members, lead_budget_tokens: teamLeadBudget, playbook: teamPlaybook, max_depth: 2, metadata: {} },
         tasks: [], lead_start: false, lead_goal: "",
         spec: teamSpec.trim(),
       });
       setTeamModalOpen(false);
       setTeamName("");
       setTeamPicked([]);
+      setTeamMemberCfg({});
       setTeamSpec("");
       setTeamSpecOpen(false);
       await openTeamChat(nm);
@@ -1452,10 +1478,23 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
           <div className="w-full max-w-md rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Users size={16} /> New team</h3>
             <Input className="mb-3" placeholder="team name" value={teamName} onChange={(e) => setTeamName(e.target.value)} autoFocus />
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              <label className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+                lead budget
+                <input type="number" value={teamLeadBudget} min={1} onChange={(e) => setTeamLeadBudget(parseInt(e.target.value) || 0)}
+                  className="w-full rounded-lg border border-zinc-200 bg-transparent px-2 py-1 text-xs dark:border-zinc-700"
+                  title="Lead budget (tokens). Kernel rule: every member budget must stay <= this (Deadline.child semantics)" />
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400" title="Kernel Playbook ops — renders the playbook panel on the Team page">
+                <input type="checkbox" checked={teamPlaybook} onChange={(e) => setTeamPlaybook(e.target.checked)}
+                  className="h-4 w-4 rounded border-zinc-300 text-indigo-600" />
+                playbook
+              </label>
+            </div>
             <label className="mb-3 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-              permission mode
+              default permission mode
               <Select className="w-40" value={teamMode} onChange={(e) => setTeamMode(e.target.value)}
-                title="Kernel permission mode applied to every member: default (ask), approved (auto-accept edits), bypass (no prompts), plan (read-only until approved)">
+                title="Applied to members without an explicit per-member override (console#79 R1: override per member below)">
                 <option value="default">default — ask on each tool</option>
                 <option value="approved">approved — auto-accept edits</option>
                 <option value="bypass">bypass — no prompts</option>
@@ -1486,16 +1525,69 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
               {teamWorkers.filter((w) => w.enabled).map((w) => {
                 const wn = w.name || w.agent;
                 const on = teamPicked.includes(wn);
+                const cfg = memberCfg(wn);
                 return (
-                  <label key={wn} className="flex cursor-pointer items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
-                    <input type="checkbox" checked={on} className="h-4 w-4 rounded border-zinc-300 text-indigo-600"
-                      onChange={() => setTeamPicked(on ? teamPicked.filter((x) => x !== wn) : [...teamPicked, wn])} />
-                    <span className="font-medium">{wn}</span>
-                    <span className="text-xs text-zinc-500">{w.agent}{w.model ? ` · ${w.model}` : ""}</span>
-                  </label>
+                  <div key={wn}>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60">
+                      <input type="checkbox" checked={on} className="h-4 w-4 rounded border-zinc-300 text-indigo-600"
+                        onChange={() => setTeamPicked(on ? teamPicked.filter((x) => x !== wn) : [...teamPicked, wn])} />
+                      <span className="font-medium">{wn}</span>
+                      <span className="text-xs text-zinc-500">{w.agent}{w.model ? ` · ${w.model}` : ""}</span>
+                    </label>
+                    {on && (
+                      <div className="mb-1 ml-6 rounded-xl border border-zinc-200/70 bg-zinc-100/60 p-2 dark:border-zinc-800 dark:bg-zinc-800/40">
+                        <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+                          <span>budget</span>
+                          <input type="number" value={cfg.budget} min={1}
+                            onChange={(e) => setMemberCfg(wn, { budget: parseInt(e.target.value) || 0 })}
+                            className={`w-24 rounded-lg border bg-transparent px-2 py-0.5 text-xs ${cfg.budget > teamLeadBudget ? "border-red-400 text-red-500" : "border-zinc-200 dark:border-zinc-700"}`}
+                            title={`Must stay <= lead budget ${teamLeadBudget} (kernel TeamDefError)`} />
+                          <span>mode</span>
+                          <select value={cfg.mode} onChange={(e) => setMemberCfg(wn, { mode: e.target.value })}
+                            className="rounded-lg border border-zinc-200 bg-transparent px-1.5 py-0.5 text-xs dark:border-zinc-700">
+                            <option value="default">default</option>
+                            <option value="approved">approved</option>
+                            <option value="bypass">bypass</option>
+                            <option value="plan">plan</option>
+                          </select>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap gap-1" title="Tool allowlist (kernel TeamMember.tool_allowlist). file_read kept by default (issue #41)">
+                          {TEAM_TOOLS.map((t) => {
+                            const on = cfg.tools.includes(t);
+                            return (
+                              <button key={t} type="button"
+                                onClick={() => setMemberCfg(wn, { tools: on ? cfg.tools.filter((x) => x !== t) : [...cfg.tools, t] })}
+                                className={`rounded-md border px-1.5 py-0.5 text-[10px] ${on ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-600 dark:text-indigo-300" : "border-zinc-300 text-zinc-400 dark:border-zinc-700"}`}>
+                                {t}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
+            {/* console#79 R3: kernel #124 fan-out ladder — client-side meter,
+                validate_brief hard-errors above the hard max server-side. */}
+            {teamPicked.length > 0 && (
+              <div className={`mb-3 rounded-xl border px-3 py-2 ${teamPicked.length > TEAM_FANOUT.hardMax ? "border-red-400/40 bg-red-500/10" : teamPicked.length > TEAM_FANOUT.simpleMax ? "border-amber-400/30 bg-amber-400/5" : "border-emerald-400/30 bg-emerald-400/5"}`}>
+                <div className="mb-1 flex items-center justify-between text-[11px]">
+                  <span className={teamPicked.length > TEAM_FANOUT.hardMax ? "text-red-500 dark:text-red-400" : teamPicked.length > TEAM_FANOUT.simpleMax ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}>
+                    fan-out {teamPicked.length} / hard max {TEAM_FANOUT.hardMax}
+                  </span>
+                  {teamPicked.length > TEAM_FANOUT.simpleMax && (
+                    <span className="text-[10px] text-zinc-500">multi-agent costs ~15× single-chat tokens</span>
+                  )}
+                </div>
+                <div className="flex h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                  <div className="h-full bg-emerald-500/70" style={{ width: `${Math.min(teamPicked.length, TEAM_FANOUT.simpleMax) * 5}%` }} />
+                  <div className="h-full bg-amber-500/70" style={{ width: `${Math.max(0, Math.min(teamPicked.length, TEAM_FANOUT.complexMax) - TEAM_FANOUT.simpleMax) * 5}%` }} />
+                  <div className="h-full bg-red-500/70" style={{ width: `${Math.max(0, teamPicked.length - TEAM_FANOUT.complexMax) * 5}%` }} />
+                </div>
+              </div>
+            )}
             {teamErr && <p className="mb-2 text-sm text-red-500">{teamErr}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setTeamModalOpen(false)} disabled={teamCreating}>Cancel</Button>
