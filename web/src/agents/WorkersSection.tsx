@@ -1,17 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AtSign, Bot, Check, ChevronRight, CircleAlert, Copy, LoaderCircle, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { AtSign, Bot, Check, ChevronDown, CircleAlert, Copy, LoaderCircle, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { api, type AgentInfo, type Orchestrator, type Provider, type WorkerSettings, type WorkerStatus } from "../api";
-import { Button } from "../components/ui";
+import { Button, Select } from "../components/ui";
 import { WorkerForm } from "./WorkerForm";
-import { Sheet, Switch, Tag, copyText, updateOrchestrator, useFlash } from "./parts";
+import { Sheet, Switch, Tag, copyText, selectCls, updateOrchestrator, useFlash } from "./parts";
 import {
-  agoText, draftFrom, elapsedText, emptyDraft, mergeRows, placeText, summaryText, toSettings, tokensText, toolLabel, validate, workerKey,
+  MEMORY_LABELS, agoText, budgetChoices, draftFrom, elapsedText, emptyDraft, mergeRows, modelText, modelValue, parseModelValue, placeText, summaryText,
+  toSettings, tokensText, toolLabel, validate, workerKey,
   type WorkerDraft, type WorkerRow,
 } from "./workerModel";
 
+// Two card columns from md up. Each column stacks on its own so an opened
+// card only pushes down the cards beneath it, not the row beside it.
+const wideQuery = window.matchMedia("(min-width: 48rem)");
+const subscribeWide = (notify: () => void) => {
+  wideQuery.addEventListener("change", notify);
+  return () => wideQuery.removeEventListener("change", notify);
+};
+
 // WorkersSection is the single place for workers: live status on each card
-// (formerly the Dashboard's Workers tab), open a card to manage that worker,
-// and "新建 Worker" uses the same sheet with a short form.
+// (formerly the Dashboard's Workers tab). Tapping a card drops down the
+// common changes (taking work, model, spending cap, memory); 详细变更 opens
+// the full sheet, and "新建 Worker" uses the same sheet with a short form.
 // `embedded` (the onboarding wizard) drops the summary row while the list is
 // empty, since the wizard already says there are no workers.
 export default function WorkersSection({ onGoTools, onChanged, embedded }: { onGoTools?: () => void; onChanged?: () => void; embedded?: boolean }) {
@@ -21,6 +31,8 @@ export default function WorkersSection({ onGoTools, onChanged, embedded }: { onG
   const [status, setStatus] = useState<WorkerStatus[]>([]);
   const [loadErr, setLoadErr] = useState("");
   const [opened, setOpened] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [models, setModels] = useState<Record<string, string[]>>({});
   const [creating, setCreating] = useState(false);
   const [flash, setFlash] = useFlash();
 
@@ -43,6 +55,18 @@ export default function WorkersSection({ onGoTools, onChanged, embedded }: { onG
   const busy = rows.filter((r) => r.st?.busy).length;
   const detected = (agent: string) => agents.find((a) => a.name === agent)?.detected ?? true;
   const current = rows.find((r) => r.key === opened) ?? null;
+  const wide = useSyncExternalStore(subscribeWide, () => wideQuery.matches);
+  const columns = wide ? [rows.filter((_, i) => i % 2 === 0), rows.filter((_, i) => i % 2 === 1)] : [rows];
+
+  // Model lists for the quick select load once, the first time a card opens.
+  const wantModels = expanded !== null && providers.length > 0;
+  useEffect(() => {
+    if (!wantModels) return;
+    for (const p of providers) {
+      if (models[p.id]) continue;
+      api.models(p.id).then((r) => setModels((m) => ({ ...m, [p.id]: r.models ?? [] }))).catch(() => setModels((m) => ({ ...m, [p.id]: [] })));
+    }
+  }, [wantModels, providers]);
 
   const saved = (next: Orchestrator, msg: string) => {
     setOrch(next);
@@ -74,15 +98,25 @@ export default function WorkersSection({ onGoTools, onChanged, embedded }: { onG
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-2">
-        {rows.map((r) => <WorkerCard key={r.key} row={r} detected={detected(r.cfg.agent)} onOpen={() => setOpened(r.key)} />)}
-      </div>
+      {rows.length > 0 && <div className="grid items-start gap-3 md:grid-cols-2">
+        {columns.map((col, i) => (
+          <div key={i} className="space-y-3">
+            {col.map((r) => (
+              <WorkerCard key={r.key} row={r} detected={detected(r.cfg.agent)} expanded={expanded === r.key}
+                onToggle={() => setExpanded((k) => (k === r.key ? null : r.key))}>
+                <QuickPanel row={r} providers={providers} models={models} onDetail={() => setOpened(r.key)}
+                  onSaved={(next) => { setOrch(next); onChanged?.(); loadStatus(); }} />
+              </WorkerCard>
+            ))}
+          </div>
+        ))}
+      </div>}
 
       <NewWorkerSheet open={creating} onClose={() => setCreating(false)} agents={agents} providers={providers} workers={workers} onGoTools={onGoTools}
         onCreated={(next, name) => { setCreating(false); saved(next, `已添加 ${name}`); }} />
       <WorkerSheet row={current} onClose={() => setOpened(null)} agents={agents} providers={providers} workers={workers}
         detected={current ? detected(current.cfg.agent) : true} onGoTools={onGoTools}
-        onSaved={(next, key, msg) => { saved(next, msg); setOpened(key); }}
+        onSaved={(next, key, msg) => { saved(next, msg); setOpened(key); setExpanded((k) => (k === current?.key ? key : k)); }}
         onRemoved={(next, name) => { setOpened(null); saved(next, `已删除 ${name}`); }} />
     </div>
   );
@@ -95,26 +129,139 @@ function StatusTag({ row, detected }: { row: WorkerRow; detected: boolean }) {
   return <Tag tone="ok">空闲</Tag>;
 }
 
-function WorkerCard({ row, detected, onOpen }: { row: WorkerRow; detected: boolean; onOpen: () => void }) {
+function WorkerCard({ row, detected, expanded, onToggle, children }: {
+  row: WorkerRow; detected: boolean; expanded: boolean; onToggle: () => void; children: React.ReactNode;
+}) {
   const st = row.st;
   const tokens = (st?.tokens_in ?? 0) + (st?.tokens_out ?? 0);
+  const panelId = `fc-worker-quick-${row.key}`;
   return (
-    <button type="button" onClick={onOpen}
-      className={`group flex w-full items-start gap-3 rounded-2xl border bg-white p-4 text-left shadow-sm shadow-zinc-900/5 transition-colors hover:border-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50 dark:bg-zinc-900 dark:hover:border-zinc-700 ${
-        st?.busy ? "border-amber-300/70 dark:border-amber-500/40" : "border-zinc-200/80 dark:border-zinc-800"} ${row.cfg.enabled ? "" : "opacity-70"}`}>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate font-medium">{row.key}</span>
-          <StatusTag row={row} detected={detected} />
+    <div className={`rounded-2xl border bg-white shadow-sm shadow-zinc-900/5 transition-colors dark:bg-zinc-900 ${
+      st?.busy ? "border-amber-300/70 dark:border-amber-500/40" : expanded ? "border-indigo-300 dark:border-indigo-500/50" : "border-zinc-200/80 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"}`}>
+      <button type="button" onClick={onToggle} aria-expanded={expanded} aria-controls={panelId}
+        className={`group flex w-full items-start gap-3 rounded-2xl p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50 ${row.cfg.enabled ? "" : "opacity-70"}`}>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate font-medium">{row.key}</span>
+            <StatusTag row={row} detected={detected} />
+          </div>
+          <p className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400">{toolLabel(row.cfg.agent)} · {placeText(row.cfg)}</p>
+          {st?.busy && st.task && <p className="mt-2 line-clamp-2 text-sm text-zinc-700 dark:text-zinc-200">{st.task}</p>}
+          <p className="mt-2 text-xs text-zinc-400">
+            {st && st.calls > 0 ? `跑过 ${st.calls} 次 · ${tokensText(tokens)} tokens · $${(st.cost_usd ?? 0).toFixed(2)}${st.last_run ? ` · ${agoText(st.last_run)}` : ""}` : "还没跑过"}
+          </p>
         </div>
-        <p className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400">{toolLabel(row.cfg.agent)} · {placeText(row.cfg)}</p>
-        {st?.busy && st.task && <p className="mt-2 line-clamp-2 text-sm text-zinc-700 dark:text-zinc-200">{st.task}</p>}
-        <p className="mt-2 text-xs text-zinc-400">
-          {st && st.calls > 0 ? `跑过 ${st.calls} 次 · ${tokensText(tokens)} tokens · $${(st.cost_usd ?? 0).toFixed(2)}${st.last_run ? ` · ${agoText(st.last_run)}` : ""}` : "还没跑过"}
-        </p>
+        <ChevronDown size={18} className={`mt-0.5 shrink-0 transition-transform duration-200 ${expanded ? "rotate-180 text-indigo-500" : "text-zinc-300 group-hover:text-zinc-500 dark:text-zinc-600"}`} />
+      </button>
+      {expanded && <div id={panelId} className="fc-drop border-t border-zinc-200/80 dark:border-zinc-800">{children}</div>}
+    </div>
+  );
+}
+
+// patchWorker re-reads the stored config and rewrites one worker by key;
+// returning null from fn removes it.
+async function patchWorker(key: string, fn: (w: WorkerSettings, others: WorkerSettings[]) => WorkerSettings | null) {
+  const out: { w: WorkerSettings | null } = { w: null };
+  const next = await updateOrchestrator((o) => {
+    const idx = o.workers.findIndex((w) => workerKey(w) === key);
+    if (idx < 0) throw new Error("这个 Worker 已经不在了，刷新一下页面");
+    const others = o.workers.filter((_, i) => i !== idx);
+    out.w = fn(o.workers[idx], others);
+    const list = [...o.workers];
+    if (out.w) list[idx] = out.w; else list.splice(idx, 1);
+    return { ...o, workers: list };
+  });
+  return { next, w: out.w };
+}
+
+// QuickPanel is the drop-down under an opened card: the changes people make
+// most, each saved the moment it is picked. Everything else is behind 详细变更.
+function QuickPanel({ row, providers, models, onSaved, onDetail }: {
+  row: WorkerRow; providers: Provider[]; models: Record<string, string[]>; onSaved: (next: Orchestrator) => void; onDetail: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!note?.ok) return;
+    const t = setTimeout(() => setNote(null), 2500);
+    return () => clearTimeout(t);
+  }, [note]);
+  const w = row.cfg;
+
+  const change = async (fn: (w: WorkerSettings) => WorkerSettings, text: string) => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const { next } = await patchWorker(row.key, (cur) => fn(cur));
+      onSaved(next);
+      setNote({ ok: true, text });
+    } catch (e) {
+      setNote({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const currentModel = modelValue(w.provider_id ?? "", (w.model ?? "").trim());
+  const listed = new Set([modelValue("", ""), ...providers.flatMap((p) => [modelValue(p.id, ""), ...(models[p.id] ?? []).map((m) => modelValue(p.id, m))])]);
+  const budget = w.max_budget_usd ?? 5;
+  const memory = w.memory || "notes";
+  const ctl = `${selectCls} h-10 py-0`;
+  const rowCls = "flex min-h-14 items-center justify-between gap-3 px-4 py-2";
+  // Label keeps one line; the select takes the rest of the row (capped on wide cards).
+  const pick = (label: string, select: React.ReactNode) => (
+    <label className={rowCls}>
+      <span className="shrink-0 whitespace-nowrap text-sm">{label}</span>
+      <span className="min-w-0 max-w-60 flex-1">{select}</span>
+    </label>
+  );
+
+  return (
+    <div className="divide-y divide-zinc-100 dark:divide-zinc-800/80">
+      <div className={rowCls}>
+        <span className="text-sm">接活</span>
+        <Switch label="接活" checked={w.enabled} disabled={busy}
+          onChange={(v) => void change((cur) => ({ ...cur, enabled: v }), v ? "已启用，大脑会派活给它" : "已停用，大脑不会再派活给它")} />
       </div>
-      <ChevronRight size={18} className="mt-0.5 shrink-0 text-zinc-300 transition-colors group-hover:text-zinc-500 dark:text-zinc-600" />
-    </button>
+      {pick("模型", <Select className={ctl} value={currentModel} disabled={busy} aria-label="模型"
+          onChange={(e) => {
+            const v = parseModelValue(e.target.value);
+            void change((cur) => ({ ...cur, provider_id: v.provider, model: v.model }), `模型改为 ${modelText({ provider_id: v.provider, model: v.model }, providers)}`);
+          }}>
+          <option value={modelValue("", "")}>工具自己的设置</option>
+          {!listed.has(currentModel) && <option value={currentModel}>{modelText(w, providers)}</option>}
+          {providers.map((p) => (
+            <optgroup key={p.id} label={p.name || p.id}>
+              <option value={modelValue(p.id, "")}>{p.name || p.id} · 默认模型</option>
+              {(models[p.id] ?? []).map((m) => <option key={m} value={modelValue(p.id, m)}>{m}</option>)}
+            </optgroup>
+          ))}
+        </Select>)}
+      {pick("每次最多花", <Select className={ctl} value={String(budget)} disabled={busy} aria-label="每次最多花费"
+          onChange={(e) => { const v = Number(e.target.value); void change((cur) => ({ ...cur, max_budget_usd: v }), `每次最多花 $${v}`); }}>
+          {budgetChoices(budget).map((v) => <option key={v} value={String(v)}>${v}</option>)}
+        </Select>)}
+      {pick("记忆", <Select className={ctl} value={memory} disabled={busy} aria-label="记忆"
+          onChange={(e) => { const v = e.target.value; void change((cur) => ({ ...cur, memory: v }), `记忆改为「${MEMORY_LABELS[v] ?? v}」`); }}>
+          {Object.entries(MEMORY_LABELS).map(([id, label]) => <option key={id} value={id}>{label}{id === "notes" ? "（推荐）" : ""}</option>)}
+          {!(memory in MEMORY_LABELS) && <option value={memory}>{memory}</option>}
+        </Select>)}
+      <div className="space-y-2 px-4 py-3">
+        <p role="status" aria-live="polite" className={`flex min-h-5 items-center gap-1.5 text-xs ${note?.ok === false ? "text-red-600 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`}>
+          {busy ? <><LoaderCircle size={13} className="animate-spin text-zinc-400" /><span className="text-zinc-500">保存中…</span></>
+            : note ? <>{note.ok ? <Check size={13} /> : <CircleAlert size={13} />}{note.text}</>
+            : <span className="truncate text-zinc-500 dark:text-zinc-400">{modelText(w, providers)} · ${budget} · 记忆：{MEMORY_LABELS[memory] ?? memory}</span>}
+        </p>
+        <div className="flex gap-2">
+          <Button variant="outline" className="h-10 flex-1 sm:flex-none" title={`复制 @${row.key}，粘到对话里点名`}
+            onClick={async () => { if (await copyText(`@${row.key} `)) { setCopied(true); setTimeout(() => setCopied(false), 1500); } }}>
+            {copied ? <Check size={15} /> : <AtSign size={15} />} {copied ? "已复制" : "点名"}
+          </Button>
+          <Button variant="outline" className="h-10 flex-1" onClick={onDetail}><SlidersHorizontal size={15} /> 详细变更</Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -199,17 +346,8 @@ function WorkerSheet({ row, onClose, agents, providers, workers, detected, onGoT
     setBusy(true);
     setErr("");
     try {
-      const out: { w: WorkerSettings | null } = { w: null };
-      const next = await updateOrchestrator((o) => {
-        const idx = o.workers.findIndex((w) => workerKey(w) === row.key);
-        if (idx < 0) throw new Error("这个 Worker 已经不在了，刷新一下页面");
-        const others = o.workers.filter((_, i) => i !== idx);
-        out.w = fn(o.workers[idx], others);
-        const list = [...o.workers];
-        if (out.w) list[idx] = out.w; else list.splice(idx, 1);
-        return { ...o, workers: list };
-      });
-      if (out.w) onSaved(next, workerKey(out.w), msg(out.w));
+      const { next, w } = await patchWorker(row.key, fn);
+      if (w) onSaved(next, workerKey(w), msg(w));
       else onRemoved(next, row.key);
     } catch (e) {
       setErr((e as Error).message);
