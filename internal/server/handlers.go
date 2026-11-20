@@ -518,6 +518,13 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user := s.auth.User(r)
+		// Persist the user task on the direct background path: the brain turn
+		// records its own message, but the @-mention single-shot path had no
+		// transcript of what was asked (parity with the interactive run path).
+		if _, err := s.store.AppendMessage(req.ConversationID, "user", req.Task, "{}"); err != nil {
+			serverError(w, err, http.StatusInternalServerError)
+			return
+		}
 		settings := s.agentSettings(cli)
 		budget := settings.MaxBudgetUSD
 		if wk != nil && wk.MaxBudgetUSD > 0 {

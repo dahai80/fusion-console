@@ -183,7 +183,16 @@ func TestDispatchBlockedReceipt(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(msgs) != 0 {
+				// The user task is persisted up front; wait for the assistant
+				// receipt, not just any message.
+				hasReceipt := false
+				for _, m := range msgs {
+					if m.Role == "assistant" {
+						hasReceipt = true
+						break
+					}
+				}
+				if hasReceipt {
 					break
 				}
 				if time.Now().After(deadline) {
@@ -191,7 +200,13 @@ func TestDispatchBlockedReceipt(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond * 5)
 			}
-			if len(msgs) != 1 || !strings.Contains(msgs[0].Meta, `"status":"`+tc.status+`"`) {
+			var receipt []store.Message
+			for _, m := range msgs {
+				if m.Role == "assistant" {
+					receipt = append(receipt, m)
+				}
+			}
+			if len(receipt) != 1 || !strings.Contains(receipt[0].Meta, `"status":"`+tc.status+`"`) {
 				t.Fatalf("wrong receipt: %+v", msgs)
 			}
 			if tc.requiresRepo != (len(a.starts) == 0) {
@@ -211,13 +226,13 @@ func TestDispatchBlockedReceipt(t *testing.T) {
 					t.Fatalf("wrong card: %s", w.Body.String())
 				}
 				if tc.status == "blocked" {
-					if run.Detail == "" || !strings.Contains(msgs[0].Content, " blocked —") || !strings.Contains(msgs[0].Content, run.Detail) {
-						t.Fatalf("card/receipt mismatch: %+v %q", run, msgs[0].Content)
+					if run.Detail == "" || !strings.Contains(receipt[0].Content, " blocked —") || !strings.Contains(receipt[0].Content, run.Detail) {
+						t.Fatalf("card/receipt mismatch: %+v %q", run, receipt[0].Content)
 					}
 					if tc.result == envelope && run.Detail != "Need project approval" {
 						t.Fatalf("reason = %q", run.Detail)
 					}
-				} else if run.Result != tc.result || !strings.Contains(msgs[0].Content, " finished —") {
+				} else if run.Result != tc.result || !strings.Contains(receipt[0].Content, " finished —") {
 					t.Fatalf("wrong successful result: %+v", run)
 				}
 			}
