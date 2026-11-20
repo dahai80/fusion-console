@@ -1,427 +1,348 @@
 # fusion-console
 
-[English](README.md) | [中文](README_CN.md) | [🚀 Start Guide](docs/START_GUIDE.md)
+[English](README.md) | [中文](README_CN.md) · [Start guide](docs/START_GUIDE.md) · [Remote access](deploy/TAILSCALE.md) · [Releases](https://github.com/dahai80/fusion-console/releases)
 
-A cross-platform coding-agent console in a single Go binary: browser thin
-client (desktop + phone), server runs on any office host (Windows / Ubuntu /
-macOS). Chat with cloud LLM providers or the local `fusion-gateway`, and hand
-tasks to headless coding agents (Claude Code, fusion-code, Codex, OpenCode).
+A browser console for coding agents, shipped as one Go binary. Run it on any
+office machine (macOS, Ubuntu, Windows), open it from a desktop browser or your
+phone, chat with cloud or local LLMs, and let the chat model hand real coding
+work to the agent CLIs installed on that machine — Claude Code, Codex,
+OpenCode, fusion-code.
 
-Design docs: `insight/fusion-console-design-2026-11.md` and
-`insight/fusion-console-remote-access-plan-2026-11.md` in the fusion monorepo.
+- **One binary, no runtime to install.** Server and web UI are embedded; data
+  is a SQLite file and a JSON config.
+- **Chat that can delegate.** Turn on `orchestrate` and the model you are
+  chatting with becomes the *brain*: it splits the task, dispatches workers,
+  reads their output and reports back. Every dispatch can wait for your
+  approval.
+- **Real agents, real repos.** Workers are local CLIs bound to a directory, a
+  git worktree or a GitHub repository, each with its own budget cap.
+- **One gateway, one ledger.** Model keys live in the bundled
+  [fusion-gateway](https://github.com/dahai80/fusion-gateway); the console
+  only holds a gateway key in the OS keychain. Token usage for the brain and
+  every worker shows up on one dashboard.
+- **Private by design.** Listens on `127.0.0.1` only. Remote use goes through
+  Tailscale (with an optional self-hosted relay); login is always on.
 
-On macOS, the optional per-user installer adds manual and automatic updates beside the theme switch. [Installation guide](deploy/README.md#macos-user-installation-with-updates)
+## Contents
 
-## Orchestration: chat commands the agents
+- [How it fits together](#how-it-fits-together)
+- [Quick start](#quick-start)
+- [First-run wizard](#first-run-wizard)
+- [Everyday use](#everyday-use)
+- [Remote access from your phone](#remote-access-from-your-phone)
+- [Orchestration in depth](#orchestration-in-depth)
+- [Configuration reference](#configuration-reference)
+- [Adding models to fusion-gateway by hand](#adding-models-to-fusion-gateway-by-hand)
+- [Build and develop](#build-and-develop)
+- [Security model](#security-model)
+- [Troubleshooting](#troubleshooting)
+- [Scope](#scope)
 
-Enable orchestration (Settings → Orchestration, or the onboarding wizard) and
-your chat becomes the **brain**: it gets native tool calls — `list_agents`,
-`run_agent`, `read_artifact` — and decides on its own when to dispatch a task
-to a headless agent, collect the result, verify artifacts, and report back
-(bounded at 8 planner iterations per turn). There is no separate "brain agent"
-to configure — the brain is the model you are chatting with. Alternatively set
-the brain to **claude code**: each orchestrated turn then runs a `claude` CLI
-session in the brain work dir with the same dispatch tools exposed over MCP
-(`fusion-console mcp` subcommand); cost rows are booked as `brain:claude`.
-Its work
-directory (artifact sandbox for `read_artifact` and the worktree parent) is
-configurable in the Workers tab; the default is `~/.fusion/fusion-console/agents`.
-The brain can also be bound to a code source: a GitHub URL (cloned into the
-brain work dir and fast-forward-pulled before every dispatch, local changes
-never overwritten) or a local repo path (used as the brain workspace as-is).
+## How it fits together
 
-Teaching the brain your conventions: `brain_context_files` (Workers tab,
-one path per line) are injected into the planner prompt, capped at 12 KB —
-point them at a working-conventions doc and a repo inventory. A claude code
-brain additionally reads `CLAUDE.md` from its work dir, so on a fresh install
-copying your conventions file into the brain work dir is enough. Workers are
-repo-bound: the console rejects dispatches that target a repository the
-worker is not bound to; cross-repo work should be filed as an issue in that
-repo instead.
+```
+ Browser (desktop / phone)
+        │  HTTPS via tailscale serve, or http://127.0.0.1:11480 locally
+        ▼
+ fusion-console :11480 ──────────────► fusion-gateway :11432 ──► cloud LLMs (DeepSeek, Qwen,
+   chat · brain · dashboard              one key, one ledger      Kimi, Claude, OpenRouter …)
+   SQLite + config.json                                       └─► local engines (fusion-mlx …)
+        │
+        └─ spawns headless agent CLIs (workers) in their own workspaces
+             claude · codex · opencode · fusion-code
+```
 
-Each worker agent runs in its own directory, in one of three source modes:
+Optional add-ons, each installed only when you click it: fusion-rag
+(knowledge base), fusion-code, fusion-mlx (local models on Apple Silicon),
+fusion-agent-studio (teams).
 
-- **standalone** — a fixed dedicated workspace per agent, shared across tasks
-- **worktree** — each dispatch creates a fresh detached `git worktree` of a
-  local repo (whitelist-enforced) and works there
-- **github** — the worker is bound to a GitHub repository URL: the first
-  dispatch clones it into the work dir, later dispatches fetch and
-  fast-forward to the latest commit; a dirty tree or local commits are
-  reported as a warning and never overwritten
+## Quick start
 
-Guardrails are always on: workers can be disabled individually, per-worker
-budget caps, one agent subprocess at a time, every dispatch passes the
-fusion-harness tool-admission chain (fail-closed when the sidecar is down).
-In `confirm` mode every `run_agent` dispatch waits for your approval in the
-browser; `auto` mode dispatches immediately; `off` disables the tools.
-Each worker can also be pinned to a configured provider plus a model override
-(wizard Workers step): the console injects `ANTHROPIC_*` or `OPENAI_*` env
-vars from the keychain key, overriding the CLI's own login; leave it unset to
-keep the CLI default. Worker memory defaults to the zero-dependency `notes`
-convention (NOTES.md in the workspace) and can be switched per worker to the
-fusion-memory hub or off.
+### Option A — release package (recommended)
 
-A new `@worker` conversation uses the worker’s configured directory when the first message omits one. For tasks that need an existing checkout, select **Requires Git repository** when mentioning a worker, or set `requires_repo: true` on `run_agent`. If the workspace lacks a Git working tree, the dispatch card and conversation show **blocked** before the worker CLI starts. Set the worker’s directory to a checkout or bind its GitHub source in **Agents → Workers**, then retry. Tasks can also report a missing prerequisite with a final JSON object such as `{"status":"blocked","reason":"Need the input dataset"}`.
+Download the package for your machine from
+[Releases](https://github.com/dahai80/fusion-console/releases/latest):
 
-## Quickstart (3 commands)
+| Machine | File |
+|---|---|
+| macOS (Apple Silicon or Intel) | `fusion-console-<version>-darwin-universal.dmg` |
+| macOS, tarball | `fusion-console-<version>-darwin-arm64.tar.gz` / `-darwin-amd64.tar.gz` |
+| Linux x86_64 / arm64 | `fusion-console-<version>-linux-amd64.tar.gz` / `-linux-arm64.tar.gz` |
+| Windows x64 | `fusion-console-<version>-windows-amd64.zip` |
+
+Each package contains `fusion-console`, the matching `fusion-gateway`, the
+harness sidecar, a ready-to-run gateway `config.yaml` and a start script.
+
+```bash
+# macOS / Linux: unpack, then from the package folder
+./startup.sh          # starts gateway + console, opens the browser already signed in
+# Windows: double-click startup.cmd
+```
+
+The browser lands in the setup wizard. Five minutes later you can chat.
+
+### Option B — from source
+
+Requires Go 1.26+ and [Bun](https://bun.sh).
 
 ```bash
 git clone https://github.com/dahai80/fusion-console && cd fusion-console
-./scripts/package.sh            # or: make web && make build
-./startup.sh                # gateway + console + browser (auto-login)
+make web && make build           # SPA into internal/server/webdist, binary into bin/
+./scripts/start.sh start --open  # or just ./bin/fusion-console
 ```
 
-### Install via pip (no clone)
+A source build does not include `fusion-gateway`; the wizard offers to
+download it, or run `./scripts/package.sh` to produce the same bundle as a
+release.
 
-Platform wheels bundle the prebuilt binary (same distribution model as
-ruff/uv); pip installs a `fusion-console` command that runs it directly:
+### Sign in
 
-```bash
-pip install fusion-console          # picks the wheel for your platform
-fusion-console --open=false         # headless start; add -open for browser auto-login
-```
+Open `http://127.0.0.1:11480` and sign in as `admin` / `fusion-admin-2026`
+(factory default; when opened on the same machine the login form fills it in).
+Set `FUSION_CONSOLE_ADMIN_PASSWORD` before the first start to choose your own,
+and change the factory password before allowing any remote access — see
+[Security model](#security-model).
 
-Wheels cover macOS (arm64/x86_64), Linux (x86_64/arm64, manylinux2014) and
-Windows x86_64. On an unsupported platform, build from source with the
-Quickstart commands instead. Publishing new wheels: `make cross` then
-`scripts/pypi-build.sh <X.Y.Z>` and `twine upload dist-pypi/*`.
+## First-run wizard
 
-The first-run wizard walks you through provider → brain → workers; finish it
-and you land on the usage dashboard. Details: [docs/START_GUIDE.md](docs/START_GUIDE.md).
+The wizard opens by itself when no model is configured, and any time later
+from the avatar menu (top right), which also shows how far setup has got.
+Each step checks live state, so a re-run ticks off what is already done and
+jumps to the first open step.
 
-## What it does
-
-- **Chat** — streaming (SSE) conversations against any OpenAI-compatible or
-  Anthropic-compatible provider; `fusion-gateway` (:11432) is one provider
-  among many, never a hard dependency.
-- **Agent runs** — the same chat UI drives headless agent CLIs
-  (`claude -p --output-format stream-json`, `codex exec --json`,
-  `opencode run`, `fusion`). One task in, one normalized event stream out
-  (text / tool calls / result / cost).
-- **Orchestration (M1+M2)** — flip the `orchestrate` toggle in the chat
-  toolbar and the chat model becomes the main brain: it dispatches work to
-  headless agents with native tool-calls (`list_agents`, `run_agent`,
-  `read_artifact`), each agent running in its own dedicated workspace
-  (`~/.fusion/fusion-console/agents/<name>/`, per-agent `work_dir` override in
-  config). The loop is bounded (8 iterations); every dispatch passes the
-  [fusion-harness](https://github.com/dahai80/fusion-console) tool-admission
-  chain (deny-first, fail-closed) via a Python sidecar, and chat turns are
-  guarded by the same harness (context compaction + per-conversation token
-  budget). Cost rows stay separate: `chat:<provider>` for the planner vs
-  `agent:<name>` for dispatched runs. Background worker runs share a bounded
-  slot pool (4 concurrent by default) instead of serializing host-wide, and a
-  down console-managed gateway is auto-started before a chat turn dials it.
-  `@<worker>` mentions dispatch straight to the worker in the background (no
-  brain turn in front); `@<cli>` mentions keep the live-streaming run.
-- **Config UI** — providers + baseURL + model (fetched from `/v1/models`);
-  API keys stored in the OS keychain (Keychain / DPAPI / libsecret), never in
-  the config file.
-- **Cost accounting** — every turn lands in SQLite; per-day per-source report.
-- **Failure log (MAST taxonomy)** — orchestrator failures are auto-tagged
-  (`fc1_brief` on weak dispatch briefs with pre-flight warnings surfaced in
-  the chat tool feed, `fc3_tool` on agent errors) and accept manual notes
-  (`fc2_handoff`, `other`); the Dashboard **Failures** tab lists them and
-  exports JSONL for offline analysis ([MAST, arXiv 2503.13657]).
-- **Token economics** — the Usage tab shows the input:output ratio and the
-  brain-vs-worker token share, so planner overhead is visible at a glance;
-  the Workers tab shows each worker's per-run budget cap against lifetime
-  spend.
-- **Team view (optional agent-studio observer)** — when enabled in config
-  (`agentstudio` section; off by default), the console polls the
-  fusion-agent-studio daemon's WS JSON-RPC endpoint and renders a live team
-  board: tasks by status, member roster, health, limits, brief-quality
-  warnings and failure alerts. Pure observer — no team state is stored in
-  the console. Operations are limited to what the daemon exposes today
-  (task cancel/rerun, orchestrator limits). Secrets resolve from env
-  (`FUSION_WS_TOKEN`, `FUSION_CONSOLE_APIKEY_AGENT_STUDIO`) or keychain.
-- **Borrowed UX batch (issue #45)** — classified daemon failures surface as
-  bilingual reason-code cards; a run drawer replays each task's timestamped
-  event timeline with a usage footer; mid-run steering ([STEER] composer)
-  sends supplements to a running member with delivery receipts; blocked
-  tasks render wakeup cards (arm / wake now / cancel); member badges show
-  availability x workload with a distinct "offline + queued" stuck state;
-  worker worktrees replay uncommitted work-in-progress, pin a hidden ref
-  (`refs/console-tasks/<task>`), and are preserved with a marker on failed
-  delivery for one-click re-dispatch.
-- **Multi-user (light)** — per-user bcrypt passwords, HttpOnly session cookies,
-  login required even inside the tailnet.
-- **Knowledge Base (optional fusion-rag)** — nothing is downloaded until you
-  click *Download & install* in the Knowledge Base menu. The installer
-  pip-installs fusion-rag (and its fusion-core dependency) from PyPI —
-  Tsinghua mirror first, official PyPI as a secondary index for packages the
-  mirror has not synced yet. Once running,
-  the console proxies the RAG management UI same-origin at
-  `/shell/fusion-rag/`, and every chat gains `kb_search` / `kb_ask` tools over
-  MCP (JSON-RPC against the RAG `/mcp` endpoint; a missing `kb_id` resolves to
-  the first knowledge base). Toggle exposure in chat from the menu.
-- **Coding Agent (optional fusion-code / claude / codex)** — a dropdown installs
-  whichever headless coding agent CLI you want, nothing pre-downloaded.
-  fusion-code is built from the GitHub source with bun (service + web console
-  proxied at `/shell/fusion-code/`; first open asks you to bind an API key —
-  the console copies the provider key from the OS keychain into
-  `~/.fusion-code/settings.json`, never displaying it). Claude Code and Codex
-  install via `npm install -g` and are then dispatchable from the Agents page.
-  Installer overrides: `FUSION_CODE_DOWNLOAD_URL`.
-
-## What it deliberately does NOT do
-
-- No DAG orchestration / issue queues — use `fusion-cowork`
-  or `fusion-agent-studio` (the chat-as-brain loop here is single-level
-  dispatch only).
-- No PTY interactive terminal (planned for v2).
-- No public internet exposure, no SSO, no cloud sync.
-
-### Harness sidecar
-
-The guards run the real fusion-harness Python implementation (no Go
-re-implementation) through `sidecar/harnessd.py`, spawned with a Python that
-can `import fusion_harness`. The console checks `FUSION_CONSOLE_HARNESS_PYTHON`
-first, then the installation and workspace virtual environments. On macOS and
-Linux it also tries `python3` and `python` on PATH. With `harness.enabled`
-set in `config.json`, chat stops before the model call if the sidecar cannot start.
-Check the startup log and point `FUSION_CONSOLE_HARNESS_PYTHON` at the
-interpreter with `fusion-harness` installed. Kernel 0.22.0 supports guard
-checks and reports the token budget and lifecycle events. Kernel 0.23.0
-adds LLM metrics and failure attribution.
-
-## Build
-
-Requirements: Go 1.26+, [Bun](https://bun.sh).
-
-```bash
-make web        # build the SPA into internal/server/webdist (go:embed)
-make build      # host binary -> bin/fusion-console
-make cross      # darwin/linux/windows binaries (amd64+arm64)
-make test       # go test ./...
-```
-
-## Run
-
-> Step-by-step setup from a release download: [docs/START_GUIDE.md](docs/START_GUIDE.md) · [中文版](docs/START_GUIDE_CN.md)
-
-```bash
-./bin/fusion-console            # listens on 127.0.0.1:11480
-```
-
-Data dir: `~/.fusion/fusion-console` (override with `FUSION_CONSOLE_DIR`).
-First run creates user `admin` with the factory default password
-`fusion-admin-2026` (set `FUSION_CONSOLE_ADMIN_PASSWORD` before first start
-to override) — change it after first login on any non-local deployment.
-
-Developer quick start — one command starts everything (gateway if bundled,
-console, then your default browser with one-time auto-login):
-
-```bash
-./startup.sh        # macOS / Linux    (Windows: startup.cmd)
-```
-
-Open `http://127.0.0.1:11480`, sign in, then:
-
-1. First run opens the setup wizard: pick a provider, hit **Test call** to
-   verify endpoint + key + model, choose the brain agent and workers
-   (isolation + budget per worker).
-2. Open **Dashboard → Overview** for the dispatch queue, running tasks, worker availability, the execution timeline and period-selectable brain and per-worker token usage (UTC). Finish estimates use the median of the latest 3–10 completed runs for the same worker. Switch to **Sample → Next event** to try a queue transition. **Usage** retains the day/week/month/all reports.
-   Chat → pick the provider, send a message; flip `orchestrate` to let the
-   brain dispatch workers (confirm mode asks you per dispatch).
-
-Headless hosts without a keychain: export
-`FUSION_CONSOLE_APIKEY_<KEY_ID_UPPERCASE>` instead.
-
-## End-to-end setup with fusion-gateway
-
-[fusion-gateway](https://github.com/dahai80/fusion-gateway) is the local
-mixed-inference gateway (OpenAI-compatible, default port `11432`). The
-console talks to it like any OpenAI-compatible provider — verified end to
-end with `glm-5`.
-
-### 1. Start the gateway
-
-On the same host (or any reachable host):
-
-```bash
-~/fusion/fusion-gateway/start.sh start     # listens on 0.0.0.0:11432
-curl -s http://127.0.0.1:11432/api/health  # health check
-```
-
-### 2. Get (or create) a gateway client API key
-
-Gateway client keys live in `~/fusion/fusion-gateway/config.yaml` under
-`auth.api_keys`. Pick a key whose `allowed_models` covers your model (e.g.
-`glm*`), or add one:
-
-```yaml
-auth:
-  api_keys:
-    - name: fusion-console
-      key: fsx-fusion-console-<random-hex>
-      allowed_models: ["glm*", "gpt-4o*", "claude-*"]
-      rpm: 60
-      tpm: 100000
-```
-
-Restart the gateway after editing. The console never needs the upstream
-provider keys — the gateway holds those.
-
-### 3. Store the key in the console
-
-Console UI → Settings → **API key (stored in OS keychain)**:
-
-- key id: `gw-main` (any stable id; this is the keychain reference name)
-- secret: paste the gateway client key (`fsx-...`)
-
-### 4. Add the gateway provider
-
-Same page, **Edit / add provider**:
-
-| Field | Value |
+| Step | What it does |
 |---|---|
-| id | `gw-main` (must match the key id above) |
-| name | `fusion-gateway` |
-| type | `fusion-gateway` |
-| base URL | `http://127.0.0.1:11432/v1` (use the host IP if the gateway runs on another machine) |
-| model | `glm-5` |
-| enabled | ✓ |
+| 1. Start the gateway | Starts (or installs) the bundled fusion-gateway and creates the console's gateway API key in one click. The key goes to the OS keychain and a gateway model source is added automatically. |
+| 2. Add a model | Pick a vendor (DeepSeek, Qwen/DashScope, Kimi, Zhipu, MiniMax, OpenRouter, Anthropic or any OpenAI-compatible endpoint), paste its API key and model ids. Vendor presets fill the base URL. |
+| 3. Try it | Sends a short test prompt. A reply means gateway, key and model work end to end. |
+| 4. Brain & workers *(optional)* | Choose how dispatches are approved, see which agent CLIs were detected, and add workers. |
 
-Click **Save provider**, then **Fetch models** to list what the gateway
-exposes and pick one.
+After that: **Start chatting**.
 
-### 5. Verify
+## Everyday use
 
-Chat page → select the `fusion-gateway` provider → send "Reply with exactly:
-E2E-OK". You should see a streamed reply plus token usage under the bubble.
-The message and usage are persisted in SQLite and show up in the cost report
-(`GET /api/costs`).
+- **Chat** — streaming conversations; switch model per conversation from the
+  header. Attach files, use voice input on supported browsers.
+- **`@worker`** — mention a worker to send it a task straight away in the
+  background. Tick **Requires Git repository** when the task needs a checkout.
+- **`orchestrate`** — the toggle beside the input box (on by default) lets the
+  brain dispatch workers itself. In *confirm* mode each dispatch shows an
+  approval card.
+- **Task rail** — running and queued dispatches with their stage, collapsible
+  to a status bubble on phones.
+- **Dashboard** — dispatch queue, running tasks, worker availability, an
+  execution timeline, and token usage for the brain and each worker
+  (today / 7 days / 30 days / all time, calendar, chart or table view).
+- **Agents** — detected CLIs, the brain settings and the worker fleet.
+- **Gateway** — gateway status, keys, cloud backends; the **Models** tab
+  manages model sources, including direct OpenAI/Anthropic-compatible
+  endpoints that bypass the gateway.
+- **Knowledge Base** — one-click fusion-rag install; chats then get
+  `kb_search` / `kb_ask` tools.
+- **Team** — live boards for fusion-agent-studio teams created from the Team
+  page or from chat.
+- **Updates (macOS)** — the update button beside the theme switch installs new
+  builds; see [deploy/README.md](deploy/README.md#macos-user-installation-with-updates).
 
-Troubleshooting:
+## Remote access from your phone
 
-- `401 auth_error` — the key is wrong or not in the gateway config
-- `model not allowed` — the key's `allowed_models` does not cover `glm-5`
-- Connection refused — gateway not running, or the console and gateway are
-  on different hosts with a firewall in between
+fusion-console never opens a public port. To use it away from the office:
 
-## Appendix: configuring models in fusion-gateway
+1. Install Tailscale on the office machine and your phone, same account.
+2. Publish the console inside your tailnet: `tailscale serve --bg 11480`.
+3. Open `https://<machine>.<tailnet>.ts.net` on the phone and sign in.
 
-The console only sees models the gateway exposes. A model must exist in the
-gateway config (all in `~/fusion/fusion-gateway/config.yaml`), then restart
-the gateway (`~/fusion/fusion-gateway/start.sh restart`). Three places:
+When the phone sits behind mobile-carrier NAT, traffic falls back to a relay.
+Tailscale's shared relays can be slow from mainland China, so the guide also
+shows how to run your own relay (DERP) on a small Hong Kong VPS with one
+script, [`deploy/tailscale/setup-derp.sh`](deploy/tailscale/setup-derp.sh).
 
-### 1. Backend — where the model actually runs
+Full walkthrough: **[deploy/TAILSCALE.md](deploy/TAILSCALE.md)** ·
+**[中文版](deploy/TAILSCALE_CN.md)** (more detailed).
 
-`backends:` maps a backend name to an upstream endpoint. One entry per
-upstream; `type` decides the wire protocol (`openai-compatible` or
-`anthropic`):
+## Orchestration in depth
+
+**Brain.** With `orchestrate` on, the chat model gets three native tools —
+`list_agents`, `run_agent`, `read_artifact` — and a planner loop bounded at 8
+iterations per turn. Two brain modes (Agents → Workers → Brain):
+
+- *chat model* (default): the planner prompt includes the workspace config
+  and up to 12 KB of `brain_context_files` (one path per line: working
+  conventions, repo inventory).
+- *claude code*: each orchestrated turn runs a `claude` session in the brain
+  work dir, with the same dispatch tools exposed over MCP
+  (`fusion-console mcp`). It also reads `CLAUDE.md` from that directory.
+
+The brain work dir (default `~/.fusion/fusion-console/agents`) is the
+sandbox for `read_artifact` and the parent of worker worktrees. It can be
+bound to a GitHub URL (cloned, fast-forwarded before each dispatch, local
+changes never overwritten) or a local repository.
+
+**Workers.** Each worker is an agent CLI plus a workspace, in one of three
+modes:
+
+| Mode | Behaviour |
+|---|---|
+| `standalone` | One fixed directory per worker, shared across tasks |
+| `worktree` | Each dispatch gets a fresh detached `git worktree` of a whitelisted local repo |
+| `github` | Bound to a repository URL: cloned on first dispatch, fetched and fast-forwarded later; a dirty tree or local commits are reported, never overwritten |
+
+Workers are repo-bound: a dispatch to a repository the worker does not own
+is refused. Each worker can be pinned to a model source and model (the
+console injects `ANTHROPIC_*` / `OPENAI_*` variables from the keychain) and
+keeps notes in `NOTES.md` by default (or fusion-memory, or off).
+
+**Guardrails.** Per-worker enable switch and budget cap; background runs
+share a bounded pool (4 at a time by default) with a 48-hour per-run
+timeout; every dispatch passes the fusion-harness tool-admission chain,
+which fails closed when the sidecar is down. Approval modes: `confirm`
+(ask per dispatch), `auto` (dispatch within budget), `off` (no tools). A
+task can report a missing prerequisite with a final
+`{"status":"blocked","reason":"…"}`; the dispatch card then shows
+**blocked** instead of a false success.
+
+**Harness sidecar.** Guards run the Python fusion-harness through
+`sidecar/harnessd.py`. The console looks for an interpreter in
+`FUSION_CONSOLE_HARNESS_PYTHON`, then the install and workspace virtualenvs,
+then `python3` / `python` on PATH. With `harness.enabled` in `config.json`,
+chat stops before the model call if the sidecar cannot start. Kernel 0.22
+covers guard checks and budget reporting; 0.23 adds LLM metrics and failure
+attribution.
+
+**Accounting.** Planner turns are booked as `chat:<provider>` (or
+`brain:claude`), dispatched runs as `agent:<name>`. Failures are tagged with
+the MAST taxonomy (`fc1_brief`, `fc2_handoff`, `fc3_tool`) and exportable as
+JSONL from Dashboard → Failures.
+
+## Configuration reference
+
+**Files.** Data directory `~/.fusion/fusion-console/` (override with
+`FUSION_CONSOLE_DIR`): `config.json` (users, model sources, agents,
+orchestration — never key material), `console.db` (SQLite), `log/`.
+
+**Environment variables**
+
+| Variable | Purpose |
+|---|---|
+| `FUSION_CONSOLE_DIR` | Data directory |
+| `FUSION_CONSOLE_ADMIN_PASSWORD` | Initial `admin` password, read on the very first start only |
+| `FUSION_CONSOLE_APIKEY_<KEY_ID>` | API key for a keychain id (uppercase; e.g. `..._GATEWAY_KEY`) — for headless hosts without a keychain |
+| `FUSION_CONSOLE_HARNESS_PYTHON` | Python interpreter that can `import fusion_harness` |
+| `FUSION_STUDIO_SOCKET` | agent-studio daemon socket (default `/tmp/fusion-studio.sock`) |
+| `FUSION_CODE_DOWNLOAD_URL` | Alternate download source for the fusion-code installer |
+
+**Ports** (all bound to `127.0.0.1`)
+
+| Port | Service |
+|---|---|
+| 11480 | fusion-console |
+| 11432 | fusion-gateway |
+| 11434 | fusion-mlx (optional) |
+| 11436 | fusion-rag (optional) |
+| 11441 / 11482 | fusion-code API / web (optional) |
+
+**Command line.** `fusion-console` starts the server and opens the browser
+with a one-time sign-in link; use `-open=false` on headless hosts.
+`fusion-console mcp` runs the MCP stdio brain server.
+
+**Auto-start.** launchd (macOS), systemd (Linux) and Task Scheduler
+(Windows) recipes are in [deploy/README.md](deploy/README.md).
+
+## Adding models to fusion-gateway by hand
+
+The wizard and the Gateway page cover the common case. For anything else,
+edit the gateway's `config.yaml` (next to the gateway binary) and restart it.
 
 ```yaml
-backends:
-  glm-5:                        # backend name (referenced by supply below)
-    api_key: <upstream-key>     # the REAL provider key lives here, not in the console
-    base_url: https://<upstream-host>
+backends:                        # where models actually run
+  deepseek:
+    type: deepseek               # or openai-compatible, anthropic, zhipu, dashscope, …
+    base_url: https://api.deepseek.com   # without /v1 — the gateway appends it
+    api_key: sk-...              # the real vendor key lives here, never in the console
     enabled: true
-    timeout: 300s
-    type: anthropic             # or: openai-compatible
-  fusion-mlx:                   # local MLX engine is just another backend
-    api_key: mlx-<token>
-    base_url: http://127.0.0.1:11434
-    enabled: true
-    type: openai-compatible
-```
 
-### 2. Model supply — model name → backends
-
-`models.supply:` declares which model names the gateway serves and which
-backends can serve them (list = failover order):
-
-```yaml
 models:
-  supply:
-    glm-5:
-      - glm-5                  # model "glm-5" served by backend "glm-5"
-    glm-5.3-flash:
-      - volc-coding
-    qwen3.5-9b:
-      - fusion-mlx             # local model, appears after fusion-mlx loads it
-```
+  supply:                        # model id -> backends (list = failover order)
+    deepseek-chat: [deepseek]
 
-A model name here is exactly what the console's model dropdown shows and
-what goes into the provider's `model` field.
-
-### 3. Routing — cloud model registration and fallback
-
-`routing.cloud_models:` lists cloud model names (supports `claude-*`
-wildcards); `routing.fallback.model_mapping:` aliases other model names
-onto served ones, and `routing.fallback.cloud_default:` is the catch-all
-used when a request names an unknown cloud model:
-
-```yaml
 routing:
-  cloud_models:
-    - glm-5
-    - glm-5.3-flash
-    # ... add new cloud models here
+  cloud_models: [deepseek-chat]  # allowlist of cloud model ids (wildcards like claude-* work)
   fallback:
     enabled: true
-    cloud_default: glm-5       # unknown cloud models land here
-    model_mapping:
-      claude-sonnet-4-6: glm-5  # claude-family requests route to glm-5
+    cloud_default: deepseek-chat # unknown cloud model ids land here
 ```
 
-### 4. Verify from the console side
+Check what the console will see:
 
 ```bash
-curl -s http://127.0.0.1:11432/v1/models \
-  -H "Authorization: Bearer <gateway-client-key>" | python3 -m json.tool | grep '"id"'
+curl -s http://127.0.0.1:11432/v1/models -H "Authorization: Bearer <gateway-key>" | grep '"id"'
 ```
 
-Then in the console: Settings → select provider → **Fetch models** → pick
-the new model (or just type it into the provider's `model` field) → chat.
+## Build and develop
 
-Minimal path for "it must run today": gateway already ships with `glm-5`
-configured on the `glm-5` backend — steps 1–3 are only needed when adding a
-new model.
-
-## Remote access (Tailscale only)
-
-See [deploy/README.md](deploy/README.md). Short version: run
-`tailscale serve --bg 127.0.0.1:11480` on the office host and open
-`https://<host>.<tailnet>.ts.net` from any tailnet device. The application
-login is always on; no public exposure, ever.
-
-## Layout
-
-```
-cmd/console/          entry point
-internal/server/      HTTP routes, SSE, embedded SPA
-internal/chat/        Provider abstraction (OpenAI-compat, Anthropic-compat, gateway)
-internal/agent/       headless agent adapters + process lifecycle
-internal/config/      config file + OS keychain
-internal/auth/        bcrypt login + cookie sessions
-internal/store/       SQLite persistence (conversations, messages, cost log)
-web/                  React + Tailwind SPA source
-deploy/               launchd / systemd / schtasks + Tailscale guide
+```bash
+make web      # build the SPA (bun) into internal/server/webdist (go:embed)
+make build    # bin/fusion-console for this machine
+make cross    # darwin / linux / windows, amd64 + arm64
+make test     # go test ./... -count=1
+make vet fmt
+./scripts/package.sh vX.Y.Z   # release bundles, including the matching fusion-gateway
 ```
 
-## FAQ
+`internal/server/webdist` is committed build output: run `make web` before
+`go build`, or the binary serves stale UI.
 
-### Worker does not start: the work dir looks fine but the agent gets a literal `～/...` directory
+```
+cmd/console/        entry point (server, `mcp` subcommand)
+internal/server/    HTTP routes, SSE, orchestration, dispatch, embedded SPA
+internal/chat/      model sources: OpenAI-compatible, Anthropic-compatible, gateway
+internal/agent/     agent CLI adapters and subprocess lifecycle
+internal/harness/   fusion-harness sidecar client
+internal/config/    config.json and OS keychain
+internal/auth/      bcrypt login, cookie sessions
+internal/store/     SQLite (conversations, messages, costs)
+sidecar/            harnessd.py
+web/                React + Tailwind source
+deploy/             launchd / systemd units, remote access guides, relay script
+docs/               start guide, design notes
+```
 
-Typing a work dir like `~/fusion/fusion-site` with a Chinese IME often turns
-the ASCII `~` into a full-width `～` (and `~foo` without the slash never
-expands either). The console only expands a leading ASCII `~/`, so the agent
-receives a literal directory named `～/...` relative to the server cwd and
-appears to "lose" its workspace. **Always paste work dirs as absolute paths**
-(`/Users/<you>/fusion/fusion-site`, `C:\work\fusion-site`) — or at least an
-ASCII `~/...` — and check the Workers tab row if a worker keeps starting in
-the wrong place.
+## Security model
 
-### Worker stalls or "does nothing": `permission_mode` is too restrictive for headless runs
+- The server binds `127.0.0.1:11480`. Nothing is exposed to the internet;
+  never use `tailscale funnel` or port forwarding for it.
+- Login is required for every request, including inside the tailnet.
+  Passwords are bcrypt hashes in `config.json`.
+- **Change the factory password** before any remote use: generate a hash
+  with `htpasswd -bnBC 10 "" 'new-password' | tr -d ':\n'`, put it in the
+  `password_hash` of the `admin` entry in `config.json`, restart. Add more
+  users the same way.
+- API keys live in the OS keychain (Keychain / DPAPI / libsecret) or
+  `FUSION_CONSOLE_APIKEY_*`, never in config files.
+- Agents run in their declared workspaces with budget caps; keep the
+  approval mode on *confirm* if you dispatch from a phone.
 
-Workers run headless — nobody is at the terminal to answer prompts. The
-default `acceptEdits` only auto-approves file edits; anything else that needs
-confirmation (shell commands, network tools, depending on the CLI) blocks the
-run until the budget kills it. For unattended workers set
-**`permission_mode: bypassPermissions`** (Workers tab → worker detail). Keep
-the per-worker budget cap as the real safety boundary, and prefer `confirm`
-orchestration mode when you want to approve dispatches yourself.
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Forgot the console password | Write a new hash into `config.json` (see Security model) and restart; or delete `config.json` to reset to the factory admin (this also resets other settings) |
+| Wizard: creating the API key fails | The gateway admin password was changed — save the new admin credentials in the wizard's help section, then retry |
+| `401 auth_error` from the gateway | Wrong or deleted gateway key — recreate it from the avatar menu |
+| `model not allowed` / model missing | The model id is not in the gateway, or misspelled; ids must match the vendor's exactly |
+| Backend added but its models never appear | Wrong base URL (do not include `/v1`), wrong key, or the vendor is unreachable from this machine |
+| Agent greyed out | CLI not on PATH; install it or set an absolute `command` in `config.json` |
+| Agent exits immediately | Wrong work dir, or the CLI needs its own login on this machine |
+| Worker starts in a strange `～/…` directory | A Chinese IME turned `~` into full-width `～`; paste absolute paths |
+| Worker stalls with no output | Headless runs cannot answer prompts; use `permission_mode: bypassPermissions` for unattended workers and rely on the budget cap |
+| Copy button does nothing on the phone | The page is served over plain HTTP; use `tailscale serve --bg 11480` (HTTPS) as in the remote access guide |
+
+## Scope
+
+Deliberately out of scope: multi-level DAG orchestration and issue queues
+(use fusion-cowork or fusion-agent-studio — the brain here dispatches one
+level deep), an interactive PTY terminal (planned for v2), public internet
+exposure, SSO and cloud sync.
 
 ## License
 

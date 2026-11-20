@@ -6,83 +6,56 @@
 
 ## 1. 下载
 
-从 [v0.1.0](https://github.com/dahai80/fusion-console/releases/tag/v0.1.0) 下载对应主机系统的包：
+到[最新发布](https://github.com/dahai80/fusion-console/releases/latest)下载对应主机系统的包：
 
-| 主机 | 文件 | 内容 |
-|---|---|---|
-| macOS（Apple Silicon / Intel） | `fusion-console-0.1.0-darwin-universal.dmg` | universal 二进制 + 文档 |
-| Windows x64 | `fusion-console-0.1.0-windows-amd64.zip` | `fusion-console.exe` + 文档 |
-| Ubuntu x64 | `fusion-console-0.1.0-linux-amd64.tar.gz` | 二进制 + systemd unit + 文档 |
+| 主机 | 文件 |
+|---|---|
+| macOS（Apple Silicon / Intel） | `fusion-console-<版本>-darwin-universal.dmg` |
+| Linux x86_64 / arm64 | `fusion-console-<版本>-linux-amd64.tar.gz` / `-linux-arm64.tar.gz` |
+| Windows x64 | `fusion-console-<版本>-windows-amd64.zip` |
+
+每个包里都有 `fusion-console`、配套的 `fusion-gateway`、harness sidecar（`sidecar/harnessd.py`）、开箱即用的网关 `config.yaml`，以及 `startup.sh` / `startup.cmd`。
 
 ## 2. 安装
 
-**macOS**：打开 DMG，把 `fusion-console` 二进制拷到任意目录（如 `/usr/local/bin`）：
+整个包目录放在一起，console 会启动它旁边的网关。
 
-```bash
-hdiutil attach fusion-console-0.1.0-darwin-universal.dmg
-sudo cp /Volumes/fusion-console/fusion-console/fusion-console /usr/local/bin/
-hdiutil detach /Volumes/fusion-console
-```
-
-**Windows**：解压到任意目录（如 `C:\Tools\fusion-console\`），只需要 `fusion-console.exe`。
-
-**Ubuntu**：
-
-```bash
-tar xzf fusion-console-0.1.0-linux-amd64.tar.gz
-sudo mv fusion-console /usr/local/bin/
-sudo mv fusion-console.service /etc/systemd/system/fusion-console@.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now fusion-console@$USER   # 可选：开机自启
-```
+- **macOS**：打开 DMG，把 `fusion-console` 文件夹拷到固定位置，比如 `~/Applications/fusion-console`。
+- **Linux**：`tar xzf fusion-console-<版本>-linux-amd64.tar.gz -C ~/`。
+- **Windows**：解压到比如 `C:\Tools\fusion-console\`。
 
 ## 3. 首次启动与登录
 
 ```bash
-fusion-console                 # macOS / Ubuntu
-fusion-console.exe             # Windows
+cd ~/Applications/fusion-console   # 包目录
+./startup.sh                       # Windows：startup.cmd
 ```
 
-首次启动会：
+`startup.sh` 会启动随包网关和 console，然后用默认浏览器打开已经登录的页面。首次启动时会：
 
 1. 创建 `~/.fusion/fusion-console/`（配置 + SQLite 数据库）
-2. 创建 `admin` 用户，密码为出厂默认 `fusion-admin-2026`（首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD` 可覆盖）
+2. 创建 `admin` 用户，出厂密码 `fusion-admin-2026`（首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD` 可覆盖）
 3. 监听 `http://127.0.0.1:11480`
 
-浏览器打开 `http://127.0.0.1:11480`，用 `admin` / `fusion-admin-2026` 登录。
+手动登录：打开 `http://127.0.0.1:11480`，用 `admin` / `fusion-admin-2026`（在本机打开时会自动填好）。
 
-> 出厂默认密码仅为本机开发便利。console 暴露到本机之外（如 Tailscale）时，请首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD`，或登录后修改密码（加用户：编辑 `~/.fusion/fusion-console/config.json` 加 bcrypt hash 后重启）。
+> 出厂密码只适合本机使用。让其他设备访问之前（比如通过 Tailscale），先改掉，见 [安全模型](../README_CN.md#安全模型)。
 
-一键启动（macOS / Linux `./start.sh`，Windows `start.cmd`）：同时拉起随包附带的 fusion-gateway 和 console，并用系统默认浏览器打开已自动登录的页面。只需要再配 LLM（下一节）。
+## 4. 新手引导
 
-## 4. 接 LLM — fusion-gateway（推荐）
+还没配置模型时，浏览器会直接打开新手引导。之后随时可以从右上角头像菜单重新打开，菜单里也显示配置进度。
 
-release 包里已经附带对应平台的 `fusion-gateway` 二进制（代码仓独立，仅打包在一起），无需单独下载。Gateway 菜单点 **Download & install** 时优先使用包内副本，没有才从 GitHub 下载。
+1. **启动网关**：网关通常已经在跑，点 **一键创建** 给 console 发网关 API key。key 存进系统钥匙串，并自动添加 `fusion-gateway` 模型来源。
+2. **接入模型**：选厂商，粘贴 API key 和模型名（逗号分隔，和厂商文档完全一致）。常见厂商会自动填 Base URL；其他厂商自己填，**不要带** `/v1`。
+3. **试一次**：发一句很短的测试，模型回答了就说明整条链路是通的。
+4. **Brain 与 Worker**（可选）：选派工审批方式，查看检测到的 Agent 命令行，添加 Worker。只想聊天可以跳过。
 
-1. **拿网关客户端 key** — 找网关管理员，或看 `fusion-gateway/config.yaml` → `auth.api_keys`。key 的 `allowed_models` 要覆盖目标模型（如用 `glm-5` 需要 `glm*`）。
+最后点 **开始对话**。
 
-## 4. 接 LLM — fusion-gateway（推荐）
+## 5. 其他模型来源
 
-办公室跑着 [fusion-gateway](https://github.com/dahai80/fusion-gateway) 时（推荐 — 模型 key 留在网关，不进 console）：
-
-1. **拿网关客户端 key** — 找网关管理员，或看 `fusion-gateway/config.yaml` → `auth.api_keys`。key 的 `allowed_models` 要覆盖目标模型（如用 `glm-5` 需要 `glm*`）。
-2. **Console UI → Settings → API key**：key id 填 `gw-main`，secret 粘贴网关 key（`fsx-` 开头）。
-3. **Settings → Edit / add provider**：
-   - id：`gw-main`（与 key id 一致）
-   - type：`fusion-gateway`
-   - base URL：`http://<网关主机>:11432/v1`
-   - model：`glm-5`
-   - enabled：✓
-   - Save provider → Fetch models → 选模型
-4. **Chat 页** → 选 `fusion-gateway` → 发消息。看到流式回复和 token 统计即通。
-
-## 5. 接 LLM — 云端 provider（无网关）
-
-任何 OpenAI 兼容 / Anthropic 兼容 API 同理：
-
-1. Settings → API key：key id 如 `cloud-main`，secret 填 provider key
-2. Edit / add provider：type 选 `openai_compat`（或 `anthropic_compat`），base URL 填 `https://api.example.com/v1`，model 填 provider 的模型名
-3. Save → Fetch models → 对话
+- **另一台机器上的网关**：Gateway 页 → **Models** 标签 → **Add model source**，type 选 `fusion-gateway`，base URL 填 `http://<网关主机>:11432/v1`，key 用那台网关 `config.yaml` → `auth.api_keys` 里的客户端 key（`allowed_models` 要覆盖目标模型）。
+- **不经网关直连**：同一页面，type 选 `openai_compat` 或 `anthropic_compat`，填厂商的 base URL、模型和 API key。这样用量不进网关的账本。
 
 ## 6. 跑 coding agent
 

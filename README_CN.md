@@ -1,270 +1,261 @@
-# fusion-console（中文说明）
+# fusion-console
 
-[English](README.md) | [中文](README_CN.md) | [🚀 配置指南](docs/START_GUIDE_CN.md)
+[English](README.md) | [中文](README_CN.md) · [启动指南](docs/START_GUIDE_CN.md) · [远程访问](deploy/TAILSCALE_CN.md) · [下载](https://github.com/dahai80/fusion-console/releases)
 
-单 Go 二进制的跨平台 Coding Agent 控制台：浏览器瘦客户端（含手机），服务端跑在办公室任一主机（Windows / Ubuntu / macOS）。聊天直连云端 LLM 或本地 fusion-gateway，也可把任务交给 headless coding agent（Claude Code、fusion-code、Codex、OpenCode）。
+一个给编程 Agent 用的浏览器控制台，整个就是一个 Go 二进制。装在办公室任意一台机器上（macOS、Ubuntu、Windows），电脑浏览器或手机都能打开：和云端或本地大模型聊天，并让对话模型把真正的写代码工作交给这台机器上装好的 Agent 命令行——Claude Code、Codex、OpenCode、fusion-code。
 
-设计文档见 fusion 主仓 `insight/fusion-console-design-2026-11.md` 与 `insight/fusion-console-remote-access-plan-2026-11.md`。
-
-macOS 用户可以在主页明暗切换旁检查上游版本、手动安装，或启用空闲时自动更新。[安装说明](deploy/README.md#macos-user-installation-with-updates)
-
-## 编排：聊天指挥 Agent
-
-开启编排（设置 → Orchestration，或配置向导）后，当前聊天就是**大脑**：模型获得 3 个原生工具 — `list_agents`、`run_agent`、`read_artifact` — 自行决定何时把任务派给 headless agent、收回结果、读产出验证、向你汇报（每轮最多 8 次规划迭代）。不需要单独配置"大脑 agent" — 大脑就是你聊天用的那个模型。大脑工作目录（`read_artifact` 读取沙箱 + worktree 父目录）可在 Workers 标签页配置，默认 `~/.fusion/fusion-console/agents`。大脑还可绑定代码源：GitHub URL（每次派发前同步到大脑工作目录：clone / fast-forward pull，本地改动绝不覆盖）或本地仓库路径（直接作为大脑工作区）。
-
-大脑也可切换为 **claude code**（Brain 卡片 → brain: claude code）：每次编排轮次在脑工作目录启动 claude 会话，通过 MCP（`fusion-console mcp` 子命令）获得与聊天规划器相同的派活工具，成本记为 `brain:claude`。向大脑传授工作规范：`brain_context_files`（Workers 标签页，每行一个路径）会注入规划器 prompt（总量上限 12 KB）— 指向工作规范文档和 repo 清单即可；claude code 大脑还会自动读取工作目录里的 `CLAUDE.md`，新装机器把规范文件复制进大脑工作目录即可生效。worker 与 repo 绑定：控制台会拒绝派发给未绑定该 repo 的 worker，跨 repo 的工作应改为在该 repo 提单。
-
-每个工人 agent 在自己的目录里工作，三种代码源模式：
-
-- **standalone**：每个 agent 一个固定专属工作目录，跨任务共享
-- **worktree**：每次派发对指定本地仓库新建 detached `git worktree`（白名单强校验），任务在临时目录里完成
-- **github**：worker 绑定一个 GitHub 仓库 URL — 首次派发 clone 到工作目录，之后每次派发 fetch 并 fast-forward 到最新提交；工作区有未提交改动或本地领先提交时告警跳过，绝不覆盖本地状态
-
-护栏常开：worker 可单独禁用、per-worker 预算上限、同一时刻只跑一个 agent 子进程、每次派发都过 fusion-harness 工具准入链（sidecar 不可用时 fail-closed）。`confirm` 模式下每次 `run_agent` 派发都会在浏览器等你审批；`auto` 模式直接派发；`off` 关闭编排工具。每个 worker 还可以绑定指定 provider + 模型覆盖（向导 Workers 步）：console 从钥匙串取密钥注入 `ANTHROPIC_*` 或 `OPENAI_*` 环境变量，覆盖 CLI 自带登录；不选则保持 CLI 默认。worker 记忆默认为零依赖的 `notes` 约定（工作区 NOTES.md），可按 worker 切换为 fusion-memory hub 或关闭。
-
-新会话首次 `@Worker` 时，省略工作目录会使用该 Worker 已配置的目录。需要已有仓库的任务，可在点名 Worker 后勾选 **Requires Git repository**，或在 `run_agent` 中传入 `requires_repo: true`。工作区没有 Git 工作树时，派工卡片和会话会在启动 CLI 前显示 **blocked**。到 **Agents → Workers** 把工作目录设为已有仓库，或绑定 GitHub 来源，然后重新派工。执行中缺少必要材料时，Worker 也可用最终 JSON 回报阻塞，例如 `{"status":"blocked","reason":"缺少输入数据集"}`。
-
-## 功能
-
-- **聊天**：SSE 流式对话，支持 OpenAI 兼容 / Anthropic 兼容 provider；fusion-gateway（:11432）只是其中一个可选项，不是硬依赖。
-- **Agent 会话**：同一聊天 UI 承载 headless agent CLI（`claude -p --output-format stream-json`、`codex exec --json`、`opencode run`、`fusion`）。一个任务进，统一事件流出（文本 / 工具调用 / 结果 / 成本）。
-- **编排（M1+M2）**：打开聊天工具栏的 `orchestrate` 开关（按轮授权），聊天模型即主大脑：通过原生 tool-calls（`list_agents` / `run_agent` / `read_artifact`）向 headless agent 派活，每个 agent 在自己的专属工作目录运行（默认 `~/.fusion/fusion-console/agents/<name>/`，可在配置里按 agent 覆盖 `work_dir`）。循环有界（8 轮）；每次派活都过 [fusion-harness](https://github.com/dahai80/fusion-console) 工具准入链（deny 优先、sidecar 不可用即 fail-closed），聊天轮次同样受 harness 保护（上下文压缩 + 按会话 token 预算）。成本分行：规划器 `chat:<provider>` 与被派发的 `agent:<name>` 分开记账。
-- **配置界面**：provider + baseURL + 模型（从 /v1/models 拉取）；apiKey 存 OS keychain（Keychain / DPAPI / libsecret），绝不写进配置文件。
-- **成本账**：每轮入 SQLite，按天按来源出报表。
-- **任务总览**：在 Dashboard → Overview 查看后台派工队列、进行中的任务、可用 Worker、执行时间线和可按今日、近 7 天、近 30 天和全部历史切换的大脑与各 Worker Token 用量（UTC）。预计完成时间采用同一 Worker 最近 3 至 10 次已完成任务的耗时中位数。切换到 Sample，点 Next event 可演示任务出队。Usage 提供输入、输出、执行者占比及活动日历。
-- **失败日志（MAST 分类）**：编排失败自动打标 — 派发简报缺失触发 pre-flight 警告（聊天工具流可见）并记 `fc1_brief`，agent 报错记 `fc3_tool`；可手动补记 `fc2_handoff` / `other`。Dashboard 的 **Failures** 页列出全部标签，支持 JSONL 导出（[MAST, arXiv 2503.13657]）。
-- **Token 经济学**：Usage 页显示输入:输出比与 brain/worker token 占比，规划器开销一眼可见；Workers 页显示每个 worker 的单次预算上限与累计消耗。
-- **团队视图（可选 agent-studio 观察端）**：配置 `agentstudio` 段并启用后（默认关闭），console 轮询 fusion-agent-studio 守护进程的 WS JSON-RPC 端点，实时渲染团队看板：任务分列、成员花名册、健康度、限制、简报质量警告与失败告警。纯观察者 — 团队状态不落 console。操作仅限守护进程已暴露的（task cancel/rerun、编排器 limits）。密钥走环境变量（`FUSION_WS_TOKEN`、`FUSION_CONSOLE_APIKEY_AGENT_STUDIO`）或钥匙串。
-- **借鉴 UX 批次（issue #45）**：守护进程失败按 reason_code 双语卡片分类呈现；运行抽屉回放任务的时间线事件与用量页脚；运行中的成员可被 [STEER] 纠偏（经 teams.supplement，含回执状态）；阻塞任务渲染唤醒卡片（设置/立即唤醒/取消）；成员徽章呈现「可用性 × 负载」双轴，"offline + queued" 卡死态独立标红；worker worktree 会回放源仓库未提交改动、写入隐藏引用（`refs/console-tasks/<task>`），派发失败时保留现场并支持一键重派。
-- **轻量多用户**：每人 bcrypt 口令，HttpOnly session cookie，tailnet 内也必须登录。
-- **知识库（可选 fusion-rag）**：默认不下载任何东西。在「知识库」菜单点「下载安装」后，后台任务从 PyPI pip 安装 fusion-rag（连带 fusion-core 依赖）— 优先清华镜像，官方 PyPI 作为第二索引兜底镜像未同步的新包，装完自动写入配置并启用。启动后 console 以同源反向代理方式挂载 RAG 管理 UI（`/shell/fusion-rag/`），所有对话自动获得 `kb_search` / `kb_ask` 两个 MCP 工具（走 RAG `/mcp` JSON-RPC；模型漏传 `kb_id` 时自动落到第一个知识库）。是否在对话中暴露工具可在菜单里开关。
-- **编码代理（可选 fusion-code / claude / codex）**：「编码代理」菜单下拉选择要安装的 headless 编码代理 CLI，默认一个都不下载。fusion-code 从 GitHub 源码用 bun 构建（服务 + web 控制台同源代理在 `/shell/fusion-code/`；首次打开要求绑定 API key——console 从系统钥匙串把所选 provider 的 key 写入 `~/.fusion-code/settings.json` 的 env 块，全程不回显）。Claude Code 与 Codex 走 `npm install -g`，装完后在「Agents」页派发使用。受限网络可用 `FUSION_CODE_DOWNLOAD_URL` 覆盖下载地址。
-
-## 明确不做
-
-- ❌ DAG 编排 / issue 队列 — 用 fusion-cowork 或 fusion-agent-studio（这里的 chat 主脑循环只做单层派发）
-- ❌ PTY 交互终端（v2 评估）
-- ❌ 公网暴露、SSO、云同步
-
-### Harness sidecar
-
-防护由 `sidecar/harnessd.py` 调用 fusion-harness 的 Python 实现。控制台先查找环境变量 `FUSION_CONSOLE_HARNESS_PYTHON` 指定的解释器，再查找安装目录和工作区的虚拟环境。macOS 和 Linux 还会尝试 PATH 中的 `python3` 和 `python`。
-
-在 `config.json` 中启用 `harness.enabled` 时，如果 sidecar 启动失败，聊天会在调用模型前停止。可查看启动日志，并将 `FUSION_CONSOLE_HARNESS_PYTHON` 指向已安装 `fusion-harness` 的解释器。内核 0.22.0 支持防护检查，报告可显示 token 预算和运行事件。内核 0.23.0 起还支持模型调用指标和失败归因。
-
-## 构建
-
-依赖：Go 1.26+、[Bun](https://bun.sh)。
-
-```bash
-make web        # 前端构建到 internal/server/webdist（go:embed 嵌入）
-make build      # 本机二进制 -> bin/fusion-console
-make cross      # darwin/linux/windows 交叉编译
-make test       # go test ./...
-```
-
-## pip 安装（无需克隆源码）
-
-平台 wheel 内置预编译二进制（同 ruff/uv 的分发模式），安装后得到
-`fusion-console` 命令：
-
-```bash
-pip install fusion-console      # 自动选择当前平台 wheel
-fusion-console -open=false      # 无头启动；加 -open 自动打开浏览器并免密登录
-```
-
-覆盖 macOS（arm64/x86_64）、Linux（x86_64/arm64，manylinux2014）与
-Windows x86_64。其他平台请用上面"构建"从源码编译。发新 wheel：
-`make cross` → `scripts/pypi-build.sh <X.Y.Z>` → `twine upload dist-pypi/*`。
-
-## 运行
-
-> 从 release 下载开始的逐步配置指南：[docs/START_GUIDE_CN.md](docs/START_GUIDE_CN.md) · [English](docs/START_GUIDE.md)
-
-```bash
-./bin/fusion-console            # 监听 127.0.0.1:11480
-```
-
-数据目录 `~/.fusion/fusion-console`（可用 `FUSION_CONSOLE_DIR` 覆盖）。首次启动创建 `admin` 用户，出厂默认密码 `fusion-admin-2026`（首次启动前可用 `FUSION_CONSOLE_ADMIN_PASSWORD` 覆盖）；非本机部署首次登录后请修改。
-
-开发者一键启动：一条命令拉起 gateway（随包附带时）、console，并用系统默认浏览器打开已自动登录的页面：
-
-```bash
-./start.sh        # macOS / Linux    （Windows 用 start.cmd）
-```
-
-浏览器打开 `http://127.0.0.1:11480`，登录后：
-
-1. Settings → 添加 provider（fusion-gateway 端到端配置见下节），并存入 apiKey（keychain 引用 id 与 provider 的 `api_key_id` 一致）。
-2. Chat → 选 provider 直接对话；或选 agent + 工作目录，点 agent 按钮把任务交给 CLI。
-
-无 keychain 的 headless 主机：改用环境变量 `FUSION_CONSOLE_APIKEY_<KEY_ID大写>`。
-
-## fusion-gateway 端到端配置
-
-[fusion-gateway](https://github.com/dahai80/fusion-gateway) 是本地混合推理网关（OpenAI 兼容，默认端口 `11432`）。console 把它当一个普通 OpenAI 兼容 provider 接入 — 已用 `glm-5` 端到端真机验证。
-
-### 1. 启动网关
-
-```bash
-~/fusion/fusion-gateway/start.sh start     # 监听 0.0.0.0:11432
-curl -s http://127.0.0.1:11432/api/health  # 健康检查
-```
-
-### 2. 获取（或新建）网关客户端 API key
-
-网关客户端 key 在 `~/fusion/fusion-gateway/config.yaml` 的 `auth.api_keys` 下。选一个 `allowed_models` 覆盖目标模型（如 `glm*`）的 key，或新增：
-
-```yaml
-auth:
-  api_keys:
-    - name: fusion-console
-      key: fsx-fusion-console-<随机hex>
-      allowed_models: ["glm*", "gpt-4o*", "claude-*"]
-      rpm: 60
-      tpm: 100000
-```
-
-改完重启网关。console 不需要上游 provider 的真实 key — 那些由网关持有。
-
-### 3. 把 key 存入 console
-
-Console UI → Settings → **API key (stored in OS keychain)**：
-
-- key id：`gw-main`（任意稳定 id，这是 keychain 引用名）
-- secret：粘贴网关客户端 key（`fsx-...`）
-
-### 4. 添加 gateway provider
-
-同一页面 **Edit / add provider**：
-
-| 字段 | 值 |
-|---|---|
-| id | `gw-main`（必须与上面的 key id 一致） |
-| name | `fusion-gateway` |
-| type | `fusion-gateway` |
-| base URL | `http://127.0.0.1:11432/v1`（网关在别的机器就填那台机器的 IP） |
-| model | `glm-5` |
-| enabled | ✓ |
-
-点 **Save provider**，再点 **Fetch models** 拉取网关暴露的模型列表并选择。
-
-### 5. 验证
-
-Chat 页 → 选 `fusion-gateway` provider → 发送任意消息，应看到流式回复和气泡下方的 token 统计。消息与用量持久化在 SQLite，成本报表（`GET /api/costs`）可见。
-
-排错：
-
-- `401 auth_error` — key 错误或网关配置里没有
-- `model not allowed` — key 的 `allowed_models` 不含 `glm-5`
-- Connection refused — 网关没起，或 console 与网关不同机且防火墙拦截
-
-## 附录：fusion-gateway 侧的模型配置
-
-console 能看到哪些模型，取决于网关暴露了哪些。模型配置全部在 `~/fusion/fusion-gateway/config.yaml`，改完 `~/fusion/fusion-gateway/start.sh restart`。共三处：
-
-### 1. backend — 模型真正跑在哪
-
-`backends:` 把后端名映射到上游端点。每个上游一条；`type` 决定协议（`openai-compatible` 或 `anthropic`）：
-
-```yaml
-backends:
-  glm-5:                        # 后端名（下面 supply 引用）
-    api_key: <上游真实key>       # 真 provider key 放这里，不放 console
-    base_url: https://<上游地址>
-    enabled: true
-    timeout: 300s
-    type: anthropic             # 或 openai-compatible
-  fusion-mlx:                   # 本地 MLX 引擎就是一个普通 backend
-    api_key: mlx-<token>
-    base_url: http://127.0.0.1:11434
-    enabled: true
-    type: openai-compatible
-```
-
-### 2. models.supply — 模型名 → 后端
-
-`models.supply:` 声明网关对外提供哪些模型名、由哪些后端服务（列表即故障切换顺序）：
-
-```yaml
-models:
-  supply:
-    glm-5:
-      - glm-5                  # 模型 "glm-5" 由后端 "glm-5" 服务
-    glm-5.3-flash:
-      - volc-coding
-    qwen3.5-9b:
-      - fusion-mlx             # 本地模型，fusion-mlx 加载后即出现
-```
-
-这里的模型名就是 console 模型下拉框显示的名字，也是 provider `model` 字段该填的值。
-
-### 3. routing — 云端模型注册与兜底
-
-`routing.cloud_models:` 登记云端模型名（支持 `claude-*` 通配）；`routing.fallback.model_mapping:` 把别的模型名别名到已登记模型；`routing.fallback.cloud_default:` 是未知云端模型的兜底：
-
-```yaml
-routing:
-  cloud_models:
-    - glm-5
-    - glm-5.3-flash
-    # ... 新云端模型加这里
-  fallback:
-    enabled: true
-    cloud_default: glm-5       # 未知云端模型落到这
-    model_mapping:
-      claude-sonnet-4-6: glm-5  # claude 系列请求路由到 glm-5
-```
-
-### 4. console 侧验证
-
-```bash
-curl -s http://127.0.0.1:11432/v1/models \
-  -H "Authorization: Bearer <网关客户端key>" | python3 -m json.tool | grep '"id"'
-```
-
-然后 console：Settings → 选 provider → **Fetch models** → 选新模型（或直接在 provider `model` 字段手填）→ 对话。
-
-最小可用路径：网关出厂已配好 `glm-5`（backend `glm-5`）— 只有加新模型才需要上面 1–3 步。
-
-## 远程访问（只走 Tailscale）
-
-见 [deploy/README.md](deploy/README.md)。一句话：办公室主机执行 `tailscale serve --bg 127.0.0.1:11480`，tailnet 内设备访问 `https://<主机名>.<tailnet>.ts.net`。应用层登录始终开启；永不暴露公网。
+- **一个文件，不用装运行时。** 服务端和网页都打包在里面；数据就是一个 SQLite 文件加一个 JSON 配置。
+- **会派活的对话。** 打开 `orchestrate`，你正在聊天的模型就成了 *Brain*：拆任务、派给 Worker、读结果、向你汇报。每次派工都可以先等你批准。
+- **真 Agent，真仓库。** Worker 是本机的 Agent 命令行，绑定一个目录、一个 git worktree 或一个 GitHub 仓库，各有预算上限。
+- **一个网关，一本账。** 各家模型的 key 放在随包附带的 [fusion-gateway](https://github.com/dahai80/fusion-gateway) 里；console 只在系统钥匙串里存一把网关 key。Brain 和每个 Worker 的 Token 用量都在同一个看板上。
+- **默认私有。** 只监听 `127.0.0.1`。远程使用走 Tailscale（可选自建中继），登录始终开启。
 
 ## 目录
 
+- [整体结构](#整体结构)
+- [快速开始](#快速开始)
+- [首次运行向导](#首次运行向导)
+- [日常使用](#日常使用)
+- [用手机远程访问](#用手机远程访问)
+- [编排详解](#编排详解)
+- [配置参考](#配置参考)
+- [手动给 fusion-gateway 加模型](#手动给-fusion-gateway-加模型)
+- [构建与开发](#构建与开发)
+- [安全模型](#安全模型)
+- [排错](#排错)
+- [不做什么](#不做什么)
+
+## 整体结构
+
 ```
-cmd/console/          入口
-internal/server/      HTTP 路由、SSE、嵌入 SPA
-internal/chat/        Provider 抽象（OpenAI 兼容 / Anthropic 兼容 / gateway）
-internal/agent/       headless agent 适配器 + 子进程生命周期
-internal/config/      配置文件 + OS keychain
-internal/auth/        bcrypt 登录 + cookie 会话
-internal/store/       SQLite 持久化（会话/消息/成本账）
-web/                  React + Tailwind SPA 源码
-deploy/               launchd / systemd / schtasks + Tailscale 指南
+ 浏览器（电脑 / 手机）
+        │  远程：tailscale serve 提供的 HTTPS；本机：http://127.0.0.1:11480
+        ▼
+ fusion-console :11480 ──────────────► fusion-gateway :11432 ──► 云端模型（DeepSeek、通义、
+   对话 · Brain · 看板                     一把 key、一本账           Kimi、Claude、OpenRouter…）
+   SQLite + config.json                                       └─► 本地引擎（fusion-mlx…）
+        │
+        └─ 在各自的工作区里拉起 Agent 命令行（Worker）
+             claude · codex · opencode · fusion-code
 ```
 
-## 常见问题（FAQ）
+可选组件都是点了才装：fusion-rag（知识库）、fusion-code、fusion-mlx（Apple Silicon 本地模型）、fusion-agent-studio（团队）。
 
-### Worker 启动后目录不对：work_dir 填了全角 `～/...`
+## 快速开始
 
-用中文输入法输入 `~/fusion/fusion-site` 时，ASCII `~` 经常被自动变成全角
-`～`（另外 `~foo` 这种不带斜杠的写法也不会展开）。控制台只展开行首的 ASCII
-`~/`，所以 agent 收到的是字面量目录 `～/...`（相对服务端 cwd），看起来就像
-"丢了工作目录"。**work_dir 请直接粘贴绝对路径**
-（`/Users/<you>/fusion/fusion-site`、`C:\work\fusion-site`），至少也要用
-ASCII `~/...`；worker 反复跑错位置时先去 Workers 页检查这一行。
+### 方式一：下载发布包（推荐）
 
-### Worker 卡住或"什么都不做"：`permission_mode` 对无人值守运行太严格
+到 [Releases](https://github.com/dahai80/fusion-console/releases/latest) 下载对应的包：
 
-Worker 是无人值守运行的，没人守在终端旁确认。默认 `acceptEdits` 只自动放行
-文件编辑，其他需要确认的操作（shell 命令、网络工具等，取决于具体 CLI）会把
-整个 run 卡住，直到预算熔断。无人值守的 worker 请在
-Workers 页 → worker 详情里把 **`permission_mode` 设为 `bypassPermissions`**，
-并把每个 worker 的预算上限当作真正的安全边界；想人工审批派活时，编排模式
-保持 `confirm`。
+| 机器 | 文件 |
+|---|---|
+| macOS（Apple Silicon 或 Intel） | `fusion-console-<版本>-darwin-universal.dmg` |
+| macOS 压缩包 | `fusion-console-<版本>-darwin-arm64.tar.gz` / `-darwin-amd64.tar.gz` |
+| Linux x86_64 / arm64 | `fusion-console-<版本>-linux-amd64.tar.gz` / `-linux-arm64.tar.gz` |
+| Windows x64 | `fusion-console-<版本>-windows-amd64.zip` |
+
+每个包里有 `fusion-console`、配套的 `fusion-gateway`、harness sidecar、开箱即用的网关 `config.yaml` 和启动脚本。
+
+```bash
+# macOS / Linux：解压后在包目录里
+./startup.sh          # 启动网关和 console，并打开已登录的浏览器
+# Windows：双击 startup.cmd
+```
+
+浏览器会直接进入新手引导，大约五分钟就能开始对话。
+
+### 方式二：从源码构建
+
+需要 Go 1.26+ 和 [Bun](https://bun.sh)。
+
+```bash
+git clone https://github.com/dahai80/fusion-console && cd fusion-console
+make web && make build           # 前端构建到 internal/server/webdist，二进制在 bin/
+./scripts/start.sh start --open  # 或者直接 ./bin/fusion-console
+```
+
+源码构建不带 `fusion-gateway`：向导里可以一键下载；或者运行 `./scripts/package.sh` 打出和发布包一样的目录。
+
+### 登录
+
+打开 `http://127.0.0.1:11480`，用 `admin` / `fusion-admin-2026` 登录（出厂密码；在本机打开时登录框会自动填好）。想一开始就用自己的密码，首次启动前设置 `FUSION_CONSOLE_ADMIN_PASSWORD`。开放远程访问之前一定要改掉出厂密码，见[安全模型](#安全模型)。
+
+## 首次运行向导
+
+还没配置任何模型时向导会自动打开；之后随时可以从右上角头像菜单进入，菜单里同时显示配置进度。每一步都读取实时状态，重新打开时已完成的会直接打勾，并跳到第一个没完成的步骤。
+
+| 步骤 | 做什么 |
+|---|---|
+| 1. 启动网关 | 启动（或安装）随包附带的 fusion-gateway，一键给 console 创建网关 API key。key 存进系统钥匙串，并自动添加网关这个模型来源 |
+| 2. 接入模型 | 选厂商（DeepSeek、通义/百炼、Kimi、智谱、MiniMax、OpenRouter、Anthropic，或任意 OpenAI 兼容地址），粘贴 API key 和模型名。常见厂商会自动填好 Base URL |
+| 3. 试一次 | 发一句很短的测试。模型回答了，就说明网关、key、模型整条链都通 |
+| 4. Brain 与 Worker（可选） | 选派工审批方式，查看本机检测到哪些 Agent 命令行，添加 Worker |
+
+最后点 **开始对话**。
+
+## 日常使用
+
+- **对话**：流式输出；在顶部为每个会话切换模型；支持附件，支持的浏览器上可以语音输入。
+- **`@Worker`**：点名某个 Worker，任务立刻在后台交给它。任务需要已有仓库时勾选 **Requires Git repository**。
+- **`orchestrate`**：输入框旁的开关（默认开），决定 Brain 能不能自己派工。审批模式为“每次派工先问我”时，每次派工会弹出确认卡片。
+- **任务栏**：运行中和排队的派工及其阶段；手机上可以收成一个状态气泡。
+- **Dashboard**：派工队列、进行中的任务、Worker 可用情况、执行时间线，以及 Brain 和每个 Worker 的 Token 用量（今日 / 近 7 天 / 近 30 天 / 全部，日历、柱状或表格视图）。
+- **Agents**：检测到的命令行、Brain 设置和 Worker 列表。
+- **Gateway**：网关状态、key、云端后端；**Models** 标签管理模型来源，也可以添加不经网关的 OpenAI / Anthropic 兼容地址。
+- **Knowledge Base**：一键安装 fusion-rag，之后对话里多出 `kb_search` / `kb_ask` 工具。
+- **Team**：fusion-agent-studio 团队的实时看板，团队可以在 Team 页或对话里创建。
+- **更新（macOS）**：主题切换旁的更新按钮安装新版本，见 [deploy/README.md](deploy/README.md#macos-user-installation-with-updates)。
+
+## 用手机远程访问
+
+fusion-console 从不开放公网端口。在办公室外使用：
+
+1. 办公室机器和手机都装 Tailscale，登录同一个账号。
+2. 在 tailnet 内发布 console：`tailscale serve --bg 11480`。
+3. 手机打开 `https://<机器名>.<tailnet>.ts.net` 并登录。
+
+手机在运营商 NAT 后面打不通洞时，流量会走中继。Tailscale 官方共享中继从大陆访问常常很慢，所以指南里也写了怎么用一个脚本 [`deploy/tailscale/setup-derp.sh`](deploy/tailscale/setup-derp.sh) 在一台香港小 VPS 上自建中继（DERP）。
+
+完整步骤：**[deploy/TAILSCALE_CN.md](deploy/TAILSCALE_CN.md)**。
+
+## 编排详解
+
+**Brain。** `orchestrate` 打开后，对话模型获得三个原生工具——`list_agents`、`run_agent`、`read_artifact`——以及每轮最多 8 次迭代的规划循环。Brain 有两种模式（Agents → Workers → Brain）：
+
+- *对话模型*（默认）：规划提示词里带上工作区配置，以及最多 12 KB 的 `brain_context_files`（每行一个路径：工作规范、仓库清单）。
+- *claude code*：每个编排轮次在 Brain 工作目录里跑一个 `claude` 会话，通过 MCP（`fusion-console mcp`）拿到同样的派工工具；它还会读取该目录下的 `CLAUDE.md`。
+
+Brain 工作目录（默认 `~/.fusion/fusion-console/agents`）是 `read_artifact` 的沙箱，也是 Worker worktree 的父目录。它可以绑定一个 GitHub 地址（clone 下来，每次派工前 fast-forward，本地改动绝不覆盖）或一个本地仓库。
+
+**Worker。** 每个 Worker = 一个 Agent 命令行 + 一个工作区，三种模式：
+
+| 模式 | 行为 |
+|---|---|
+| `standalone` | 每个 Worker 一个固定目录，跨任务共用 |
+| `worktree` | 每次派工从白名单里的本地仓库新建一个 detached `git worktree` |
+| `github` | 绑定仓库地址：首次派工 clone，之后 fetch 并 fast-forward；有未提交改动或本地领先提交时只报告，不覆盖 |
+
+Worker 和仓库绑定：派给不属于它的仓库会被拒绝。每个 Worker 可以指定模型来源和模型（console 从钥匙串取 key，注入 `ANTHROPIC_*` / `OPENAI_*` 环境变量），默认把笔记记在 `NOTES.md`（也可以用 fusion-memory 或关闭）。
+
+**护栏。** 每个 Worker 可单独停用，各有预算上限；后台任务共用一个有界的执行池（默认同时 4 个），单次最长 48 小时；每次派工都经过 fusion-harness 工具准入链，sidecar 不可用时直接拒绝（fail-closed）。审批模式：`confirm`（每次先问）、`auto`（预算内自动）、`off`（不给工具）。任务缺少前置条件时可以用最终回复 `{"status":"blocked","reason":"…"}` 上报，派工卡片显示 **blocked**，不会误报成功。
+
+**Harness sidecar。** 防护由 `sidecar/harnessd.py` 调用 Python 版 fusion-harness。console 依次查找 `FUSION_CONSOLE_HARNESS_PYTHON`、安装目录和工作区的虚拟环境、PATH 里的 `python3` / `python`。`config.json` 里开启 `harness.enabled` 时，sidecar 起不来，对话会在调用模型前停下。内核 0.22 支持防护检查和预算报告；0.23 起增加模型调用指标和失败归因。
+
+**记账。** 规划轮次记为 `chat:<来源>`（或 `brain:claude`），派出的任务记为 `agent:<名字>`。失败按 MAST 分类打标（`fc1_brief`、`fc2_handoff`、`fc3_tool`），可在 Dashboard → Failures 导出 JSONL。
+
+## 配置参考
+
+**文件。** 数据目录 `~/.fusion/fusion-console/`（用 `FUSION_CONSOLE_DIR` 改）：`config.json`（用户、模型来源、Agent、编排设置，不含任何 key）、`console.db`（SQLite）、`log/`。
+
+**环境变量**
+
+| 变量 | 用途 |
+|---|---|
+| `FUSION_CONSOLE_DIR` | 数据目录 |
+| `FUSION_CONSOLE_ADMIN_PASSWORD` | `admin` 的初始密码，只在第一次启动时读取 |
+| `FUSION_CONSOLE_APIKEY_<KEY_ID>` | 某个钥匙串 id 对应的 key（大写，非字母数字换成 `_`，如 `..._GATEWAY_KEY`），给没有钥匙串的无界面主机用 |
+| `FUSION_CONSOLE_HARNESS_PYTHON` | 能 `import fusion_harness` 的 Python 解释器 |
+| `FUSION_STUDIO_SOCKET` | agent-studio 守护进程 socket（默认 `/tmp/fusion-studio.sock`） |
+| `FUSION_CODE_DOWNLOAD_URL` | fusion-code 安装器的备用下载地址 |
+
+**端口**（全部只绑定 `127.0.0.1`）
+
+| 端口 | 服务 |
+|---|---|
+| 11480 | fusion-console |
+| 11432 | fusion-gateway |
+| 11434 | fusion-mlx（可选） |
+| 11436 | fusion-rag（可选） |
+| 11441 / 11482 | fusion-code API / 网页（可选） |
+
+**命令行。** `fusion-console` 启动服务，并用一次性登录链接打开浏览器；无界面主机加 `-open=false`。`fusion-console mcp` 运行 MCP stdio Brain 服务。
+
+**开机自启。** launchd（macOS）、systemd（Linux）、任务计划程序（Windows）的做法见 [deploy/README.md](deploy/README.md)。
+
+## 手动给 fusion-gateway 加模型
+
+向导和 Gateway 页覆盖了常见情况。其他情况编辑网关的 `config.yaml`（在网关二进制旁边），然后重启网关。
+
+```yaml
+backends:                        # 模型实际在哪里跑
+  deepseek:
+    type: deepseek               # 或 openai-compatible、anthropic、zhipu、dashscope…
+    base_url: https://api.deepseek.com   # 不要带 /v1，网关会自己补
+    api_key: sk-...              # 真正的厂商 key 只放在这里，不进 console
+    enabled: true
+
+models:
+  supply:                        # 模型名 -> 后端（列表顺序即故障转移顺序）
+    deepseek-chat: [deepseek]
+
+routing:
+  cloud_models: [deepseek-chat]  # 云端模型白名单（支持 claude-* 这类通配）
+  fallback:
+    enabled: true
+    cloud_default: deepseek-chat # 请求了未知云端模型时落到这里
+```
+
+看 console 能看到哪些模型：
+
+```bash
+curl -s http://127.0.0.1:11432/v1/models -H "Authorization: Bearer <网关key>" | grep '"id"'
+```
+
+## 构建与开发
+
+```bash
+make web      # 用 bun 构建前端到 internal/server/webdist（go:embed）
+make build    # 本机的 bin/fusion-console
+make cross    # darwin / linux / windows，amd64 + arm64
+make test     # go test ./... -count=1
+make vet fmt
+./scripts/package.sh vX.Y.Z   # 打发布包，带上配套的 fusion-gateway
+```
+
+`internal/server/webdist` 是提交进仓库的构建产物：`go build` 之前先 `make web`，否则二进制里是旧界面。
+
+```
+cmd/console/        入口（服务、mcp 子命令）
+internal/server/    HTTP 路由、SSE、编排、派工、内嵌前端
+internal/chat/      模型来源：OpenAI 兼容、Anthropic 兼容、网关
+internal/agent/     Agent 命令行适配和子进程生命周期
+internal/harness/   fusion-harness sidecar 客户端
+internal/config/    config.json 与系统钥匙串
+internal/auth/      bcrypt 登录、cookie 会话
+internal/store/     SQLite（会话、消息、成本）
+sidecar/            harnessd.py
+web/                React + Tailwind 源码
+deploy/             launchd / systemd 配置、远程访问指南、中继脚本
+docs/               启动指南、设计笔记
+```
+
+## 安全模型
+
+- 服务只绑定 `127.0.0.1:11480`，不对公网暴露；不要对它用 `tailscale funnel` 或端口转发。
+- 每个请求都要登录，tailnet 内也一样。密码以 bcrypt 哈希存在 `config.json`。
+- 远程使用前**改掉出厂密码**：`htpasswd -bnBC 10 "" '新密码' | tr -d ':\n'` 生成哈希，填进 `config.json` 里 `admin` 的 `password_hash`，重启。加用户同理。
+- API key 只在系统钥匙串（Keychain / DPAPI / libsecret）或 `FUSION_CONSOLE_APIKEY_*` 里，从不写进配置文件。
+- Agent 只在声明的工作区里运行，有预算上限；从手机派工时建议保持“每次派工先问我”。
+
+## 排错
+
+| 现象 | 处理 |
+|---|---|
+| 忘了 console 密码 | 按安全模型一节生成新哈希写进 `config.json` 并重启；或删掉 `config.json` 恢复出厂 admin（其他设置也会一起清空） |
+| 向导里创建 API key 失败 | 网关管理员密码被改过：在向导的帮助区保存新的管理员账号密码后重试 |
+| 网关返回 `401 auth_error` | 网关 key 错了或被删了，从头像菜单重新创建 |
+| `model not allowed` / 找不到模型 | 网关里没有这个模型，或名字拼错；必须和厂商文档完全一致 |
+| 后端加上了但模型一直不出现 | Base URL 不对（不要带 `/v1`）、key 不对，或这台机器访问不到厂商 |
+| Agent 灰显 | 命令行不在 PATH 里；安装它，或在 `config.json` 里把 `command` 写成绝对路径 |
+| Agent 一启动就退出 | 工作目录不对，或这个命令行需要先在本机登录 |
+| Worker 跑到奇怪的 `～/…` 目录 | 中文输入法把 `~` 变成了全角 `～`；工作目录请粘贴绝对路径 |
+| Worker 卡住没输出 | 无人值守时没人回答确认提示；给这类 Worker 用 `permission_mode: bypassPermissions`，靠预算上限兜底 |
+| 手机上复制按钮没反应 | 页面走的是普通 HTTP；按远程访问指南用 `tailscale serve --bg 11480`（HTTPS） |
+
+## 不做什么
+
+刻意不做：多层 DAG 编排和 issue 队列（用 fusion-cowork 或 fusion-agent-studio；这里的 Brain 只做一层派工）、交互式 PTY 终端（v2 再评估）、公网暴露、SSO 和云同步。
 
 ## 许可
 
-Apache License 2.0 — 见 [LICENSE](LICENSE)。
+Apache License 2.0，见 [LICENSE](LICENSE)。
