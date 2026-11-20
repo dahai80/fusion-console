@@ -1,7 +1,9 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import type { AgentInfo, WorkerSettings, WorkerStatus } from "../api";
-import { agoText, draftFrom, elapsedText, emptyDraft, mergeRows, nextName, placeText, repoLabel, summaryText, toSettings, toolChoices, validate } from "./workerModel.ts";
+import {
+  agoText, budgetChoices, draftFrom, elapsedText, emptyDraft, mergeRows, modelText, modelValue, nextName, parseModelValue, placeText, repoLabel, summaryText, toSettings, toolChoices, validate,
+} from "./workerModel.ts";
 
 const tool = (name: string, detected: boolean, extra: Partial<AgentInfo> = {}): AgentInfo =>
   ({ name, command: name, detected, permission_mode: "acceptEdits", max_budget_usd: 5, ...extra });
@@ -92,4 +94,25 @@ test("time and summary strings read naturally", () => {
   assert.equal(agoText("", now), "");
   const d = { ...emptyDraft([tool("claude", true)]), place: "github" as const, repoUrl: "https://github.com/o/r" };
   assert.equal(summaryText(d, []), "claude-1 用 Claude Code，在 GitHub 仓库 o/r 里干活，每次最多花 $5。");
+});
+
+test("budget choices keep the steps and slot in a custom current cap", () => {
+  assert.deepEqual(budgetChoices(5), [1, 2, 5, 10, 20]);
+  assert.deepEqual(budgetChoices(7.5), [1, 2, 5, 7.5, 10, 20]);
+  assert.deepEqual(budgetChoices(Number.NaN), [1, 2, 5, 10, 20]);
+});
+
+test("model values round-trip provider and model, including empty parts", () => {
+  for (const [provider, model] of [["", ""], ["gw-glm", ""], ["gw-gpt", "gpt-6.2-astra"], ["gw", "org/model|v2"]]) {
+    assert.deepEqual(parseModelValue(modelValue(provider, model)), { provider, model });
+  }
+});
+
+test("model text names the provider and model in plain words", () => {
+  const providers = [{ id: "gw-glm", name: "GLM 网关" }];
+  assert.equal(modelText({ provider_id: "", model: "" }, providers), "工具自己的设置");
+  assert.equal(modelText({ provider_id: "", model: "opus" }, providers), "opus（工具自己的设置）");
+  assert.equal(modelText({ provider_id: "gw-glm", model: "" }, providers), "GLM 网关 · 默认模型");
+  assert.equal(modelText({ provider_id: "gw-glm", model: "glm-5" }, providers), "GLM 网关 · glm-5");
+  assert.equal(modelText({ provider_id: "gone", model: "x" }, providers), "gone · x");
 });

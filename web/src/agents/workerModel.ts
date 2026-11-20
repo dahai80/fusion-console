@@ -194,3 +194,30 @@ export function summaryText(d: WorkerDraft, workers: Pick<WorkerSettings, "name"
     : "在自己的文件夹里";
   return `${name} 用 ${toolLabel(d.agent)}，${where}干活，每次最多花 $${d.budget}。`;
 }
+
+// Quick changes on an opened worker card: a few spending caps to pick from,
+// always including the worker's current cap so the select can show it.
+const BUDGET_STEPS = [1, 2, 5, 10, 20];
+export function budgetChoices(current: number): number[] {
+  const list = Number.isFinite(current) && current > 0 ? [...BUDGET_STEPS, current] : BUDGET_STEPS;
+  return [...new Set(list)].sort((a, b) => a - b);
+}
+
+// The quick model select carries provider and model in one option value.
+// Provider ids never contain "|"; the model takes the rest, verbatim.
+export const modelValue = (provider: string, model: string) => `${provider}|${model}`;
+export function parseModelValue(v: string): { provider: string; model: string } {
+  const i = v.indexOf("|");
+  return i < 0 ? { provider: "", model: v } : { provider: v.slice(0, i), model: v.slice(i + 1) };
+}
+
+// modelText names what a worker runs on, for the quick panel's status line.
+export function modelText(w: Pick<WorkerSettings, "provider_id" | "model">, providers: { id: string; name: string }[]): string {
+  const model = (w.model ?? "").trim();
+  if (!w.provider_id) return model ? `${model}（工具自己的设置）` : "工具自己的设置";
+  const p = providers.find((x) => x.id === w.provider_id);
+  const name = p?.name || w.provider_id;
+  return `${name} · ${model || "默认模型"}`;
+}
+
+export const MEMORY_LABELS: Record<string, string> = { notes: "笔记", "fusion-memory": "共享记忆库", off: "不记" };
