@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Moon,
   Monitor,
+  CirclePause,
 
   Send,
   Sparkles,
@@ -553,6 +554,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     setConvDrawer(false);
     const r = await api.messages(c.ID);
     setEntries((r.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta })));
+    setTeamTyped([]);
     if (unread[c.ID] > 0) {
       api.ackDispatches(c.ID).then(() => setUnread((u) => ({ ...u, [c.ID]: 0 }))).catch(() => {});
     }
@@ -587,6 +589,12 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
           setEntries((e) => [...e, ...r.messages.map((m) => ({ role: m.role, content: m.content, meta: m.meta }))]);
         }
       } catch { /* daemon offline — next tick retries */ }
+      // console#79 R4: kernel-typed inbox cards (plan_approval /
+      // shutdown_request) ride their own projection, not chat text.
+      try {
+        const t = await api.teamOp({ op: "inbox_typed", team: active.AgentName });
+        setTeamTyped(((t.messages ?? []) as Record<string, any>[]).filter((c) => c && c.msg_id));
+      } catch { setTeamTyped([]); }
     };
     pull();
     const t = setInterval(pull, 5000);
@@ -596,6 +604,20 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   // Team banner: roster of the open team conversation + the daemon's
   // registered agents for the add-member picker. Reloads on switch/edit.
   const [teamRoster, setTeamRoster] = useState<string[]>([]);
+// console#79 R4: pending kernel-typed inbox cards for the operator member
+// (plan_approval / shutdown_request) — actionable approve/reject, not chat text.
+const [teamTyped, setTeamTyped] = useState<Record<string, any>[]>([]);
+const respondTyped = async (messageId: string, decision: "approve" | "reject") => {
+  if (!active || active.Kind !== "team") return;
+  setTeamTyped((cs) => cs.map((c) => (c.msg_id === messageId ? { ...c, pending: decision } : c)));
+  try {
+    await api.teamOp({ op: "inbox_respond", team: active.AgentName, message_id: messageId, decision });
+    setTeamTyped((cs) => cs.filter((c) => c.msg_id !== messageId));
+  } catch (ex) {
+    setErr((ex as Error).message);
+    setTeamTyped((cs) => cs.map((c) => (c.msg_id === messageId ? { ...c, pending: undefined } : c)));
+  }
+};
   const [teamPanelOpen, setTeamPanelOpen] = useState(false);
   const [teamAgentList, setTeamAgentList] = useState<Record<string, any>[]>([]);
   const [teamPickAdd, setTeamPickAdd] = useState<string[]>([]);
@@ -740,17 +762,24 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   // console#79 R1/R2/R3: per-member economics (budget/permission/allowlist),
   // playbook toggle, and the kernel #124 fan-out ladder. All opt-in —
   // defaults match the previous hardcoded payload byte-for-byte.
-  const [teamMemberCfg, setTeamMemberCfg] = useState<Record<string, { budget: number; mode: string; tools: string[] }>>({});
+  const [teamMemberCfg, setTeamMemberCfg] = useState<Record<string, { budget: number; mode: string; tools: string[]; skills: string[] }>>({});
   const [teamLeadBudget, setTeamLeadBudget] = useState(200000);
   const [teamPlaybook, setTeamPlaybook] = useState(false);
+  // console#79 R6: topology preset rides team metadata; max_depth is the
+  // advanced kernel field (default 2 preserved); skills chips list the
+  // installed SKILL.md surface (member.skills is also the persona gate).
+  const [teamSkills, setTeamSkills] = useState<{ name: string }[]>([]);
+  const [teamTopology, setTeamTopology] = useState("hub");
+  const [teamMaxDepth, setTeamMaxDepth] = useState(2);
   const TEAM_FANOUT = { simpleMax: 5, complexMax: 15, hardMax: 20 };
   const TEAM_TOOLS = ["file_read", "file_write", "shell_exec", "web_search", "kb_search"];
-  const memberCfg = (wn: string) => teamMemberCfg[wn] ?? { budget: 50000, mode: teamMode, tools: ["file_read"] };
-  const setMemberCfg = (wn: string, patch: Partial<{ budget: number; mode: string; tools: string[] }>) =>
+  const memberCfg = (wn: string) => teamMemberCfg[wn] ?? { budget: 50000, mode: teamMode, tools: ["file_read"], skills: [] as string[] };
+  const setMemberCfg = (wn: string, patch: Partial<{ budget: number; mode: string; tools: string[]; skills: string[] }>) =>
     setTeamMemberCfg((m) => ({ ...m, [wn]: { ...memberCfg(wn), ...patch } }));
   useEffect(() => {
     if (!teamModalOpen) return;
     api.orchestration().then((r) => setTeamWorkers(r.orchestrator?.workers ?? [])).catch(() => setTeamWorkers([]));
+    api.skills().then((r) => setTeamSkills(r.skills ?? [])).catch(() => setTeamSkills([]));
   }, [teamModalOpen]);
   // Member context mapping (issue #41): the register payload carries a
   // resident per-member context derived from the worker config (role
@@ -780,7 +809,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
       return {
         name: (w?.name || w?.agent || wn).replace(/[^A-Za-z0-9_-]/g, "-"),
         role: w?.agent || "",
-        skills: [] as string[],
+        skills: cfg.skills,
         // file_read by default (issue #41): members without it cannot read
         // the full SPEC.md and degrade to the injected section only.
         tool_allowlist: cfg.tools.length > 0 ? cfg.tools : ["file_read"],
@@ -802,7 +831,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     setTeamErr("");
     try {
       await api.teamCreate({
-        team: { name: nm, namespace_key: nm, members, lead_budget_tokens: teamLeadBudget, playbook: teamPlaybook, max_depth: 2, metadata: {} },
+        team: { name: nm, namespace_key: nm, members, lead_budget_tokens: teamLeadBudget, playbook: teamPlaybook, max_depth: teamMaxDepth, metadata: { topology: teamTopology } },
         tasks: [], lead_start: false, lead_goal: "",
         spec: teamSpec.trim(),
       });
@@ -1287,6 +1316,37 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
                 ))}
                 {teamRoster.length === 0 && <span className="text-xs text-zinc-400">no roster yet</span>}
               </div>
+            </div>
+            {teamTyped.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {teamTyped.map((card) => (
+                  <div key={String(card.msg_id)} className="rounded-xl border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs">
+                    <div className="flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
+                      {String(card.kind || card.type) === "shutdown_request" ? <CirclePause size={13} /> : <FileText size={13} />}
+                      {String(card.kind || card.type)} · from {String(card.sender || card.from || "?")}
+                    </div>
+                    <p className="mt-1 max-w-md whitespace-pre-wrap text-zinc-600 dark:text-zinc-300">{String(card.body || "")}</p>
+                    {card.answered ? (
+                      <span className="mt-1 inline-block text-zinc-400">answered</span>
+                    ) : (
+                      <div className="mt-1.5 flex gap-1.5">
+                        <button
+                          onClick={() => respondTyped(String(card.msg_id), "approve")}
+                          disabled={!!card.pending}
+                          className="rounded-lg bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-600 hover:bg-emerald-500/20 disabled:opacity-50 dark:text-emerald-400"
+                        >approve</button>
+                        <button
+                          onClick={() => respondTyped(String(card.msg_id), "reject")}
+                          disabled={!!card.pending}
+                          className="rounded-lg bg-red-500/10 px-2 py-0.5 font-medium text-red-600 hover:bg-red-500/20 disabled:opacity-50 dark:text-red-400"
+                        >reject</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2 text-sm">
               <button
                 onClick={openSpecPanel}
                 title="View / edit the team SPEC.md (shared conventions injected into every member turn)"
@@ -1611,6 +1671,20 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
                             );
                           })}
                         </div>
+                        {teamSkills.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1" title="Skills preload — SKILL.md bodies are injected into the member system prompt (agent-studio #482); the list is also the persona allowlist (#707)">
+                            {teamSkills.map((s) => {
+                              const on = cfg.skills.includes(s.name);
+                              return (
+                                <button key={s.name} type="button"
+                                  onClick={() => setMemberCfg(wn, { skills: on ? cfg.skills.filter((x) => x !== s.name) : [...cfg.skills, s.name] })}
+                                  className={`rounded-md border px-1.5 py-0.5 text-[10px] ${on ? "border-violet-400/60 bg-violet-500/15 text-violet-600 dark:text-violet-300" : "border-zinc-300 text-zinc-400 dark:border-zinc-700"}`}>
+                                  skill:{s.name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1636,6 +1710,26 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
                 </div>
               </div>
             )}
+            {/* console#79 R6: topology preset + advanced max_depth. The preset
+                rides team metadata for the kernel topology scheduler (opt-in
+                upstream, #101 phase 2); hub matches the broadcast default. */}
+            <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400">
+              <span className="flex items-center gap-1.5" title="Communication topology preset stored in team metadata — hub (default) broadcasts through the lead">
+                topology
+                <select value={teamTopology} onChange={(e) => setTeamTopology(e.target.value)}
+                  className="rounded-lg border border-zinc-200 bg-transparent px-1.5 py-0.5 text-xs dark:border-zinc-700">
+                  <option value="hub">hub</option>
+                  <option value="chain">chain</option>
+                  <option value="mesh">mesh</option>
+                </select>
+              </span>
+              <span className="flex items-center gap-1.5" title="Kernel TeamDefinition.max_depth — how deep subteams may nest">
+                max depth
+                <input type="number" value={teamMaxDepth} min={1} max={10}
+                  onChange={(e) => setTeamMaxDepth(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-16 rounded-lg border border-zinc-200 bg-transparent px-2 py-0.5 text-xs dark:border-zinc-700" />
+              </span>
+            </div>
             {teamErr && <p className="mb-2 text-sm text-red-500">{teamErr}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setTeamModalOpen(false)} disabled={teamCreating}>Cancel</Button>
