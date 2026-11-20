@@ -64,7 +64,7 @@ export default function MemorySection() {
             )}
           </div>
           <div className="flex shrink-0 gap-2">
-            {!st?.installed && (
+            {!st?.installed && !st?.running && (
               <Button variant="outline" disabled={installing} onClick={() => act("install")}>
                 {busy === "install" || installing ? <LoaderCircle size={14} className="animate-spin" /> : null} 安装
               </Button>

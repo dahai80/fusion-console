@@ -43,6 +43,12 @@ func (s *Server) handleMemoryHubStatus(w http.ResponseWriter, r *http.Request) {
 			out.Installed = true
 		}
 	}
+	if out.Running && !out.Installed {
+		// The hub answers on :11435 even though no known binary layout was
+		// found (started from a workspace tree, another install root) — it is
+		// running, so there is nothing to install.
+		out.Installed = true
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
