@@ -21,7 +21,6 @@ import {
   Terminal,
   Plus,
   X,
-  RefreshCw,
   RotateCcw,
   KeyRound,
   Loader2,
@@ -40,14 +39,13 @@ import {
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type CodeStatus, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
+import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import Onboarding from "./Onboarding";
 import { progress as setupProgress, useSetupStatus } from "./setupStatus";
 import ConsoleUpdate from "./ConsoleUpdate";
 import { GatewayBackendsPanel } from "./GatewayBackends";
-import { WorkersPanel } from "./WorkersPanel";
+import AgentsPage from "./agents/AgentsPage";
 import Dashboard from "./Dashboard";
-import { SkillsPanel } from "./SkillsPanel";
 import { RagPage } from "./RagPage";
 import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
@@ -1792,118 +1790,6 @@ function DispatchPanel({ activity, runs, loaded, stale, convs, busyWorkers, onFo
         />
       )}
     </>
-  );
-}
-
-function AgentsPage() {
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [tab, setTab] = useState<"tools" | "workers" | "skills">("tools");
-  const [codeSt, setCodeSt] = useState<CodeStatus | null>(null);
-  const [installing, setInstalling] = useState("");
-  const [rowErr, setRowErr] = useState("");
-  const load = () => api.agents().then((r) => setAgents(r.agents ?? [])).catch(() => {});
-  const loadCode = useCallback(() => api.codeStatus().then(setCodeSt).catch(() => setCodeSt(null)), []);
-  useEffect(() => { load(); }, []);
-  useEffect(() => { loadCode(); }, [loadCode]);
-  // While an install job streams, poll its status so the inline log moves
-  // and the row flips to installed when the job lands.
-  useEffect(() => {
-    if (!installing) return;
-    const t = setInterval(() => api.codeStatus().then((s) => {
-      setCodeSt(s);
-      if (s.fusion.phase !== "downloading" && s.fusion.phase !== "extracting" && s.fusion.phase !== "installing") {
-        setInstalling("");
-        load();
-      }
-    }).catch(() => {}), 1500);
-    return () => clearInterval(t);
-  }, [installing, load]);
-  // Map a configured agent name to a console installer id (empty = no
-  // installer for that CLI).
-  const installerId = (name: string) => {
-    const id = name.toLowerCase();
-    return ["fusion-code", "claude", "codex", "opencode", "atlascode"].includes(id) ? id : "";
-  };
-  const codeRow = (name: string) => codeSt?.agents.find((x) => x.id === installerId(name));
-  return (
-    <div className="mx-auto max-w-3xl space-y-4 p-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Coding agents</h2>
-        {tab === "tools" && <Button variant="ghost" onClick={load}><RefreshCw size={14} /> Refresh</Button>}
-      </div>
-      <div className="flex gap-2">
-        {(
-          [
-            ["tools", "Agents (tools)"],
-            ["workers", "Workers"],
-            ["skills", "Skills"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={`rounded-xl border px-3 py-1.5 text-sm transition-colors ${
-              tab === id ? "border-indigo-500 bg-indigo-500/5 text-indigo-600 dark:text-indigo-400" : "border-zinc-200/80 text-zinc-500 dark:border-zinc-800"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {tab === "tools" && (
-        <>
-          <p className="text-sm text-zinc-500">
-            Headless adapters only — each run is one task in the chosen workdir. Agents missing from PATH are grayed out.
-          </p>
-          {rowErr && <p className="rounded-xl bg-red-500/10 px-3 py-2 text-sm text-red-500">{rowErr}</p>}
-          {agents.filter((a) => !a.is_worker).map((a) => {
-            const row = codeRow(a.name);
-            const canInstall = !!installerId(a.name) && row && !row.installed && !a.detected;
-            return (
-            <Card key={a.name} className={`flex items-center justify-between p-4 ${!a.detected ? "opacity-80" : ""}`}>
-              <div>
-                <p className="font-medium flex items-center gap-2">
-                  <Terminal size={16} /> {a.name}
-                  {a.detected ? <Badge tone="ok">detected</Badge> : <Badge>not on PATH</Badge>}
-                </p>
-                <p className="text-xs text-zinc-500 mt-1">
-                  command: {a.command} · permission mode: {a.permission_mode} · budget cap ${a.max_budget_usd.toFixed(2)}
-                </p>
-                {installing === a.name && (codeSt?.fusion.logs ?? []).length > 0 && (
-                  <pre className="mt-2 max-h-32 overflow-auto rounded-lg bg-zinc-950 p-2 text-[10px] leading-4 text-zinc-300">
-                    {(codeSt?.fusion.logs ?? []).slice(-6).join("\n")}
-                  </pre>
-                )}
-              </div>
-              {canInstall && (
-                <Button
-                  variant="outline"
-                  disabled={installing !== ""}
-                  onClick={async () => {
-                    setRowErr("");
-                    try {
-                      setInstalling(a.name);
-                      await api.codeInstall(installerId(a.name));
-                      await loadCode();
-                      await load();
-                    } catch (ex) { setRowErr((ex as Error).message); setInstalling(""); }
-                  }}
-                >
-                  <Download size={14} /> Install
-                </Button>
-              )}
-            </Card>
-            );
-          })}
-        </>
-      )}
-      {tab === "workers" && (
-        <Card className="space-y-3 p-4">
-          <WorkersPanel />
-        </Card>
-      )}
-      {tab === "skills" && <SkillsPanel />}
-    </div>
   );
 }
 
