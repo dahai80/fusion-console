@@ -35,6 +35,7 @@ type Server struct {
 	ragInstall    ragInstallState          // background fusion-rag install job (zero value = idle)
 	studioInstall ragInstallState          // background agent-studio install job (same job-state shape)
 	codeInstall   ragInstallState          // background fusion-code install job (same job-state shape)
+	memoryInstall ragInstallState          // background fusion-memory install job (same job-state shape)
 	runs          workerRuns               // live worker dispatch registry (busy/idle + current task)
 	bg            dispatchRegistry         // background dispatch runs (queued/running/done)
 	autoMu        sync.Mutex               // guards autoDepth (auto-continue chain depth per conversation)
@@ -173,6 +174,14 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/rag/start", s.auth.Require(s.handleRagStart))
 	m.HandleFunc("POST /api/rag/stop", s.auth.Require(s.handleRagStop))
 	m.HandleFunc("POST /api/rag/enabled", s.auth.Require(s.handleRagEnabled))
+	// Optional fusion-memory hub: install/lifecycle for the Agents > Memory
+	// tab. The workers' memory modes talk to the hub directly (workermemory).
+	// Prefix /api/memoryhub — /api/memory/status is the worker-memory
+	// dashboard surface above.
+	m.HandleFunc("GET /api/memoryhub/status", s.auth.Require(s.handleMemoryHubStatus))
+	m.HandleFunc("POST /api/memoryhub/install", s.auth.Require(s.handleMemoryHubInstall))
+	m.HandleFunc("POST /api/memoryhub/start", s.auth.Require(s.handleMemoryHubStart))
+	m.HandleFunc("POST /api/memoryhub/stop", s.auth.Require(s.handleMemoryHubStop))
 	m.HandleFunc("GET /api/workers/status", s.auth.Require(s.handleWorkersStatus))
 	m.HandleFunc("GET /api/dispatches", s.auth.Require(s.handleDispatches))
 	m.HandleFunc("POST /api/dispatches/ack", s.auth.Require(s.handleDispatchAck))

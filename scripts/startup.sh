@@ -44,12 +44,41 @@ else
     echo "gateway: skipped (binary or config.yaml not found — start it manually or use the Gateway menu)"
 fi
 
-# 3. Console: start if :11480 is free; -open launches the default browser
+# 3. Optional companion services: fusion-memory (fm-server, :11435) and
+#    fusion-rag (:11436). When installed — as a sibling checkout in ~/fusion/
+#    or a console-managed install under ~/.fusion/fusion-console/ — start
+#    them through their own start.sh unless the port is already serving.
+#    Missing installs are skipped silently: they are opt-in.
+service_dir() { # service_dir <name> -> first existing install root
+    for d in "$HOME/fusion/$1" "$HOME/.fusion/fusion-console/$1"; do
+        [ -f "$d/start.sh" ] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+start_companion() { # start_companion <name> <port>
+    local dir
+    dir=$(service_dir "$1") || { echo "$1: not installed — skipped"; return 0; }
+    if port_open "$2"; then
+        echo "$1: already running on :$2"
+    else
+        bash "$dir/start.sh" start > "$HOME/.fusion/fusion-console/log/$1.log" 2>&1 || {
+            echo "$1: start.sh failed — see ~/.fusion/fusion-console/log/$1.log"
+            return 0
+        }
+        echo "$1: started (dir $dir, log ~/.fusion/fusion-console/log/$1.log)"
+    fi
+}
+
+start_companion fusion-memory 11435
+start_companion fusion-rag 11436
+
+# 4. Console: start if :11480 is free; -open launches the default browser
 #    with a one-time auto-login token.
 if port_open 11480; then
     echo "console: already running on :11480 — open http://127.0.0.1:11480"
 else
     nohup "$CONSOLE_BIN" -open > "$HOME/.fusion/fusion-console/log/console.log" 2>&1 &
-    echo "console: started (pid $!, log ~/.fusion-console/log/console.log)"
+    echo "console: started (pid $!, log ~/.fusion/fusion-console/log/console.log)"
     echo "console: browser opening at http://127.0.0.1:11480 (auto-login)"
 fi
