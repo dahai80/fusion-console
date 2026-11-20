@@ -7,13 +7,14 @@ import ToolsSection from "./ToolsSection";
 import MemorySection from "./MemorySection";
 
 // Agents page: two top-level tabs — Coding agents (workers, brain, skills,
-// and the command-line tools workers run on) and Memory (the fusion-memory
-// hub installer). The open tabs survive a reload of the same browser tab.
+// and the command-line tools workers run on) and Memory (Tools) (the
+// fusion-memory hub installer). The open tabs survive a reload of the same
+// browser tab.
 type TopTab = "coding" | "memory";
 type Tab = "workers" | "brain" | "skills" | "tools";
 const TOPS: { id: TopTab; label: string; icon: typeof Bot }[] = [
   { id: "coding", label: "Coding agents", icon: Terminal },
-  { id: "memory", label: "Memory", icon: Database },
+  { id: "memory", label: "Memory (Tools)", icon: Database },
 ];
 const TABS: { id: Tab; label: string; icon: typeof Bot }[] = [
   { id: "workers", label: "Worker", icon: Bot },
