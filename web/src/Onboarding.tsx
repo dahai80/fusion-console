@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { api, type Orchestrator } from "./api";
 import { GatewayBackendsPanel } from "./GatewayBackends";
-import { WorkersPanel } from "./WorkersPanel";
+import WorkersSection from "./agents/WorkersSection";
 import { Badge, Button, Card, Input, Select } from "./components/ui";
 import {
   directProviders,
@@ -523,7 +523,7 @@ function TeamStep({ status, refresh }: { status: SetupStatus; refresh: () => Pro
       </StatusRow>
       {open && (
         <div className="rounded-xl border border-zinc-200/80 p-3 dark:border-zinc-800">
-          <WorkersPanel onSaved={() => void refresh()} />
+          <WorkersSection embedded onChanged={() => void refresh()} />
         </div>
       )}
       <Feedback msg={a.msg} err={a.err} />

@@ -20,8 +20,21 @@ type History = ReturnType<typeof runtimeHistory>;
 
 type UsageControls = PeriodProps;
 
+// Sample data is the default view; ?dashboard=live (or the switch) shows live
+// data, and the choice sticks for the rest of this browser tab.
+const SOURCE_KEY = "fc-dashboard-source";
+function initialSample(): boolean {
+  const q = new URLSearchParams(location.search).get("dashboard");
+  if (q === "live" || q === "sample") return q === "sample";
+  try { return sessionStorage.getItem(SOURCE_KEY) !== "live"; } catch { return true; }
+}
+
 export default function TaskOverview(props: UsageControls) {
-  const [sample, setSample] = useState(() => new URLSearchParams(location.search).get("dashboard") === "sample");
+  const [sample, setSampleState] = useState(initialSample);
+  const setSample = (v: boolean) => {
+    setSampleState(v);
+    try { sessionStorage.setItem(SOURCE_KEY, v ? "sample" : "live"); } catch { /* storage blocked */ }
+  };
   const [advanced, setAdvanced] = useState(false);
   const [live, setLive] = useState<Snapshot>();
   const [error, setError] = useState("");
@@ -64,8 +77,8 @@ export default function TaskOverview(props: UsageControls) {
         <h1>Overview</h1>
         <div className="ops-controls">
           <div className="ops-switch" aria-label="Data source" role="group">
-            <button aria-pressed={!sample} onClick={() => setSample(false)}><Radio />Live data</button>
             <button aria-pressed={sample} onClick={() => setSample(true)}><FlaskConical />Sample</button>
+            <button aria-pressed={!sample} onClick={() => setSample(false)}><Radio />Live data</button>
           </div>
           {sample && <button className="ops-action" onClick={() => setAdvanced(v => !v)}>
             {advanced ? <RotateCcw /> : <ArrowRight />}{advanced ? "Replay sample" : "Next event"}

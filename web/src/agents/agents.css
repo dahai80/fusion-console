@@ -1,0 +1,12 @@
+/* Agents page: sheet motion only — everything else is Tailwind. */
+@keyframes fc-sheet-up { from { transform: translateY(24px); opacity: .5; } to { transform: none; opacity: 1; } }
+@keyframes fc-sheet-left { from { transform: translateX(32px); opacity: .5; } to { transform: none; opacity: 1; } }
+@keyframes fc-fade { from { opacity: 0; } to { opacity: 1; } }
+.fc-sheet { animation: fc-sheet-up 200ms cubic-bezier(.2, .8, .2, 1); }
+.fc-scrim { animation: fc-fade 160ms ease-out; }
+@media (min-width: 640px) {
+  .fc-sheet { animation-name: fc-sheet-left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fc-sheet, .fc-scrim { animation: none; }
+}
