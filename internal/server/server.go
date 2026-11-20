@@ -30,6 +30,7 @@ type Server struct {
 	agents        map[string]agent.Adapter
 	agentSema     chan struct{}            // bounded concurrent worker slots (was a host-wide mutex: every dispatch serialized behind one subprocess)
 	approvals     sync.Map                 // confirm-mode dispatch gates: id -> chan bool
+	turns         chatTurnRegistry         // latest streamed chat/agent turn per conversation (reconnect after a dropped stream)
 	harness       *harness.Client          // fusion-harness sidecar (chat guards)
 	autoToken     string                   // one-time auto-login token for --open; empty = disabled
 	ragInstall    ragInstallState          // background fusion-rag install job (zero value = idle)
@@ -133,6 +134,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/conversations", s.auth.Require(s.handleListConversations))
 	m.HandleFunc("POST /api/conversations", s.auth.Require(s.handleCreateConversation))
 	m.HandleFunc("GET /api/conversations/{id}/messages", s.auth.Require(s.handleListMessages))
+	m.HandleFunc("GET /api/conversations/{id}/turn", s.auth.Require(s.handleConversationTurn))
 	m.HandleFunc("DELETE /api/conversations/{id}", s.auth.Require(s.handleDeleteConversation))
 	m.HandleFunc("PATCH /api/conversations/{id}", s.auth.Require(s.handleRenameConversation))
 	m.HandleFunc("PUT /api/conversations/{id}/model", s.auth.Require(s.handleSetConversationModel))

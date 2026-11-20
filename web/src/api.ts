@@ -114,6 +114,8 @@ export const api = {
     }),
   messages: (id: number) =>
     req<{ messages: Message[] }>(`/api/conversations/${id}/messages`),
+  conversationTurn: (id: number) =>
+    req<{ turn: ChatTurn | null }>(`/api/conversations/${id}/turn`, { cache: "no-store" }),
   deleteConversation: (id: number) =>
     req<{ ok: boolean }>(`/api/conversations/${id}`, { method: "DELETE" }),
   renameConversation: (id: number, title: string) =>
@@ -612,6 +614,20 @@ export type Orchestrator = {
   brain_context_files?: string[];
   brain_provider_id?: string;
   brain_model?: string;
+};
+
+// ChatTurn is the server's record of the latest streamed chat / agent turn
+// of a conversation: it keeps running when the stream drops, and the browser
+// replays its events to pick the reply back up.
+export type ChatTurn = {
+  id: string;
+  kind: "chat" | "agent";
+  request: string;
+  running: boolean;
+  started_at: string;
+  ended_at?: string;
+  events: Record<string, unknown>[];
+  truncated?: boolean;
 };
 
 // streamPOST performs a POST that yields SSE "data:" JSON events.
