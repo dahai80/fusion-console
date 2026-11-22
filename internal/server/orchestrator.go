@@ -246,6 +246,14 @@ func orchestratorTools() []chat.ToolDecl {
 				`},"required":["from","to","body"]}`),
 		},
 		{
+			Name:        "suggest_feedback",
+			Description: "Draft a GitHub issue from a problem you could not solve in this conversation (a bug you hit, an error a worker returned, a missing capability). You draft it; the user reviews and submits it themselves on the Feedback page — you cannot file issues. Call it when the user hits something that looks like a product bug or a clear feature gap.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"rough":{"type":"string","description":"free-form description of the problem: what happened, error messages, what the user expected"},` +
+				`"component":{"type":"string","enum":["console","memory","rag","gateway","code"],"description":"fusion component the problem belongs to; omit to let the draft decide"}` +
+				`},"required":["rough"]}`),
+		},
+		{
 			Name:        "team_inbox",
 			Description: "Read a team member's mailbox (non-draining) from the agent-studio daemon — use it to pick up replies sent back to the console-side member.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
@@ -385,6 +393,9 @@ func (s *Server) executeToolCall(ctx context.Context, call chat.ToolCall, user s
 			return s.enqueueBackgroundDispatch(convID, user, args, wk, cli, settings, budget)
 		}
 		return s.finishDispatch(ctx, convID, user, call.Name, args, wk, cli, settings, budget, send)
+
+	case "suggest_feedback":
+		return s.runSuggestFeedback(ctx, call.Arguments, convID, send)
 
 	case "read_artifact":
 		root := s.agentsRoot()

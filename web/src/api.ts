@@ -273,6 +273,13 @@ export const api = {
     req<Record<string, any>>("/api/team/op", { method: "POST", body: JSON.stringify(body) }),
   codeStatus: () => req<CodeStatus>("/api/code/status"),
   memoryHubStatus: () => req<MemoryHubStatus>("/api/memoryhub/status"),
+  feedbackEnv: () => req<Record<string, string>>("/api/feedback/env"),
+  feedbackDraft: (rough: string, component: string) =>
+    req<FeedbackDraft>("/api/feedback/draft", { method: "POST", body: JSON.stringify({ rough, component }) }),
+  feedbackDraftLatest: (conversationId: number) =>
+    req<FeedbackDraft>(`/api/feedback/draft_latest?conversation_id=${conversationId}`),
+  feedbackSubmit: (component: string, title: string, body: string) =>
+    req<{ url: string; repo: string }>("/api/feedback/submit", { method: "POST", body: JSON.stringify({ component, title, body }) }),
   memoryHubInstall: () =>
     req<{ status: string }>("/api/memoryhub/install", { method: "POST", body: "{}" }),
   memoryHubStart: () => req<{ running: boolean }>("/api/memoryhub/start", { method: "POST", body: "{}" }),
@@ -469,6 +476,15 @@ export type CodeStatus = {
     web_port: number;
     key_configured: boolean;
   };
+};
+
+export type FeedbackDraft = {
+  title: string;
+  steps: string;
+  expect: string;
+  actual: string;
+  extra: string;
+  component: string;
 };
 
 export type MemoryHubStatus = {
