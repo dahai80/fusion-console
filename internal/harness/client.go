@@ -20,17 +20,16 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/dahai80/fusion-console/internal/chat"
 )
 
 // protocolVersion pins sidecar protocol v1 (issue #110). A mismatch is a
 // hard error: the client disables itself instead of guessing a dialect.
 const protocolVersion = 1
 
-// Message mirrors one chat message for the sidecar wire format.
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
+// Message carries chat history, including tool call IDs, through compaction.
+type Message = chat.Message
 
 // rpcError is the v1 typed error object.
 type rpcError struct {

@@ -14,11 +14,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -298,4 +301,61 @@ func (s *Server) runSuggestFeedback(ctx context.Context, rawArgs string, convID 
 			"detail": fmt.Sprintf("feedback draft ready (component %s) — confirm on the Feedback page", draft.Component)})
 	}
 	return fmt.Sprintf("A feedback draft is prepared (component %s, title %q) and shown to the user as a suggestion card. Ask the user to open the Feedback page to review and submit it; you cannot submit issues yourself.", draft.Component, draft.Title), nil
+}
+
+// listFeedbackIssues only reads public reports. No CLI, user credentials or
+// arbitrary destination is passed to a worker or to GitHub.
+func listFeedbackIssues(ctx context.Context, raw string, client *http.Client) (string, error) {
+	args := struct {
+		Component string `json:"component"`
+		Limit     int    `json:"limit"`
+	}{Component: "console", Limit: 3}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return "", fmt.Errorf("list_feedback_issues: %w", err)
+	}
+	repo, ok := feedbackRepos[args.Component]
+	if !ok || args.Limit < 1 || args.Limit > 10 {
+		return "", fmt.Errorf("unknown component or invalid issue limit (expected 1 to 10)")
+	}
+	q := url.Values{"q": {"repo:" + repo + " is:issue"}, "sort": {"created"}, "order": {"desc"}, "per_page": {strconv.Itoa(args.Limit)}}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/search/issues?"+q.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("read GitHub issues: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub issue search returned %s", resp.Status)
+	}
+	var result struct {
+		Incomplete bool `json:"incomplete_results"`
+		Items      []struct {
+			Number  int    `json:"number"`
+			Title   string `json:"title"`
+			Body    string `json:"body"`
+			URL     string `json:"html_url"`
+			State   string `json:"state"`
+			Created string `json:"created_at"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode GitHub issues: %w", err)
+	}
+	for i := range result.Items {
+		row := &result.Items[i]
+		row.Title = redactSecrets(row.Title)
+		body := []rune(redactSecrets(row.Body))
+		if len(body) > 2400 {
+			row.Body = string(body[:2400]) + "…"
+		} else {
+			row.Body = string(body)
+		}
+	}
+	out, err := json.Marshal(result)
+	return string(out), err
 }

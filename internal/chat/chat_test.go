@@ -386,3 +386,33 @@ func TestGatewayProviderChatUsesV1Path(t *testing.T) {
 		t.Errorf("request path = %q, want /v1/chat/completions", gotPath)
 	}
 }
+
+func TestOpenAICompatReplaysToolCalls(t *testing.T) {
+	wire := openAIMessages([]Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "list_feedback_issues", Arguments: "{}"}}},
+		{Role: "tool", ToolCallID: "c1", Content: "issues"},
+	})
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body []struct {
+		Role      string
+		ToolCalls []struct {
+			ID, Type string
+			Function struct{ Name, Arguments string }
+		} `json:"tool_calls"`
+		ToolCallID string `json:"tool_call_id"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 2 || len(body[0].ToolCalls) != 1 {
+		t.Fatalf("wrong call count: %s", raw)
+	}
+	call := body[0].ToolCalls[0]
+	if call.Type != "function" || call.Function.Name != "list_feedback_issues" ||
+		call.Function.Arguments != "{}" || body[1].Role != "tool" || call.ID != "c1" || body[1].ToolCallID != call.ID {
+		t.Fatalf("tool call and result on the wire: %s", raw)
+	}
+}

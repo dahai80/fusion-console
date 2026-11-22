@@ -343,10 +343,28 @@ func (r *dispatchRegistry) unreadCounts() map[int64]int {
 	return out
 }
 
-// enqueueBackgroundDispatch validates nothing further (callers already did)
+// validateDispatchRepo runs before a background receipt or any repository sync.
+func validateDispatchRepo(args dispatchArgs, wk *config.WorkerConfig) error {
+	if wk == nil || wk.Isolation == "standalone" || strings.TrimSpace(wk.Repo) == "" || strings.TrimSpace(args.Repo) == "" {
+		return nil
+	}
+	if sameDispatchRepo(args.Repo, wk.Repo) {
+		return nil
+	}
+	name := wk.Name
+	if name == "" {
+		name = args.Agent
+	}
+	return fmt.Errorf("worker %s is bound to repo %s and cannot work on %s — dispatch the task to the worker that owns that repo", name, wk.Repo, args.Repo)
+}
+
+// enqueueBackgroundDispatch checks the binding before creating a receipt
 // and starts the run in a goroutine. Execution takes one of the bounded
 // worker slots, so runs queue only when all slots are busy.
 func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispatchArgs, wk *config.WorkerConfig, cli string, settings config.AgentSettings, budget float64) (string, error) {
+	if err := validateDispatchRepo(args, wk); err != nil {
+		return "", err
+	}
 	// Display name: the resolved named worker, not the raw agent id the brain
 	// passed (often the CLI type "claude" — cards and chat summaries must show
 	// which worker ran, e.g. "fusion-web-shell").
@@ -521,6 +539,9 @@ func truncateRunes(s string, n int) string {
 // failed worktree run is kept in place with a .console-preserved marker, so
 // the work is re-deliverable instead of lost.
 func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, callName string, args dispatchArgs, wk *config.WorkerConfig, cli string, settings config.AgentSettings, budget float64, send func(map[string]any)) (result string, err error) {
+	if err := validateDispatchRepo(args, wk); err != nil {
+		return "", err
+	}
 	workdir := s.cfg.ResolveWorkDir(cli)
 	// Brain code source: keep the configured GitHub repo current before
 	// every dispatch so the brain workspace mirrors upstream. Warnings
@@ -536,20 +557,6 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 		}
 	}
 	if wk != nil {
-		// Repo-binding guard: a worker with a bound repo only works on
-		// that repo. Cross-repo dispatches are rejected so the brain
-		// routes the task to the owning worker instead.
-		if bound := strings.TrimSpace(wk.Repo); bound != "" && wk.Isolation != "standalone" {
-			if asked := strings.TrimSpace(args.Repo); asked != "" && normalizeRepo(asked) != normalizeRepo(bound) {
-				name := wk.Name
-				if name == "" {
-					name = args.Agent
-				}
-				return "", fmt.Errorf(
-					"worker %s is bound to repo %s and cannot work on %s — dispatch the task to the worker that owns %s, or file an issue in that repo instead",
-					name, bound, asked, asked)
-			}
-		}
 		switch wk.Isolation {
 		case "github":
 			// Sync the configured repository into the work dir, then run
@@ -570,11 +577,11 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 		case "standalone":
 			workdir = s.cfg.ResolveWorkerDir(*wk)
 		default: // worktree (also the empty-isolation default)
-			// Named workers carry their own default repo; the per-run
-			// argument wins when the brain passes one explicitly.
-			repo := args.Repo
-			if strings.TrimSpace(repo) == "" {
-				repo = wk.Repo
+			// A remote alias can match the binding, but worktrees must
+			// still use the owner's configured local checkout.
+			repo := strings.TrimSpace(wk.Repo)
+			if repo == "" || (isRepoURL(repo) && filepath.IsAbs(args.Repo)) {
+				repo = args.Repo
 			}
 			if strings.TrimSpace(repo) != "" {
 				wt, createErr := s.createWorktree(repo, args.Agent)

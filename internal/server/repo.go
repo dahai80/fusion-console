@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,57 @@ func isRepoURL(repo string) bool {
 	r := strings.TrimSpace(repo)
 	return strings.HasPrefix(r, "http://") || strings.HasPrefix(r, "https://") ||
 		strings.HasPrefix(r, "git@") || strings.HasPrefix(r, "ssh://")
+}
+
+// sameDispatchRepo accepts a checkout under a different directory name when
+// its origin identifies the bound repository. Local-only repositories retain
+// their path identity; a short planner reference can still name a binding.
+func sameDispatchRepo(asked, bound string) bool {
+	asked, bound = strings.TrimSpace(asked), strings.TrimSpace(bound)
+	if asked == bound {
+		return true
+	}
+	a, b := dispatchRepoID(asked), dispatchRepoID(bound)
+	if a != "" && b != "" {
+		return a == b
+	}
+	// Older planner calls sometimes carry only the repository name.
+	if !strings.ContainsAny(asked, "/\\:") {
+		return normalizeRepo(asked) == normalizeRepo(bound)
+	}
+	return false
+}
+
+func dispatchRepoID(ref string) string {
+	if filepath.IsAbs(ref) {
+		if _, err := os.Stat(filepath.Join(ref, ".git")); err != nil {
+			return "local:" + filepath.Clean(ref)
+		}
+		origin := runGitOut(ref, "config", "--local", "--get", "remote.origin.url")
+		if !isRepoURL(origin) {
+			return "local:" + filepath.Clean(ref)
+		}
+		ref = origin
+	}
+	if strings.HasPrefix(ref, "git@") {
+		host, path, ok := strings.Cut(ref, ":")
+		if !ok {
+			return ""
+		}
+		ref = "ssh://" + host + "/" + path
+	}
+	u, err := url.Parse(ref)
+	if err != nil || !isRepoURL(ref) || u.Host == "" {
+		return ""
+	}
+	path := strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
+	if path == "" {
+		return ""
+	}
+	if strings.EqualFold(u.Hostname(), "github.com") {
+		path = strings.ToLower(path)
+	}
+	return strings.ToLower(u.Host) + path
 }
 
 // syncRepo prepares a workspace from a git remote. Used for worker "github"
