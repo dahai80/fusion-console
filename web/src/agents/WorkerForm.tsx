@@ -22,15 +22,6 @@ export function WorkerForm({ draft, onChange, agents, providers, workers, editin
   const others = workers.filter((w) => (w.name || w.agent) !== editing);
   const autoName = editing || nextName(draft.agent || "worker", others);
   const [more, setMore] = useState(() => !!editing && !!(draft.workDir || draft.provider || draft.model || draft.branch || draft.memory !== "notes" || draft.budget !== 5));
-  const [models, setModels] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (!draft.provider) { setModels([]); return; }
-    let stop = false;
-    api.models(draft.provider).then((r) => { if (!stop) setModels(r.models ?? []); }).catch(() => { if (!stop) setModels([]); });
-    return () => { stop = true; };
-  }, [draft.provider]);
-
   const place = (id: Place) => ({ name: "fc-worker-place", checked: draft.place === id, onSelect: () => onChange({ place: id }) });
 
   return (
@@ -98,11 +89,8 @@ export function WorkerForm({ draft, onChange, agents, providers, workers, editin
               {providers.map((p) => <option key={p.id} value={p.id}>{p.name || p.id}{p.type === "gateway" ? "（网关）" : ""}</option>)}
             </Select>
           </Field>
-          <Field label="模型">
-            <Input value={draft.model} onChange={(e) => onChange({ model: e.target.value })} list="fc-worker-models"
-              placeholder={draft.provider ? "服务的默认模型" : "工具的默认模型"} autoCapitalize="off" spellCheck={false} />
-            <datalist id="fc-worker-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
-          </Field>
+          <ModelField key={draft.provider} provider={draft.provider} value={draft.model}
+            onChange={(model) => onChange({ model })} />
           <Field label="每次最多花费（美元）">
             <Input type="number" inputMode="decimal" min={0.5} step={0.5} value={Number.isFinite(draft.budget) ? draft.budget : ""}
               onChange={(e) => onChange({ budget: e.target.value === "" ? NaN : Number(e.target.value) })} />
@@ -120,6 +108,48 @@ export function WorkerForm({ draft, onChange, agents, providers, workers, editin
             placeholder={`~/.fusion/fusion-console/agents/${draft.name.trim() || autoName}`} autoCapitalize="off" spellCheck={false} />
         </Field>
       </Advanced>
+    </div>
+  );
+}
+
+function ModelField({ provider, value, onChange }: {
+  provider: string; value: string; onChange: (model: string) => void;
+}) {
+  const [models, setModels] = useState<string[]>([]);
+  const [manual, setManual] = useState(false);
+  useEffect(() => {
+    if (!provider) return;
+    let active = true;
+    api.models(provider).then((r) => {
+      if (active) setModels([...new Set((r.models ?? []).filter(Boolean))]);
+    }).catch(() => { /* Manual entry remains available. */ });
+    return () => { active = false; };
+  }, [provider]);
+
+  const defaultLabel = provider ? "服务的默认模型" : "工具的默认模型";
+  const custom = manual || (!!value && !models.includes(value));
+  return (
+    <div className="space-y-2">
+      {models.length > 0 && (
+        <Field label="模型">
+          <Select className={selectCls} value={custom ? "custom" : value ? "model:" + value : ""}
+            onChange={(e) => {
+              const choice = e.target.value;
+              setManual(choice === "custom");
+              if (choice !== "custom") onChange(choice ? choice.slice("model:".length) : "");
+            }}>
+            <option value="">{defaultLabel}</option>
+            {models.map((model) => <option key={model} value={"model:" + model}>{model}</option>)}
+            <option value="custom">手动输入</option>
+          </Select>
+        </Field>
+      )}
+      {(models.length === 0 || custom) && (
+        <Field label={models.length ? "自定义模型" : "模型"}>
+          <Input value={value} onFocus={() => setManual(true)} onChange={(e) => onChange(e.target.value)}
+            placeholder={defaultLabel} autoCapitalize="off" spellCheck={false} />
+        </Field>
+      )}
     </div>
   );
 }

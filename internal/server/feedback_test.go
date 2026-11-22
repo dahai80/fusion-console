@@ -1,6 +1,10 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
+
 	"strings"
 	"testing"
 )
@@ -70,5 +74,36 @@ func TestFeedbackComponentRepo(t *testing.T) {
 	}
 	if got := feedbackComponentRepo("bogus"); got != "dahai80/fusion-console" {
 		t.Fatalf("unknown component should fall back to console, got %q", got)
+	}
+}
+
+type issueTransport func(*http.Request) (*http.Response, error)
+
+func (fn issueTransport) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
+
+func TestListFeedbackIssues(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: issueTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		q := r.URL.Query()
+		if r.Method != "GET" || r.URL.Host != "api.github.com" || r.URL.Path != "/search/issues" ||
+			q.Get("q") != "repo:dahai80/fusion-console is:issue" || q.Get("sort") != "created" ||
+			q.Get("order") != "desc" || q.Get("per_page") != "3" || r.Header.Get("Authorization") != "" {
+			t.Fatalf("unexpected public query: %v", r.URL)
+		}
+		body := `{"items":[{"number":105,"body":"` + strings.Repeat("a", 2600) + `"}]}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	out, err := listFeedbackIssues(t.Context(), "{}", client)
+	if err != nil || !json.Valid([]byte(out)) || !strings.Contains(out, "105") || strings.Contains(out, strings.Repeat("a", 2401)) {
+		t.Fatalf("unexpected public issue result: %v", err)
+	}
+	for _, input := range []string{`{"component":"unknown"}`, `{"limit":11}`} {
+		if _, err := listFeedbackIssues(t.Context(), input, client); err == nil {
+			t.Fatalf("invalid input accepted: %s", input)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("made %d requests", calls)
 	}
 }

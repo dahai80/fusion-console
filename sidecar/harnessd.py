@@ -80,7 +80,7 @@ class ConvBudget:
 
 # Orchestrator tool allowlist. Everything else stays fail-closed (the engine
 # is armed by these rules, so unmatched tools ask -> needs_approval).
-ORCHESTRATOR_TOOLS = ("list_agents", "run_agent", "read_artifact", "run_workflow", "run_status",
+ORCHESTRATOR_TOOLS = ("list_agents", "list_feedback_issues", "run_agent", "read_artifact", "run_workflow", "run_status",
                       "kb_search", "kb_ask", "team_status", "create_team_member")
 
 

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dahai80/fusion-console/internal/config"
 )
 
 // runGit is a small helper for test-repo setup; failures are fatal.
@@ -108,5 +110,25 @@ func TestSyncRepo(t *testing.T) {
 		if isRepoURL(p) {
 			t.Fatalf("isRepoURL(%q) = true", p)
 		}
+	}
+}
+
+func TestBoundWorkerAcceptsRenamedCheckoutBeforeQueue(t *testing.T) {
+	checkout := filepath.Join(t.TempDir(), "codex")
+	initRepo(t, checkout)
+	const origin = "https://github.com/example/fusion-console.git"
+	runGit(t, checkout, "remote", "add", "origin", origin)
+
+	worker := &config.WorkerConfig{Name: "SOL", Isolation: "github", Repo: origin}
+	args := dispatchArgs{Agent: "SOL", Repo: checkout, Background: true}
+	if err := validateDispatchRepo(args, worker); err != nil {
+		t.Fatalf("checkout with matching origin: %v", err)
+	}
+	if !sameDispatchRepo("git@github.com:example/fusion-console.git", origin) {
+		t.Fatal("SSH and HTTPS identify the same remote")
+	}
+	runGit(t, checkout, "remote", "set-url", "origin", "https://github.com/other/fusion-console.git")
+	if _, err := (&Server{}).enqueueBackgroundDispatch(0, "admin", args, worker, "codex", config.AgentSettings{}, 0); err == nil {
+		t.Fatal("wrong owner must be rejected before touching the queue")
 	}
 }
