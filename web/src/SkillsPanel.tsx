@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderCheck, PenLine, ShieldAlert, Sparkles, Upload } from "lucide-react";
+import { FolderCheck, PenLine, ShieldAlert, Sparkles, Store, Upload } from "lucide-react";
 import { api, type CavemanStatus, type SkillDoc, type SkillEntry } from "./api";
 import { Badge, Button, Card, Input, Select, Textarea } from "./components/ui";
+import { SkillsMarket } from "./SkillsMarket";
 
 // Curated industry skills worth one-click importing. Sources are pinned to
 // repos we have vetted; everything else can be typed into the import box.
@@ -22,13 +23,14 @@ const CURATED: { label: string; source: string }[] = [
 // where the content came from and what the server-side audit flagged.
 type SkillReview = { source?: string; warnings: string[]; missing: string[] };
 
-type SkillTab = "installed" | "new" | "draft" | "import";
+type SkillTab = "installed" | "new" | "draft" | "import" | "market";
 
 const TABS: { id: SkillTab; label: string; icon: typeof FolderCheck }[] = [
     { id: "installed", label: "Installed", icon: FolderCheck },
     { id: "new", label: "New Skill", icon: PenLine },
     { id: "draft", label: "AI Draft", icon: Sparkles },
     { id: "import", label: "Import", icon: Upload },
+    { id: "market", label: "Market", icon: Store },
 ];
 
 // SkillsPanel manages the SKILL.md directories headless workers load:
@@ -318,6 +320,8 @@ const [caveman, setCaveman] = useState<CavemanStatus | null>(null);
                     )}
                 </Card>
             )}
+
+            {tab === "market" && <SkillsMarket />}
         </div>
     );
 
