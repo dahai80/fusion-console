@@ -280,6 +280,7 @@ export const api = {
     req<FeedbackDraft>(`/api/feedback/draft_latest?conversation_id=${conversationId}`),
   feedbackSubmit: (component: string, title: string, body: string) =>
     req<{ url: string; repo: string }>("/api/feedback/submit", { method: "POST", body: JSON.stringify({ component, title, body }) }),
+  marketRegistry: () => req<MarketRegistry>("/api/market/registry"),
   memoryHubInstall: () =>
     req<{ status: string }>("/api/memoryhub/install", { method: "POST", body: "{}" }),
   memoryHubStart: () => req<{ running: boolean }>("/api/memoryhub/start", { method: "POST", body: "{}" }),
@@ -476,6 +477,24 @@ export type CodeStatus = {
     web_port: number;
     key_configured: boolean;
   };
+};
+
+export type MarketEntry = {
+  id: string;
+  name: string;
+  kind: "plugin" | "connector" | "skill" | "app" | string;
+  category?: string;
+  source?: string;
+  description?: { zh?: string; en?: string };
+  releases_url?: string;
+  doc_url?: string;
+};
+
+export type MarketRegistry = {
+  version: number;
+  entries: MarketEntry[];
+  fetched_at: string;
+  cached: boolean;
 };
 
 export type FeedbackDraft = {

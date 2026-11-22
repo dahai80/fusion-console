@@ -52,6 +52,8 @@ type Server struct {
 	catMu         sync.Mutex               // guards catalog cache (model-catalog reachability)
 	catCache      []modelCatalogItem       // nil = cache empty
 	catAt         time.Time                // when the cache was filled
+	marketMu      sync.Mutex               // guards marketCache (fusion-skills registry)
+	marketCache   *marketRegistry          // nil = never fetched
 	srcInstall    ragInstallState          // background source install job (macfabric stage-1)
 	mux           *http.ServeMux
 }
@@ -219,6 +221,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/feedback/draft", s.auth.Require(s.handleFeedbackDraft))
 	m.HandleFunc("GET /api/feedback/draft_latest", s.auth.Require(s.handleFeedbackDraftLatest))
 	m.HandleFunc("POST /api/feedback/submit", s.auth.Require(s.handleFeedbackSubmit))
+	// Skills Market: fusion-skills registry consumer (Agents -> Skills -> Market).
+	m.HandleFunc("GET /api/market/registry", s.auth.Require(s.handleMarketRegistry))
 	m.HandleFunc("GET /api/team/agents", s.auth.Require(s.handleTeamAgents))
 	m.HandleFunc("GET /api/team/chat_poll", s.auth.Require(s.handleTeamChatPoll))
 	m.HandleFunc("GET /api/team/teams", s.auth.Require(s.handleTeamTeams))
