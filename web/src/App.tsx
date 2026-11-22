@@ -37,6 +37,7 @@ import {
   FileText,
   Gauge,
   Users,
+  Megaphone,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -48,6 +49,9 @@ import { progress as setupProgress, useSetupStatus } from "./setupStatus";
 import ConsoleUpdate from "./ConsoleUpdate";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import AgentsPage from "./agents/AgentsPage";
+import FeedbackPage from "./FeedbackPage";
+import { notifyFeedbackError, notifyFeedbackSuggestion } from "./feedbackBus";
+import type { FeedbackDraft } from "./api";
 import Dashboard from "./Dashboard";
 import { RagPage } from "./RagPage";
 import { ModelsPage } from "./ModelsPage";
@@ -69,7 +73,7 @@ const chatMarkdownComponents: Components = {
   },
 };
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "feedback" | "onboard";
 
 export default function App() {
   return (
@@ -162,6 +166,8 @@ function Shell() {
         {page === "gateway" && <GatewayPage />}
         {page === "rag" && <RagPage />}
         {page === "team" && <TeamPage />}
+        {page === "feedback" && <FeedbackPage />}
+        <FeedbackToastHost setPage={setPage} />
       </main>
     </div>
   );
@@ -169,6 +175,73 @@ function Shell() {
 
 function Splash() {
   return <div className="flex h-screen items-center justify-center text-zinc-400">loading…</div>;
+}
+
+// FeedbackToastHost renders the trigger-path prompts: a stream error offers a
+// prefilled issue draft (path 2), a suggest_feedback tool result offers the
+// brain's draft (path 3). Submission still happens only on the Feedback page.
+function FeedbackToastHost({ setPage }: { setPage: (p: Page) => void }) {
+  const [errText, setErrText] = useState("");
+  const [suggest, setSuggest] = useState<FeedbackDraft | null>(null);
+
+  useEffect(() => {
+    const onError = (e: Event) => setErrText(((e as CustomEvent).detail as { text: string }).text);
+    const onSuggest = (e: Event) => setSuggest(((e as CustomEvent).detail as { draft: FeedbackDraft }).draft);
+    window.addEventListener("fc:feedback-error", onError);
+    window.addEventListener("fc:feedback-suggest", onSuggest);
+    return () => {
+      window.removeEventListener("fc:feedback-error", onError);
+      window.removeEventListener("fc:feedback-suggest", onSuggest);
+    };
+  }, []);
+
+  const openPage = (detail: Record<string, unknown>) => {
+    window.dispatchEvent(new CustomEvent("fc:feedback-prefill", { detail }));
+    setErrText("");
+    setSuggest(null);
+    setPage("feedback");
+  };
+
+  if (!errText && !suggest) return null;
+  const card = errText
+    ? {
+        title: "任务出错了",
+        body: errText,
+        action: "整理成 issue",
+        onAction: () => openPage({ rough: errText, component: "console", steps: errText }),
+        dismiss: () => setErrText(""),
+      }
+    : {
+        title: "大脑起草了一个 issue",
+        body: suggest!.title,
+        action: "查看并提交",
+        onAction: () => openPage(suggest as unknown as Record<string, unknown>),
+        dismiss: () => setSuggest(null),
+      };
+  return (
+    <div className="pointer-coarse:bottom-2 fixed bottom-4 right-4 z-40 max-w-sm rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex items-start gap-2">
+        <Megaphone size={16} className="mt-0.5 shrink-0 text-indigo-500" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{card.title}</p>
+          <p className="mt-1 line-clamp-3 break-all text-xs text-zinc-500">{card.body}</p>
+          <div className="mt-3 flex gap-2">
+            <button type="button" onClick={card.onAction}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500">
+              {card.action}
+            </button>
+            <button type="button" onClick={card.dismiss}
+              className="rounded-lg border border-zinc-200/80 px-3 py-1.5 text-xs text-zinc-500 hover:border-zinc-400 dark:border-zinc-800">
+              忽略
+            </button>
+          </div>
+        </div>
+        <button type="button" aria-label="close" onClick={card.dismiss} className="ml-1 text-zinc-400 hover:text-zinc-600">
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function TopBar({
@@ -212,6 +285,7 @@ function TopBar({
           {tab("gateway", "Gateway", Network)}
           {tab("rag", "Knowledge Base", Database)}
           {tab("team", "Team", Users)}
+          {tab("feedback", "Feedback", Megaphone)}
         </nav>
       </div>
       <div className="flex items-center gap-2 text-sm text-zinc-500">
@@ -1099,6 +1173,12 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         reveal.tick();
         if (ev.type === "approval" || ev.type === "tool") setApproval((cur) => approvalAfter(cur, ev));
         if (ev.type === "budget") setBudget({ spent: (ev.spent as number) ?? 0, limit: (ev.limit as number) ?? 0 });
+        // Feedback trigger paths: stream errors offer a prefilled issue; the
+        // suggest_feedback tool fetches the stashed brain draft for the card.
+        if (ev.type === "error") notifyFeedbackError(String(ev.text ?? ""));
+        if (ev.type === "tool" && ev.tool === "suggest_feedback") {
+          api.feedbackDraftLatest(idx).then((d) => notifyFeedbackSuggestion(d)).catch(() => {});
+        }
       });
       reveal.flushNow();
     } catch (ex) {
@@ -1109,6 +1189,7 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         const message = isNetworkError(ex) ? NETWORK_DOWN : (ex as Error).message;
         if (isNetworkError(ex)) setInput((cur) => cur || text);
         setErr(message);
+        notifyFeedbackError(message);
         setBrainActivity(prev => prev && prev.conversation === brainConversation ? brainEvent(prev, { type: "error", text: message }) : prev);
       }
     } finally {
@@ -1205,6 +1286,7 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
       await streamPOST("/api/agent/run", { conversation_id: conv.ID, agent, task: text, workdir: "", turn_id: turnId }, (ev) => {
         view = applyAgentEvent(view, ev);
         reveal.tick();
+        if (ev.type === "error") notifyFeedbackError(String(ev.text ?? ""));
       });
       reveal.flushNow();
     } catch (ex) {
@@ -1212,7 +1294,9 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         ownBusy = await followTurn({ conv: convId, kind: "agent", turnId, sent: text, restore: text });
       } else {
         if (isNetworkError(ex)) setInput((cur) => cur || text);
-        setErr(isNetworkError(ex) ? NETWORK_DOWN : (ex as Error).message);
+        const agentErr = isNetworkError(ex) ? NETWORK_DOWN : (ex as Error).message;
+        setErr(agentErr);
+        notifyFeedbackError(agentErr);
       }
     } finally {
       if (ownBusy) setBusy(false);

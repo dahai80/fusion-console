@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feedback — prototype</title>
+<style>
+:root {
+    --bg: #09090b; --panel: #18181b; --panel2: #1f1f23; --line: #27272a;
+    --txt: #e4e4e7; --dim: #71717a; --dim2: #a1a1aa;
+    --acc: #6366f1; --acc-soft: rgba(99,102,241,.12);
+    --ok: #34d399; --ok-soft: rgba(52,211,153,.12);
+    --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12);
+    --bad: #f87171; --bad-soft: rgba(248,113,113,.12);
+    --r: 12px;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--txt); font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; padding: 24px; }
+.wrap { max-width: 1200px; margin: 0 auto; display: flex; gap: 20px; align-items: flex-start; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+.card h3 { font-size: 13px; font-weight: 600; color: var(--dim2); display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+h2 { font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.badge { font-size: 11px; padding: 2px 8px; border-radius: 8px; }
+.badge.live { background: var(--ok-soft); color: var(--ok); }
+.badge.acc { background: var(--acc-soft); color: var(--acc); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+/* sidebar mock */
+.side { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
+.side .item { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: 10px; color: var(--dim2); cursor: pointer; font-size: 13.5px; }
+.side .item:hover { background: var(--panel2); }
+.side .item.on { background: var(--acc-soft); color: var(--acc); font-weight: 600; }
+.side .item svg { width: 15px; height: 15px; }
+.side .item .cnt { margin-left: auto; font-size: 11px; color: var(--dim); }
+.side .divider { height: 1px; background: var(--line); margin: 6px 4px; }
+.side .hint { font-size: 11px; color: var(--dim); padding: 4px 12px 0; }
+/* main */
+.main { flex: 1; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.sub { font-size: 12.5px; color: var(--dim); margin-top: 2px; }
+/* type picker */
+.types { display: flex; gap: 10px; flex-wrap: wrap; }
+.type { flex: 1 1 180px; border: 1px solid var(--line); border-radius: var(--r); padding: 12px; cursor: pointer; transition: .15s; }
+.type:hover { border-color: var(--dim); }
+.type.on { border-color: var(--acc); background: var(--acc-soft); }
+.type .t { font-weight: 600; display: flex; gap: 7px; align-items: center; }
+.type .d { font-size: 12px; color: var(--dim); margin-top: 4px; }
+/* form */
+.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-size: 12px; color: var(--dim2); }
+.field label .req { color: var(--bad); }
+.field input, .field textarea, .field select {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--txt); font: inherit; padding: 8px 10px; outline: none; width: 100%;
+}
+.field input:focus, .field textarea:focus { border-color: var(--acc); }
+.field textarea { min-height: 84px; resize: vertical; }
+.field .tip { font-size: 11px; color: var(--dim); }
+.env { background: var(--panel2); border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; font-size: 12px; color: var(--dim2); display: flex; gap: 14px; flex-wrap: wrap; }
+.env b { color: var(--txt); font-weight: 600; }
+/* buttons */
+.btn { display: inline-flex; align-items: center; gap: 7px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel2); color: var(--txt); font: inherit; font-size: 13px; padding: 8px 14px; cursor: pointer; }
+.btn:hover { border-color: var(--dim); }
+.btn.acc { background: var(--acc); border-color: var(--acc); color: #fff; font-weight: 600; }
+.btn.ghost { background: transparent; }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: #08281c; font-weight: 600; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+/* brain draft modal */
+.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 50; }
+.modal-mask.show { display: flex; }
+.modal { width: min(760px, 92vw); max-height: 88vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
+.modal h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.md { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 13px; white-space: pre-wrap; }
+.md .sec { color: var(--acc); font-weight: 700; }
+.md .kv { color: var(--dim2); }
+.thinking { display: flex; gap: 10px; align-items: center; color: var(--dim2); font-size: 13px; padding: 18px 4px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--acc); animation: p 1s infinite; }
+.dot:nth-child(2){ animation-delay:.15s } .dot:nth-child(3){ animation-delay:.3s }
+@keyframes p { 0%,100%{opacity:.25} 50%{opacity:1} }
+/* history */
+.hist .row { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.hist .row:last-child { border-bottom: none; }
+.hist .st { font-size: 11px; padding: 2px 8px; border-radius: 8px; flex-shrink: 0; }
+.hist .st.ok { background: var(--ok-soft); color: var(--ok); }
+.hist .st.acc { background: var(--acc-soft); color: var(--acc); }
+.hist .st.warn { background: var(--warn-soft); color: var(--warn); }
+.hist .t { color: var(--dim2); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist .when { color: var(--dim); font-size: 11.5px; flex-shrink: 0; }
+a { color: var(--acc); text-decoration: none; }
+.note { font-size: 12px; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ===== sidebar (Team 菜单之后新增 Feedback) ===== -->
+  <nav class="side">
+    <div class="item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      会话
+    </div>
+    <div class="item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="7" r="4"/><path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/><path d="M19 8v6M22 11h-6"/></svg>
+      Team <span class="cnt">3</span>
+    </div>
+    <div class="item on">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+      Feedback <span class="cnt">2</span>
+    </div>
+    <div class="divider"></div>
+    <div class="hint">← 位置：Team 之后</div>
+  </nav>
+
+  <!-- ===== main ===== -->
+  <main class="main">
+
+    <div class="head">
+      <div>
+        <h2>💬 Feedback</h2>
+        <div class="sub">提交问题或需求到 GitHub Issues — 不会用 GitHub 也没关系，可以交给大脑代办</div>
+      </div>
+      <div class="badge live" id="repoBadge">dahai80/fusion-console</div>
+    </div>
+
+    <!-- 类型选择 -->
+    <section class="card">
+      <h3>① 反馈类型与组件</h3>
+      <div class="types">
+        <div class="type on" onclick="pick(this,'bug')">
+          <div class="t">🐛 问题（Bug）</div>
+          <div class="d">功能坏了、报错、行为不符合预期</div>
+        </div>
+        <div class="type" onclick="pick(this,'feature')">
+          <div class="t">✨ 需求（Feature）</div>
+          <div class="d">新功能、改进建议</div>
+        </div>
+        <div class="type" onclick="pick(this,'question')">
+          <div class="t">❓ 使用咨询</div>
+          <div class="d">怎么用、为什么这样设计</div>
+        </div>
+      </div>
+      <div class="field" style="margin-top:12px; max-width:420px;">
+        <label>相关组件（提交到对应仓库，可手选，大脑填写时自动识别）</label>
+        <select id="comp" onchange="syncRepo()">
+          <option value="console" selected>fusion-console（本控制台）</option>
+          <option value="memory">fusion-memory（记忆 hub）</option>
+          <option value="rag">fusion-rag（知识库）</option>
+          <option value="gateway">fusion-gateway（网关）</option>
+          <option value="code">fusion-code（编码 agent）</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- 表单（bug 视图） -->
+    <section class="card">
+      <h3>② 描述你的反馈 <span class="badge acc" id="tplTag">模板：Bug Report</span></h3>
+
+      <!-- 粗稿输入 + 大脑填写 -->
+      <div class="field" style="margin-bottom:14px;">
+        <label>随手写（想到什么写什么，不用管格式）</label>
+        <textarea id="rough" placeholder="例：派发任务跑了两个小时网络断了，重连后一直转圈，日志也不动了，只能重启">派发任务跑了两个小时网络断了，重连后一直转圈，日志也不动了，只能重启</textarea>
+      </div>
+      <div class="actions" style="margin-bottom:18px;">
+        <button class="btn acc" id="fillBtn" onclick="brainFill(this)">🧠 让大脑帮我填写</button>
+        <span class="note">大脑按 GitHub 模板把粗稿整理成下面的结构化字段，填完你再检查、修改</span>
+      </div>
+
+      <div class="fgrid" id="structured">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>标题 <span class="req">*</span></label>
+          <input id="fTitle" placeholder="一句话说清问题或需求">
+        </div>
+        <div class="field">
+          <label>复现步骤 <span class="req">*</span></label>
+          <textarea id="fSteps" placeholder="1. …&#10;2. …"></textarea>
+        </div>
+        <div class="field">
+          <label>期望行为 <span class="req">*</span></label>
+          <textarea id="fExpect" placeholder="你认为应该发生什么"></textarea>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>实际表现 <span class="req">*</span></label>
+          <textarea id="fActual" placeholder="实际发生了什么"></textarea>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>补充信息（日志 / 截图说明，可选）</label>
+          <textarea id="fExtra" placeholder="粘贴关键日志或描述"></textarea>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>运行环境（自动收集，可修改）</label>
+          <div class="env">
+            <span>版本 <b>v0.2.22</b></span>
+            <span>系统 <b>macOS 15 (arm64)</b></span>
+            <span>大脑 <b>glm-5 via gateway</b></span>
+            <span>Worker <b>claude 2.1.325</b></span>
+          </div>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:14px;">
+        <button class="btn ok" id="submitBtn" onclick="submitDirect(this)">提交到 dahai80/fusion-console</button>
+        <button class="btn ghost" onclick="saveDraft(this)">存草稿</button>
+        <span class="note">字段填好、检查无误后再提交</span>
+      </div>
+    </section>
+
+    <!-- 提交记录 -->
+    <section class="card hist">
+      <h3>③ 我的反馈</h3>
+      <div class="row"><span class="st ok">fusion-console #118 已提交</span><span class="t">Memory (Tools) 页安装按钮在 hub 运行时不应显示</span><span class="when">今天 09:20</span></div>
+      <div class="row"><span class="st warn">fusion-console 草稿已保存</span><span class="t">希望 Dashboard 导出 CSV 用量报表</span><span class="when">昨天 22:41</span></div>
+    </section>
+  </main>
+</div>
+
+<script>
+const REPOS = {console:'dahai80/fusion-console', memory:'dahai80/fusion-memory', rag:'dahai80/fusion-rag', gateway:'dahai80/fusion-gateway', code:'dahai80/fusion-code'};
+const COMPNAME = {console:'fusion-console', memory:'fusion-memory', rag:'fusion-rag', gateway:'fusion-gateway', code:'fusion-code'};
+function pick(el, t){
+  document.querySelectorAll('.type').forEach(x=>x.classList.remove('on'));
+  el.classList.add('on');
+  document.getElementById('tplTag').textContent = '模板：' + ({bug:'Bug Report',feature:'Feature Request',question:'Question'})[t];
+}
+function syncRepo(){
+  const c = document.getElementById('comp').value;
+  document.getElementById('repoBadge').textContent = REPOS[c];
+  document.getElementById('submitBtn').textContent = '提交到 ' + REPOS[c];
+}
+function brainFill(btn){
+  const rough = document.getElementById('rough').value.trim();
+  if(!rough){ document.getElementById('rough').focus(); return; }
+  btn.disabled = true; btn.textContent = '🧠 大脑正在整理…';
+  document.getElementById('structured').style.opacity = '.5';
+  setTimeout(()=>{
+    // 组件自动识别：粗稿提到 hub/memory → fusion-memory
+    document.getElementById('comp').value = 'memory';
+    syncRepo();
+    document.getElementById('fTitle').value = 'memory hub 断网重连后健康检查卡死，状态一直 running';
+    document.getElementById('fSteps').value = '1. Chat 里 @worker 派发一个长任务\n2. 任务运行约 2 小时后网络断开\n3. 重连后 fm-server 健康检查卡在 running';
+    document.getElementById('fExpect').value = '断连或超时后，状态应转为 error/blocked 并给出原因，而不是一直转圈';
+    document.getElementById('fActual').value = '状态一直显示 running，日志无新输出，只能重启服务恢复';
+    document.getElementById('fExtra').value = 'console.log 里最后一条是 "memoryhub: health check status=running"';
+    document.getElementById('structured').style.opacity = '1';
+    btn.disabled = false; btn.textContent = '🧠 让大脑帮我填写';
+  }, 1200);
+}
+function submitDirect(btn){
+  const title = document.getElementById('fTitle').value.trim();
+  if(!title){ document.getElementById('fTitle').focus(); return; }
+  const c = document.getElementById('comp').value;
+  btn.disabled = true; btn.textContent = '提交中…';
+  setTimeout(()=>{
+    btn.disabled = false; syncRepo();
+    const h = document.querySelector('.hist');
+    h.insertAdjacentHTML('beforeend','<div class="row"><span class="st ok">'+COMPNAME[c]+' #119 已提交</span><span class="t">'+title.replace(/</g,'&lt;')+'</span><span class="when">刚刚</span></div>');
+  }, 900);
+}
+function saveDraft(btn){
+  const c = document.getElementById('comp').value;
+  const h = document.querySelector('.hist');
+  h.insertAdjacentHTML('beforeend','<div class="row"><span class="st warn">'+COMPNAME[c]+' 草稿已保存</span><span class="t">'+(document.getElementById('fTitle').value.trim()||'未命名反馈').replace(/</g,'&lt;')+'</span><span class="when">刚刚</span></div>');
+}
+</script>
+</body>
+</html>

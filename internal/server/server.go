@@ -213,6 +213,12 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/failures", s.auth.Require(s.handleFailureList))
 	m.HandleFunc("GET /api/failures/export", s.auth.Require(s.handleFailureExport))
 	m.HandleFunc("GET /api/team/view", s.auth.Require(s.handleTeamView))
+	// Feedback: GitHub issue filing from the console (manual form, error
+	// toasts, and the suggest_feedback brain tool all land here).
+	m.HandleFunc("GET /api/feedback/env", s.auth.Require(s.handleFeedbackEnv))
+	m.HandleFunc("POST /api/feedback/draft", s.auth.Require(s.handleFeedbackDraft))
+	m.HandleFunc("GET /api/feedback/draft_latest", s.auth.Require(s.handleFeedbackDraftLatest))
+	m.HandleFunc("POST /api/feedback/submit", s.auth.Require(s.handleFeedbackSubmit))
 	m.HandleFunc("GET /api/team/agents", s.auth.Require(s.handleTeamAgents))
 	m.HandleFunc("GET /api/team/chat_poll", s.auth.Require(s.handleTeamChatPoll))
 	m.HandleFunc("GET /api/team/teams", s.auth.Require(s.handleTeamTeams))
