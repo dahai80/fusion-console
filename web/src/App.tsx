@@ -49,7 +49,7 @@ import { progress as setupProgress, useSetupStatus } from "./setupStatus";
 import ConsoleUpdate from "./ConsoleUpdate";
 import { GatewayBackendsPanel } from "./GatewayBackends";
 import AgentsPage from "./agents/AgentsPage";
-import FeedbackPage from "./FeedbackPage";
+import FeedbackPage, { type FeedbackEntry } from "./FeedbackPage";
 import { notifyFeedbackError, notifyFeedbackSuggestion } from "./feedbackBus";
 import type { FeedbackDraft } from "./api";
 import Dashboard from "./Dashboard";
@@ -74,6 +74,7 @@ const chatMarkdownComponents: Components = {
 };
 
 type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "feedback" | "onboard";
+type Navigation = { page: Page; feedbackEntry?: FeedbackEntry & { id: number } };
 
 export default function App() {
   return (
@@ -86,7 +87,22 @@ export default function App() {
 function Shell() {
   // undefined = session check in flight, null = logged out, string = logged in
   const [user, setUser] = useState<string | null | undefined>(undefined);
-  const [page, setPage] = useState<Page>(() => new URLSearchParams(window.location.search).has("dashboard") ? "dashboard" : "chat");
+  const [{ page, feedbackEntry }, setNavigation] = useState<Navigation>(() => ({
+    page: new URLSearchParams(window.location.search).has("dashboard") ? "dashboard" : "chat",
+  }));
+  const setPage = useCallback((page: Page) => {
+    setNavigation((current) => current.page === page ? current : { page });
+  }, []);
+  const openFeedback = (entry: FeedbackEntry) => {
+    setNavigation((current) => ({
+      page: "feedback",
+      feedbackEntry: { ...entry, id: (current.feedbackEntry?.id ?? 0) + 1 },
+    }));
+  };
+  const clearSession = useCallback(() => {
+    setUser(null);
+    setNavigation(({ page }) => ({ page }));
+  }, []);
   const shellRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -129,10 +145,9 @@ function Shell() {
           .finally(stripToken)
       : api.me().then((r) => r.user).catch(() => null);
     boot.then((u) => setUser(u));
-    const onLogout = () => setUser(null);
-    window.addEventListener("fc:logout", onLogout);
-    return () => window.removeEventListener("fc:logout", onLogout);
-  }, []);
+    window.addEventListener("fc:logout", clearSession);
+    return () => window.removeEventListener("fc:logout", clearSession);
+  }, [clearSession]);
 
   // Guided setup: explicit ?onboard=1 (first run opens it server-side) or a
   // logged-in session with no enabled provider at all. Keyed on user so a
@@ -148,14 +163,14 @@ function Shell() {
         setPage("onboard");
       }
     }).catch(() => {});
-  }, [user]);
+  }, [user, setPage]);
 
   if (user === undefined) return <Splash />;
   if (!user) return <Login onDone={setUser} />;
 
   return (
     <div ref={shellRef} className={`flex h-dvh flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 ${page === "chat" ? "pointer-coarse:fixed pointer-coarse:inset-x-0 pointer-coarse:top-0" : ""}`}>
-      <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); setUser(null); }} onWizard={() => setPage("onboard")} />
+      <TopBar user={user} page={page} setPage={setPage} onLogout={async () => { await api.logout(); clearSession(); }} onWizard={() => setPage("onboard")} />
       <main className="flex-1 min-h-0">
         {page === "onboard" && (
           <Onboarding onExit={(to) => setPage(to)} />
@@ -166,8 +181,8 @@ function Shell() {
         {page === "gateway" && <GatewayPage />}
         {page === "rag" && <RagPage />}
         {page === "team" && <TeamPage />}
-        {page === "feedback" && <FeedbackPage />}
-        <FeedbackToastHost setPage={setPage} />
+        {page === "feedback" && <FeedbackPage key={feedbackEntry?.id} entry={feedbackEntry} />}
+        <FeedbackToastHost openFeedback={openFeedback} />
       </main>
     </div>
   );
@@ -177,10 +192,8 @@ function Splash() {
   return <div className="flex h-screen items-center justify-center text-zinc-400">loading…</div>;
 }
 
-// FeedbackToastHost renders the trigger-path prompts: a stream error offers a
-// prefilled issue draft (path 2), a suggest_feedback tool result offers the
-// brain's draft (path 3). Submission still happens only on the Feedback page.
-function FeedbackToastHost({ setPage }: { setPage: (p: Page) => void }) {
+// Stream errors offer to generate a draft. Brain suggestions already have one.
+function FeedbackToastHost({ openFeedback }: { openFeedback: (entry: FeedbackEntry) => void }) {
   const [errText, setErrText] = useState("");
   const [suggest, setSuggest] = useState<FeedbackDraft | null>(null);
 
@@ -195,11 +208,10 @@ function FeedbackToastHost({ setPage }: { setPage: (p: Page) => void }) {
     };
   }, []);
 
-  const openPage = (detail: Record<string, unknown>) => {
-    window.dispatchEvent(new CustomEvent("fc:feedback-prefill", { detail }));
+  const openPage = (entry: FeedbackEntry) => {
     setErrText("");
     setSuggest(null);
-    setPage("feedback");
+    openFeedback(entry);
   };
 
   if (!errText && !suggest) return null;
@@ -207,15 +219,15 @@ function FeedbackToastHost({ setPage }: { setPage: (p: Page) => void }) {
     ? {
         title: "任务出错了",
         body: errText,
-        action: "整理成 issue",
-        onAction: () => openPage({ rough: errText, component: "console", steps: errText }),
+        action: "总结此问题",
+        onAction: () => openPage({ kind: "error", text: errText }),
         dismiss: () => setErrText(""),
       }
     : {
         title: "大脑起草了一个 issue",
         body: suggest!.title,
         action: "查看并提交",
-        onAction: () => openPage(suggest as unknown as Record<string, unknown>),
+        onAction: () => openPage({ kind: "suggestion", draft: suggest! }),
         dismiss: () => setSuggest(null),
       };
   return (
@@ -1173,7 +1185,7 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         reveal.tick();
         if (ev.type === "approval" || ev.type === "tool") setApproval((cur) => approvalAfter(cur, ev));
         if (ev.type === "budget") setBudget({ spent: (ev.spent as number) ?? 0, limit: (ev.limit as number) ?? 0 });
-        // Feedback trigger paths: stream errors offer a prefilled issue; the
+        // Feedback trigger paths: stream errors offer to draft an issue; the
         // suggest_feedback tool fetches the stashed brain draft for the card.
         if (ev.type === "error") notifyFeedbackError(String(ev.text ?? ""));
         if (ev.type === "tool" && ev.tool === "suggest_feedback") {

@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Bug, Lightbulb, HelpCircle, Brain, Send, Save, CheckCircle2, Loader2 } from "lucide-react";
 import { api, type FeedbackDraft } from "./api";
 
-// FeedbackPage: file GitHub issues from the console. One form, three entry
-// points (manual / error toast / brain suggestion card — prefill arrives via
-// the fc:feedback-prefill window event). Submission is always an explicit
-// user action; drafts live in localStorage until filed.
+export type FeedbackEntry =
+    | { kind: "error"; text: string }
+    | { kind: "suggestion"; draft: FeedbackDraft };
 
 const COMPONENTS = [
     { id: "console", label: "fusion-console（本控制台）" },
@@ -43,35 +42,26 @@ function loadHistory(): HistoryRow[] {
     }
 }
 
-export default function FeedbackPage() {
+function withValidComponent(draft: FeedbackDraft): FeedbackDraft {
+    return COMPONENTS.some((c) => c.id === draft.component) ? draft : { ...draft, component: EMPTY.component };
+}
+
+export default function FeedbackPage({ entry }: { entry?: FeedbackEntry }) {
     const [kind, setKind] = useState<FbKind>("bug");
-    const [rough, setRough] = useState("");
-    const [draft, setDraft] = useState<FeedbackDraft>(EMPTY);
+    const initialError = entry?.kind === "error" ? entry.text : "";
+    const [rough, setRough] = useState(initialError);
+    const [draft, setDraft] = useState<FeedbackDraft>(() => entry?.kind === "suggestion" ? withValidComponent(entry.draft) : EMPTY);
     const [env, setEnv] = useState<Record<string, string>>({});
     const [filling, setFilling] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [fillErr, setFillErr] = useState("");
     const [submitMsg, setSubmitMsg] = useState("");
     const [history, setHistory] = useState<HistoryRow[]>(loadHistory);
+    const pendingError = useRef(initialError);
+    const fillInFlight = useRef(false);
 
     useEffect(() => {
         api.feedbackEnv().then(setEnv).catch(() => {});
-    }, []);
-
-    // Prefill from the error toast / brain suggestion card paths.
-    useEffect(() => {
-        const onPrefill = (e: Event) => {
-            const d = (e as CustomEvent).detail as Partial<FeedbackDraft> & { rough?: string };
-            if (!d) return;
-            if (d.rough) setRough(d.rough);
-            const next = { ...EMPTY, ...d };
-            delete (next as { rough?: string }).rough;
-            if (next.component && COMPONENTS.some((c) => c.id === next.component)) setDraft(next);
-            else if (d.rough) setDraft((cur) => ({ ...cur, title: d.title ?? cur.title }));
-            if (d.title) setDraft((cur) => ({ ...cur, title: d.title! }));
-        };
-        window.addEventListener("fc:feedback-prefill", onPrefill);
-        return () => window.removeEventListener("fc:feedback-prefill", onPrefill);
     }, []);
 
     const envLine = [
@@ -82,19 +72,28 @@ export default function FeedbackPage() {
 
     const setField = (k: keyof FeedbackDraft, v: string) => setDraft((cur) => ({ ...cur, [k]: v }));
 
-    const brainFill = async () => {
-        if (!rough.trim()) return;
+    const brainFill = useCallback(async (rough: string, component: string) => {
+        const text = rough.trim();
+        if (!text || fillInFlight.current) return;
+        fillInFlight.current = true;
         setFilling(true);
         setFillErr("");
         try {
-            const d = await api.feedbackDraft(rough.trim(), draft.component);
-            setDraft({ ...d, component: COMPONENTS.some((c) => c.id === d.component) ? d.component : "console" });
+            setDraft(withValidComponent(await api.feedbackDraft(text, component)));
         } catch (ex) {
             setFillErr((ex as Error).message);
         } finally {
+            fillInFlight.current = false;
             setFilling(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        const text = pendingError.current;
+        // Consume the clicked error once, including when Strict Mode replays effects.
+        pendingError.current = "";
+        if (text) void brainFill(text, EMPTY.component);
+    }, [brainFill]);
 
     const submit = async () => {
         if (!draft.title.trim() || submitting) return;
@@ -169,7 +168,7 @@ export default function FeedbackPage() {
                     onChange={(e) => setRough(e.target.value)}
                     placeholder="例：派发任务跑了两个小时网络断了，重连后一直转圈" />
                 <div className="mt-2 flex items-center gap-3">
-                    <button type="button" onClick={brainFill} disabled={filling || !rough.trim()}
+                    <button type="button" onClick={() => void brainFill(rough, draft.component)} disabled={filling || !rough.trim()}
                         className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-500 disabled:opacity-45">
                         {filling ? <Loader2 size={15} className="animate-spin" /> : <Brain size={15} />}
                         {filling ? "大脑正在整理…" : "让大脑帮我填写"}
