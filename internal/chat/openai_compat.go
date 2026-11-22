@@ -43,6 +43,30 @@ type openaiStreamChunk struct {
 	} `json:"error"`
 }
 
+// openAIMessages nests tool calls under function as required by the chat
+// completions API. Result messages reference the same tool_call_id.
+func openAIMessages(messages []Message) []map[string]any {
+	wire := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		msg := map[string]any{"role": m.Role, "content": m.Content}
+		if m.ToolCallID != "" {
+			msg["tool_call_id"] = m.ToolCallID
+		}
+		if len(m.ToolCalls) > 0 {
+			calls := make([]map[string]any, 0, len(m.ToolCalls))
+			for _, call := range m.ToolCalls {
+				calls = append(calls, map[string]any{
+					"id": call.ID, "type": "function",
+					"function": map[string]string{"name": call.Name, "arguments": call.Arguments},
+				})
+			}
+			msg["tool_calls"] = calls
+		}
+		wire = append(wire, msg)
+	}
+	return wire
+}
+
 // ChatStream implements Provider.
 func (p *OpenAICompatProvider) ChatStream(ctx context.Context, model, apiKey string, messages []Message) (<-chan Event, error) {
 	return p.ChatStreamTools(ctx, model, apiKey, messages, nil)
@@ -55,7 +79,7 @@ func (p *OpenAICompatProvider) ChatStream(ctx context.Context, model, apiKey str
 func (p *OpenAICompatProvider) ChatStreamTools(ctx context.Context, model, apiKey string, messages []Message, tools []ToolDecl) (<-chan Event, error) {
 	body := map[string]any{
 		"model":          model,
-		"messages":       messages,
+		"messages":       openAIMessages(messages),
 		"stream":         true,
 		"stream_options": map[string]any{"include_usage": true},
 	}

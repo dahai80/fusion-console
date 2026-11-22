@@ -388,3 +388,29 @@ func TestAdmitDecision(t *testing.T) {
 		t.Fatalf("deny mangled: allowed=%v needs=%v reason=%q blocked_by=%q", allowed, needsApproval, reason, blockedBy)
 	}
 }
+
+func TestPlannerRetainsPairedToolResultsAfterCompaction(t *testing.T) {
+	messages := []harness.Message{
+		{Role: "tool", ToolCallID: "orphan", Content: "dropped call"},
+		{Role: "user", Content: "read issues"},
+		{Role: "assistant", ToolCalls: []chat.ToolCall{
+			{ID: "missing", Name: "list_agents", Arguments: "{}"},
+			{ID: "kept", Name: "list_feedback_issues", Arguments: "{}"},
+		}},
+		{Role: "tool", ToolCallID: "kept", Content: "result"},
+	}
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received []harness.Message
+	if err := json.Unmarshal(raw, &received); err != nil {
+		t.Fatal(err)
+	}
+	got := pairedPlannerMessages(received)
+	if len(got) != 3 || got[0].Role != "user" || got[1].Role != "assistant" ||
+		len(got[1].ToolCalls) != 1 || got[1].ToolCalls[0] != messages[2].ToolCalls[1] ||
+		got[2].Role != "tool" || got[2].ToolCallID != "kept" || got[2].Content != "result" {
+		t.Fatalf("replayed messages: %+v", got)
+	}
+}

@@ -612,8 +612,7 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 		// together with history only on the wire — the loop always re-anchors
 		// it at index 0, because the compactor may truncate old messages.
 		if s.cfg.Harness.Enabled {
-			hMsgs := toHarnessMessages(msgs)
-			pre, err := s.harness.PreLLM(prov.convID, prov.budget, prov.model, hMsgs)
+			pre, err := s.harness.PreLLM(prov.convID, prov.budget, prov.model, msgs)
 			if err != nil {
 				// Fail-closed (issue #110): a broken guard stops the
 				// orchestrator turn, it never becomes unguarded planning.
@@ -628,7 +627,7 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 					send(map[string]any{"type": "error", "text": "conversation token budget exceeded: " + pre.Reason})
 					return full, total
 				} else if len(pre.Messages) > 0 {
-					msgs = fromHarnessMessages(pre.Messages)
+					msgs = pairedPlannerMessages(pre.Messages)
 					if len(msgs) == 0 || msgs[0].Role != "system" {
 						msgs = append([]chat.Message{{Role: "system", Content: s.orchestratorPrompt()}}, msgs...)
 					}
@@ -1189,34 +1188,39 @@ func copyUntrackedFiles(src, dst string) {
 	}
 }
 
-// toHarnessMessages converts chat messages (dropping tool-call fields the
-// sidecar contract does not carry).
-func toHarnessMessages(msgs []chat.Message) []harness.Message {
-	out := make([]harness.Message, 0, len(msgs))
-	for _, m := range msgs {
-		content := m.Content
-		if content == "" && len(m.ToolCalls) > 0 {
-			content = "[tool call: " + m.ToolCalls[0].Name + "]"
-		}
-		out = append(out, harness.Message{Role: m.Role, Content: content})
-	}
-	return out
-}
-
-// fromHarnessMessages converts sidecar-compacted messages back to chat form.
-// The harness wire carries only role+content — tool_call pairing is lost.
-// A role-"tool" message without a preceding assistant tool_calls entry is
-// rejected by OpenAI-compatible APIs, so any surviving tool message is
-// demoted to a user message (its content still reaches the model).
-func fromHarnessMessages(msgs []harness.Message) []chat.Message {
+// pairedPlannerMessages keeps tool results in their original role. Compaction
+// can cut through a batch, so replay only calls whose results survived beside
+// them. An orphaned tool result must never become a user instruction.
+func pairedPlannerMessages(msgs []chat.Message) []chat.Message {
 	out := make([]chat.Message, 0, len(msgs))
-	for _, m := range msgs {
+	for i := 0; i < len(msgs); i++ {
+		m := msgs[i]
 		if m.Role == "tool" {
-			log.Printf("orchestrator: compaction stripped tool-call pairing — tool result demoted to user message")
-			out = append(out, chat.Message{Role: "user", Content: "[tool result]\n" + m.Content})
 			continue
 		}
-		out = append(out, chat.Message{Role: m.Role, Content: m.Content})
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			out = append(out, m)
+			continue
+		}
+		results := make(map[string]chat.Message)
+		for i+1 < len(msgs) && msgs[i+1].Role == "tool" {
+			i++
+			results[msgs[i].ToolCallID] = msgs[i]
+		}
+		calls := m.ToolCalls
+		m.ToolCalls = nil
+		var matched []chat.Message
+		for _, call := range calls {
+			if result, ok := results[call.ID]; ok && call.ID != "" {
+				m.ToolCalls = append(m.ToolCalls, call)
+				matched = append(matched, result)
+				delete(results, call.ID)
+			}
+		}
+		if m.Content != "" || len(m.ToolCalls) > 0 {
+			out = append(out, m)
+			out = append(out, matched...)
+		}
 	}
 	return out
 }

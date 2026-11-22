@@ -17,7 +17,6 @@ import (
 	"github.com/dahai80/fusion-console/internal/agent"
 	"github.com/dahai80/fusion-console/internal/chat"
 	"github.com/dahai80/fusion-console/internal/config"
-	"github.com/dahai80/fusion-console/internal/harness"
 )
 
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
@@ -333,11 +332,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Sidecar missing = unguarded chat (logged at startup), never a failure.
 	var budgetSpent, budgetLimit = -1, 0
 	if s.cfg.Harness.Enabled {
-		hMsgs := make([]harness.Message, len(chatMsgs))
-		for i, m := range chatMsgs {
-			hMsgs[i] = harness.Message{Role: m.Role, Content: m.Content}
-		}
-		pre, err := s.harness.PreLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, model, hMsgs)
+		pre, err := s.harness.PreLLM(req.ConversationID, s.cfg.Harness.BudgetTokens, model, chatMsgs)
 		if err != nil {
 			// Fail-closed (issue #110): a broken guard denies the call, it
 			// never becomes unguarded chat.
@@ -352,10 +347,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "conversation token budget exceeded: " + pre.Reason})
 				return
 			} else if len(pre.Messages) > 0 {
-				chatMsgs = make([]chat.Message, len(pre.Messages))
-				for i, m := range pre.Messages {
-					chatMsgs[i] = chat.Message{Role: m.Role, Content: m.Content}
-				}
+				chatMsgs = pre.Messages
 			}
 		}
 	}
