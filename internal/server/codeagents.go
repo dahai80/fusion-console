@@ -230,6 +230,19 @@ func (s *Server) startNpmInstall(ctx context.Context, st *ragInstallState, name,
 			st.logf("warning: %s %s is below the verified minimum %s (possible mirror sync lag) — it will work, but consider upgrading", name, version, want)
 		}
 		st.setPhase("done")
+		// TokenEconomizer ships by default (issue: default-install for
+		// fusion-console) — best-effort after a fresh CLI install. Fresh
+		// context: the npm ladder's 5-minute budget may be nearly spent.
+		switch name {
+		case "claude", "codex", "opencode":
+			tctx, tcancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer tcancel()
+			if err := s.installTokenEconomizer(tctx, name); err != nil {
+				st.logf("tokeneconomizer install for %s skipped: %v", name, err)
+			} else {
+				st.logf("tokeneconomizer installed for %s", name)
+			}
+		}
 	}()
 	return nil
 }
