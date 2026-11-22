@@ -108,3 +108,33 @@ export const newTurnId = () => `${Date.now().toString(36)}-${Math.random().toStr
 // it does not; give up after this many failures in a row (about 6 minutes).
 export const followDelay = (failures: number) => Math.min(2000 * Math.max(1, failures), 10000);
 export const FOLLOW_MAX_FAILURES = 40;
+
+// REVEAL_WINDOW_MS is the paced-reveal window (issue #100 N2, Paseo's
+// agent-stream-coalescer ~60ms): SSE lumps render at most once per window so
+// arrival bursts smooth out instead of setting state per delta.
+export const REVEAL_WINDOW_MS = 60;
+
+// createPacer coalesces render work to one call per window: the first call
+// after a quiet period renders immediately, calls arriving inside the window
+// collapse into one trailing render, and flushNow forces any pending render
+// (used when the stream ends so the final text never waits out the window).
+export function createPacer(render: () => void, windowMs = REVEAL_WINDOW_MS) {
+  let last = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const fire = () => {
+    timer = null;
+    last = Date.now();
+    render();
+  };
+  return {
+    tick() {
+      if (timer !== null) return;
+      timer = setTimeout(fire, Math.max(0, last + windowMs - Date.now()));
+    },
+    flushNow() {
+      if (timer === null) return;
+      clearTimeout(timer);
+      fire();
+    },
+  };
+}

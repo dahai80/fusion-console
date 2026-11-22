@@ -41,7 +41,8 @@ import {
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type ChatTurn, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
-import { applyAgentEvent, applyChatEvent, approvalAfter, emptyTurn, followDelay, FOLLOW_MAX_FAILURES, isNetworkError, newTurnId, replayTurn, type TurnKind, type TurnView } from "./chatTurn";
+import { applyAgentEvent, applyChatEvent, approvalAfter, createPacer, emptyTurn, followDelay, FOLLOW_MAX_FAILURES, isNetworkError, newTurnId, replayTurn, type TurnKind, type TurnView } from "./chatTurn";
+import { mergeEntries, supersedeWith } from "./chatTimeline";
 import Onboarding from "./Onboarding";
 import { progress as setupProgress, useSetupStatus } from "./setupStatus";
 import ConsoleUpdate from "./ConsoleUpdate";
@@ -524,7 +525,13 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
           const fresh = (mr.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta }));
           const latest = fresh.at(-1);
           const receipt = latest?.meta && JSON.parse(latest.meta).background_run;
-          setEntries((cur) => (fresh.length !== cur.length || (receipt && latest?.meta !== cur.at(-1)?.meta) ? fresh : cur));
+          // issue #100 N1: the server list is authoritative; a refresh that
+          // changes nothing keeps the current array (and any live turn
+          // bubble) untouched.
+          setEntries((cur) => {
+            if (fresh.length === cur.length && latest?.meta === cur.at(-1)?.meta) return cur;
+            return supersedeWith(cur, fresh);
+          });
         }
       } catch { /* transient — next tick retries */ }
     };
@@ -614,7 +621,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
           const r = await api.messages(f.conv).catch(() => null);
           if (r && mine()) {
             const fresh = (r.messages ?? []).map((m) => ({ role: m.Role, content: m.Content, meta: m.Meta }));
-            setEntries(fresh);
+            setEntries((cur) => supersedeWith(cur, fresh));
             if (f.sent !== null && fresh.filter((m) => m.role === "user").at(-1)?.content !== f.sent) {
               if (f.restore) setInput((cur) => cur || f.restore!);
               setErr("消息没发出去，已放回输入框，网络恢复后再发");
@@ -693,7 +700,9 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
       try {
         const r = await api.teamChatPoll(active.ID);
         if ((r.messages ?? []).length) {
-          setEntries((e) => [...e, ...r.messages.map((m) => ({ role: m.role, content: m.content, meta: m.meta }))]);
+          // issue #100 N1: live appends dedupe against the view — a poll
+          // racing the authoritative refresh cannot duplicate a row.
+          setEntries((e) => mergeEntries(e, r.messages.map((m: any) => ({ role: m.role, content: m.content, meta: m.meta }))));
         }
       } catch { /* daemon offline — next tick retries */ }
       // console#79 R4: kernel-typed inbox cards (plan_approval /
@@ -1079,15 +1088,19 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         setBrainActivity(beginBrainTurn(idx, text));
       }
       let view = emptyTurn();
+      // issue #100 N2: render at most once per reveal window — arrival
+      // lumps smooth out; the final flushNow keeps the last text exact.
+      const reveal = createPacer(() => showTurn(view));
       await streamPOST("/api/chat", { conversation_id: idx, content: full, orchestrate, turn_id: turnId }, (ev) => {
         if (brainConversation !== undefined) {
           setBrainActivity(prev => prev && prev.conversation === brainConversation ? brainEvent(prev, ev) : prev);
         }
         view = applyChatEvent(view, ev);
-        showTurn(view);
+        reveal.tick();
         if (ev.type === "approval" || ev.type === "tool") setApproval((cur) => approvalAfter(cur, ev));
         if (ev.type === "budget") setBudget({ spent: (ev.spent as number) ?? 0, limit: (ev.limit as number) ?? 0 });
       });
+      reveal.flushNow();
     } catch (ex) {
       if (isNetworkError(ex) && brainConversation !== undefined) {
         // The stream broke, not the turn: the server keeps running it.
@@ -1188,10 +1201,12 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
       setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
       convId = conv.ID;
       let view = emptyTurn();
+      const reveal = createPacer(() => showTurn(view));
       await streamPOST("/api/agent/run", { conversation_id: conv.ID, agent, task: text, workdir: "", turn_id: turnId }, (ev) => {
         view = applyAgentEvent(view, ev);
-        showTurn(view);
+        reveal.tick();
       });
+      reveal.flushNow();
     } catch (ex) {
       if (isNetworkError(ex) && convId !== undefined) {
         ownBusy = await followTurn({ conv: convId, kind: "agent", turnId, sent: text, restore: text });

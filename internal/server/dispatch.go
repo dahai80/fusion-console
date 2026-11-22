@@ -636,6 +636,27 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 	s.runs.start(args.Agent, args.Task)
 	defer s.runs.end(args.Agent)
 	full, result := "", ""
+	// issue #100 N2 (Paseo terminal watermarks): a runaway agent stream must
+	// not grow the console's copy without bound. 4MiB is the soft watermark
+	// (log once), 8MiB the hard high-watermark — further text is dropped.
+	// The provider transcript stays authoritative; this is only the console
+	// projection.
+	const streamSoftWatermark = 4 << 20
+	const streamHighWatermark = 8 << 20
+	softLogged := false
+	capStream := func(s string) string {
+		if len(full)+len(s) > streamSoftWatermark && !softLogged {
+			softLogged = true
+			log.Printf("orchestrator: agent=%s stream past 4MiB soft watermark (worker=%s)", args.Agent, wk.Name)
+		}
+		if len(full) >= streamHighWatermark {
+			return ""
+		}
+		if len(full)+len(s) > streamHighWatermark {
+			s = s[:max(0, streamHighWatermark-len(full))] + "\n\n[stream truncated at 8MiB high watermark]"
+		}
+		return s
+	}
 	var usage agent.Event
 	// Live progress: forward the agent's own tool activity plus a periodic
 	// heartbeat, so the chat shows the worker is actually running.
@@ -652,7 +673,7 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 			}
 			switch ev.Type {
 			case agent.EventText:
-				full += ev.Text
+				full += capStream(ev.Text)
 			case agent.EventTool:
 				s.runs.progress(args.Agent, ev.ToolDetail)
 				if send != nil {
@@ -660,7 +681,7 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 						"detail": fmt.Sprintf("%s: %s", args.Agent, ev.ToolDetail)})
 				}
 			case agent.EventResult:
-				result = ev.Text
+				result = capStream(ev.Text)
 			case agent.EventUsage:
 				usage = ev
 			case agent.EventNotice:
