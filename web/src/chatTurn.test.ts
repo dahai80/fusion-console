@@ -62,3 +62,25 @@ test("turn ids are url-safe and distinct; reconnect backs off and gives up", () 
   for (let i = 1; i < FOLLOW_MAX_FAILURES; i++) total += followDelay(i);
   assert.ok(total > 5 * 60_000 && total < 8 * 60_000, `gives up after ${total} ms`);
 });
+
+test("pacer renders once per window; flushNow forces the tail", async () => {
+  const { createPacer } = await import("./chatTurn.ts");
+  let renders = 0;
+  const pacer = createPacer(() => { renders++; }, 50);
+  pacer.tick();
+  await sleep(5);
+  assert.equal(renders, 1, "first tick after quiet renders immediately (last=0)");
+  pacer.tick();
+  pacer.tick();
+  await sleep(30);
+  assert.equal(renders, 1, "calls inside the window stay pending");
+  await sleep(40);
+  assert.equal(renders, 2, "the window collapses both ticks into one render");
+  pacer.tick();
+  pacer.flushNow();
+  assert.equal(renders, 3, "flushNow forces the pending render");
+  pacer.flushNow();
+  assert.equal(renders, 3, "flushNow with no pending timer is a no-op");
+});
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
