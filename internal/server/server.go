@@ -99,6 +99,9 @@ func New(cfg *config.Config, cfgDir string, st *store.Store) *Server {
 	s.loadPersistedRuns()
 	s.startTeamPoller()
 	s.startMemoryOutboxLoop()
+	// TokenEconomizer ships with the console by default: best-effort plugin
+	// registration for the dispatch CLIs already on PATH (fail-soft).
+	go s.ensureTokenEconomizerStartup()
 	return s
 }
 
