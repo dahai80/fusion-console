@@ -2,9 +2,9 @@
 // Agents -> Skills -> Market tab. The console is a catalog consumer: fetch
 // upstream (raw.githubusercontent, gh CLI fallback when raw is unreachable —
 // common on CN networks), cache in memory for 10 minutes, and keep the last
-// good copy on disk so browsing still works offline. Install v1 links to the
-// entry's Releases page; one-click install arrives when the registry carries
-// pinned artifacts + sha256 (fusion-skills#1).
+// good copy on disk so browsing still works offline. Skills install in one
+// click (marketinstall.go); plugins, connectors and apps keep the link to
+// their Releases page because their install targets are host-specific.
 package server
 
 import (
@@ -60,11 +60,27 @@ type marketEntry struct {
 		Zh string `json:"zh"`
 		En string `json:"en"`
 	} `json:"description"`
-	Doc      string `json:"doc"`
-	Releases string `json:"releases,omitempty"`
+	Doc        string           `json:"doc"`
+	Releases   string           `json:"releases,omitempty"`
+	Version    string           `json:"version,omitempty"`
+	SourcePath string           `json:"source_path,omitempty"`
+	Artifacts  []marketArtifact `json:"artifacts,omitempty"`
 	// Normalized by the console (not upstream fields):
 	ReleasesURL string `json:"releases_url"`
 	DocURL      string `json:"doc_url"`
+	// Installable: the console can install this entry in one click.
+	Installable bool `json:"installable"`
+	// Installed: filled per request from ~/.claude/skills (never cached).
+	Installed *marketInstalled `json:"installed,omitempty"`
+}
+
+// marketArtifact is a pinned download (registry schema v2).
+type marketArtifact struct {
+	OS     string `json:"os"`
+	Arch   string `json:"arch"`
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
 }
 
 type marketRegistry struct {
@@ -73,6 +89,7 @@ type marketRegistry struct {
 	Entries   []marketEntry `json:"entries"`
 	FetchedAt time.Time     `json:"fetched_at"`
 	Cached    bool          `json:"cached"` // true = served from memory/disk cache
+	Stale     bool          `json:"stale"`  // true = upstream unreachable, disk copy served
 }
 
 // diskCachePath keeps the last good registry copy for offline browsing.
@@ -84,36 +101,46 @@ func (s *Server) diskCachePath() string {
 // gh CLI fallback -> disk cache. Always returns 200 with a body when any
 // copy exists; a plain error only when nothing at all is available.
 func (s *Server) handleMarketRegistry(w http.ResponseWriter, r *http.Request) {
-	s.marketMu.Lock()
-	defer s.marketMu.Unlock()
-	if s.marketCache != nil && time.Since(s.marketCache.FetchedAt) < marketCacheTTL {
-		out := *s.marketCache
-		out.Cached = true
-		writeJSON(w, http.StatusOK, out)
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), marketFetchTimeout)
 	defer cancel()
-	body, err := fetchMarketRegistry(ctx)
-	if err != nil {
-		log.Printf("server: market registry fetch failed: %v — trying disk cache", err)
-		if reg := s.loadMarketDiskCache(); reg != nil {
-			out := *reg
-			out.Cached = true
-			writeJSON(w, http.StatusOK, out)
-			return
-		}
-		serverError(w, fmt.Errorf("registry unreachable and no cached copy: %v", err), http.StatusBadGateway)
-		return
-	}
-	reg, err := parseMarketRegistry(body)
+	s.marketMu.Lock()
+	reg, cached, err := s.marketRegistryLocked(ctx)
+	s.marketMu.Unlock()
 	if err != nil {
 		serverError(w, err, http.StatusBadGateway)
 		return
 	}
+	out := *reg
+	out.Cached = cached
+	// Copy the entries before annotating: install state is per request and
+	// must not leak into the shared cache.
+	out.Entries = append([]marketEntry(nil), reg.Entries...)
+	annotateMarketInstalled(out.Entries, globalSkillsDir())
+	writeJSON(w, http.StatusOK, out)
+}
+
+// marketRegistryLocked returns the catalog (memory cache -> fetch -> disk
+// cache) and whether it came from a cache. Caller holds s.marketMu.
+func (s *Server) marketRegistryLocked(ctx context.Context) (*marketRegistry, bool, error) {
+	if s.marketCache != nil && time.Since(s.marketCache.FetchedAt) < marketCacheTTL {
+		return s.marketCache, true, nil
+	}
+	body, err := fetchMarketRegistry(ctx)
+	if err != nil {
+		log.Printf("server: market registry fetch failed: %v — trying disk cache", err)
+		if reg := s.loadMarketDiskCache(); reg != nil {
+			reg.Stale = true
+			return reg, true, nil
+		}
+		return nil, false, fmt.Errorf("registry unreachable and no cached copy: %v", err)
+	}
+	reg, err := parseMarketRegistry(body)
+	if err != nil {
+		return nil, false, err
+	}
 	s.marketCache = reg
 	_ = s.saveMarketDiskCache(reg) // best-effort offline copy
-	writeJSON(w, http.StatusOK, *reg)
+	return reg, false, nil
 }
 
 // fetchMarketRegistry tries raw.githubusercontent first, then the gh CLI
@@ -158,6 +185,7 @@ func parseMarketRegistry(body []byte) (*marketRegistry, error) {
 		if e.Doc != "" {
 			e.DocURL = "https://github.com/" + marketRepoSlug + "/blob/main/" + strings.TrimPrefix(e.Doc, "/")
 		}
+		e.Installable = marketInstallable(e)
 	}
 	return &reg, nil
 }

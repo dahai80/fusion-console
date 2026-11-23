@@ -59,12 +59,14 @@ export type Message = {
 // ApiError carries the daemon's structured reason_code (issue #45 F1) when
 // the backend classified the failure; plain Error otherwise.
 export class ApiError extends Error {
+  status?: number;
   reason_code?: string;
   hint?: string;
 }
 
 function toApiError(status: number, body: { error?: string; reason_code?: string; hint?: string } | null): ApiError {
   const err = new ApiError(body?.error || `HTTP ${status}`);
+  err.status = status;
   err.reason_code = body?.reason_code;
   err.hint = body?.hint;
   return err;
@@ -281,6 +283,8 @@ export const api = {
   feedbackSubmit: (component: string, title: string, body: string) =>
     req<{ url: string; repo: string }>("/api/feedback/submit", { method: "POST", body: JSON.stringify({ component, title, body }) }),
   marketRegistry: () => req<MarketRegistry>("/api/market/registry"),
+  marketInstall: (id: string, overwrite = false) =>
+    req<MarketInstallResult>("/api/market/install", { method: "POST", body: JSON.stringify({ id, overwrite }) }),
   memoryHubInstall: () =>
     req<{ status: string }>("/api/memoryhub/install", { method: "POST", body: "{}" }),
   memoryHubStart: () => req<{ running: boolean }>("/api/memoryhub/start", { method: "POST", body: "{}" }),
@@ -488,6 +492,25 @@ export type MarketEntry = {
   description?: { zh?: string; en?: string };
   releases_url?: string;
   doc_url?: string;
+  version?: string;
+  installable?: boolean;
+  installed?: MarketInstalled;
+};
+
+export type MarketInstalled = {
+  id?: string;
+  version?: string;
+  anchor: "sha256" | "commit" | "local" | string;
+  digest?: string;
+  installed_at?: string;
+  link?: boolean;
+};
+
+export type MarketInstallResult = {
+  name: string;
+  path: string;
+  installed: MarketInstalled;
+  warnings: string[];
 };
 
 export type MarketRegistry = {
@@ -495,6 +518,7 @@ export type MarketRegistry = {
   entries: MarketEntry[];
   fetched_at: string;
   cached: boolean;
+  stale?: boolean;
 };
 
 export type FeedbackDraft = {
