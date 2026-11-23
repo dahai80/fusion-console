@@ -11,6 +11,7 @@ import { Advanced, Choice, Field, Section, Tag, selectCls, updateOrchestrator, u
 type Source = "none" | "github" | "local";
 type BrainForm = {
   mode: "chat" | "agent";
+  brainAgent: "claude" | "fusion-code";
   provider: string;
   model: string;
   dispatch: Orchestrator["mode"];
@@ -27,6 +28,7 @@ function formFrom(o: Orchestrator): BrainForm {
   const repo = o.brain_repo ?? "";
   return {
     mode: o.brain_mode === "agent" ? "agent" : "chat",
+    brainAgent: o.brain_agent === "fusion-code" ? "fusion-code" : "claude",
     provider: o.brain_provider_id ?? "",
     model: o.brain_model ?? "",
     dispatch: o.mode ?? "confirm",
@@ -81,6 +83,8 @@ export default function BrainSection({ onGoTools }: { onGoTools?: () => void }) 
   }
   const set = (p: Partial<BrainForm>) => { setForm({ ...form, ...p }); setErr(""); };
   const claude = agents.find((a) => a.name === "claude");
+  const fusionCode = agents.find((a) => a.name === "fusion-code");
+  const agentBrainName = form.brainAgent === "fusion-code" ? "fusion-code" : "claude";
 
   const save = async () => {
     if (form.source === "github" && !isRemote(form.repo.trim())) { setErr("GitHub 仓库地址要以 https:// 或 git@ 开头"); return; }
@@ -92,6 +96,7 @@ export default function BrainSection({ onGoTools }: { onGoTools?: () => void }) 
         ...o,
         mode: form.dispatch,
         brain_mode: form.mode,
+        brain_agent: form.brainAgent,
         brain_provider_id: form.provider,
         brain_model: form.model,
         brain_repo: form.source === "none" ? "" : form.repo.trim(),
@@ -111,6 +116,12 @@ export default function BrainSection({ onGoTools }: { onGoTools?: () => void }) 
   };
 
   const modeOpt = (id: BrainForm["mode"]) => ({ name: "fc-brain-mode", checked: form.mode === id, onSelect: () => set({ mode: id }) });
+  // Agent-brain choices set both the mode and which CLI runs it, so picking
+  // "Claude Code" / "fusion-code" is one radio move.
+  const agentOpt = (id: BrainForm["brainAgent"]) => ({
+    name: "fc-brain-mode", checked: form.mode === "agent" && form.brainAgent === id,
+    onSelect: () => set({ mode: "agent", brainAgent: id }),
+  });
   const dispatchOpt = (id: Orchestrator["mode"]) => ({ name: "fc-brain-dispatch", checked: form.dispatch === id, onSelect: () => set({ dispatch: id }) });
   // Switching between GitHub and a local path starts that field empty instead
   // of carrying a URL into the path box (or the other way round).
@@ -127,7 +138,7 @@ export default function BrainSection({ onGoTools }: { onGoTools?: () => void }) 
         <div className="space-y-2">
           <Choice {...modeOpt("chat")} title="直接用模型" badge={<Tag tone="brand">推荐</Tag>}
             desc="大脑负责拆任务、派给 Worker、检查结果，自己不改文件。反应快，花费低，大多数情况选这个。" />
-          <Choice {...modeOpt("agent")} title="用 Claude Code 当大脑"
+          <Choice {...agentOpt("claude")} title="用 Claude Code 当大脑"
             desc="大脑自己也能翻代码、跑命令，看清楚再派活。更慢，花费更高，适合先要摸清仓库的任务。">
             {claude && !claude.detected && (
               <p className="flex items-start gap-1.5 text-xs leading-5 text-amber-700 dark:text-amber-400">
@@ -136,12 +147,21 @@ export default function BrainSection({ onGoTools }: { onGoTools?: () => void }) 
               </p>
             )}
           </Choice>
+          <Choice {...agentOpt("fusion-code")} title="用 fusion-code 当大脑"
+            desc="和 Claude Code 一样能翻代码、跑命令，但用 fusion-code 自己的模型配置和会话。花费记在 brain:fusion-code 名下。">
+            {fusionCode && !fusionCode.detected && (
+              <p className="flex items-start gap-1.5 text-xs leading-5 text-amber-700 dark:text-amber-400">
+                <CircleAlert size={14} className="mt-0.5 shrink-0" />
+                <span>这台电脑还没装 fusion-code，选了也用不了。{onGoTools && <button type="button" onClick={onGoTools} className="ml-1 font-medium underline underline-offset-2">去安装</button>}</span>
+              </p>
+            )}
+          </Choice>
         </div>
       </Section>
 
       <Section title="用哪个模型">
         {form.mode === "agent" ? (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Claude Code 用它自己的模型设置，这里不用选。</p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">{agentBrainName === "fusion-code" ? "fusion-code" : "Claude Code"}用它自己的模型设置，这里不用选。</p>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="模型服务" hint={form.provider ? undefined : "不确定就保持这个，用网关里设好的默认模型。"}>
@@ -198,7 +218,7 @@ export default function BrainSection({ onGoTools }: { onGoTools?: () => void }) 
             <Input value={form.workDir} onChange={(e) => set({ workDir: e.target.value })} placeholder="~/.fusion/fusion-console/agents" autoCapitalize="off" spellCheck={false} />
           </Field>
           <Field label="参考文件" hint={form.mode === "agent"
-            ? "每行一个路径。Claude Code 还会读工作目录里的 CLAUDE.md，团队约定可以写在那里。合计最多 12 KB。"
+            ? `每行一个路径。${agentBrainName === "fusion-code" ? "fusion-code" : "Claude Code"}还会读工作目录里的 CLAUDE.md，团队约定可以写在那里。合计最多 12 KB。`
             : "每行一个路径，比如团队约定、仓库清单。内容会一起交给大脑，合计最多 12 KB。"}>
             <Textarea rows={3} value={form.context} onChange={(e) => set({ context: e.target.value })} placeholder="~/fusion/CLAUDE.md"
               className="font-mono text-xs" autoCapitalize="off" spellCheck={false} />

@@ -18,9 +18,10 @@ func saveOrchestration(t *testing.T, s *Server, body string) *httptest.ResponseR
 	return rec
 }
 
-// TestSaveOrchestrationBrainAgentPinned: brain_agent is not a choice — the
-// agent brain always runs claude — so whatever an older client sends is
-// stored as "claude", and a disabled claude agent no longer blocks saves.
+// TestSaveOrchestrationBrainAgentPinned: brain_agent is not free-form — only
+// claude-compatible CLIs can run the agent brain — so unknown values are
+// stored as "claude" instead of erroring (a hard error rejected every
+// orchestration save once the chosen agent was disabled).
 func TestSaveOrchestrationBrainAgentPinned(t *testing.T) {
 	s := &Server{
 		cfg:    &config.Config{Orchestrator: config.DefaultOrchestrator()},
@@ -40,6 +41,24 @@ func TestSaveOrchestrationBrainAgentPinned(t *testing.T) {
 	}
 	if len(s.cfg.Orchestrator.Workers) != 1 {
 		t.Fatalf("workers not saved: %+v", s.cfg.Orchestrator.Workers)
+	}
+}
+
+// TestSaveOrchestrationBrainAgentFusionCode: fusion-code speaks claude's
+// protocol (same MCP flags + session resume), so it is accepted as the
+// agent brain and stored verbatim.
+func TestSaveOrchestrationBrainAgentFusionCode(t *testing.T) {
+	s := &Server{
+		cfg:    &config.Config{Orchestrator: config.DefaultOrchestrator()},
+		cfgDir: t.TempDir(),
+		agents: map[string]agent.Adapter{"fusion-code": agent.NewFor("fusion-code", "", "fusion-code")},
+	}
+	body := `{"mode":"confirm","brain_mode":"agent","brain_agent":"fusion-code","workers":[]}`
+	if rec := saveOrchestration(t, s, body); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if got := s.cfg.Orchestrator.BrainAgent; got != "fusion-code" {
+		t.Fatalf("brain_agent = %q, want fusion-code", got)
 	}
 }
 

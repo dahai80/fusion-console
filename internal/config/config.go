@@ -200,7 +200,7 @@ type WorkerConfig struct {
 type OrchestratorConfig struct {
 	Mode              string         `json:"mode"`        // "off" | "confirm" | "auto"
 	BrainMode         string         `json:"brain_mode"`  // "chat" (default) | "agent" — brain implementation
-	BrainAgent        string         `json:"brain_agent"` // always "claude": the only CLI that can run the agent brain; kept for older clients
+	BrainAgent        string         `json:"brain_agent"` // "claude" (default) | "fusion-code" — claude-compatible CLIs that can run the agent brain
 	Repos             []string       `json:"repos"`
 	Workers           []WorkerConfig `json:"workers"`
 	Configured        bool           `json:"configured"`
