@@ -1225,20 +1225,32 @@ func pairedPlannerMessages(msgs []chat.Message) []chat.Message {
 	return out
 }
 
-// agentBrainCLI is the only agent that can run as the brain: the turn below
-// relies on claude's --mcp-config / --allowedTools flags and session resume.
+// agentBrainCLI is the default agent-brain CLI. Any CLI speaking claude's
+// protocol (--mcp-config / --allowedTools / --resume + stream-json) can run
+// the turn below; fusion-code is the one alternative (see handleSaveOrchestration).
 const agentBrainCLI = "claude"
 
-// runAgentBrainTurn executes one orchestrated turn with claude code as the
-// brain: a claude CLI session in the brain work dir, wired to the console's
-// dispatch tools over MCP. Its own agentic loop replaces the planner loop.
+// brainAgentCLI resolves the configured agent-brain CLI, falling back to
+// claude when unset or unknown.
+func (s *Server) brainAgentCLI() string {
+	if s.cfg.Orchestrator.BrainAgent == "fusion-code" {
+		return "fusion-code"
+	}
+	return agentBrainCLI
+}
+
+// runAgentBrainTurn executes one orchestrated turn with a claude-compatible
+// coding CLI (claude or fusion-code) as the brain: a CLI session in the brain
+// work dir, wired to the console's dispatch tools over MCP. Its own agentic
+// loop replaces the planner loop.
 func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg string, send func(map[string]any)) {
-	ad, ok := s.agents[agentBrainCLI]
+	cli := s.brainAgentCLI()
+	ad, ok := s.agents[cli]
 	if !ok {
-		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": "claude CLI not available — enable Claude Code in Agents > tools, or switch the brain back to the chat model"})
+		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": cli + " CLI not available — enable it in Agents > tools, or switch the brain back to the chat model"})
 		return
 	}
-	settings := s.agentSettings(agentBrainCLI)
+	settings := s.agentSettings(cli)
 	mcpFile, err := s.writeBrainMCPConfig(convID, user)
 	if err != nil {
 		send(map[string]any{"type": "tool", "tool": "brain", "status": "error", "detail": "mcp config: " + err.Error()})
@@ -1274,7 +1286,7 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 	s.brainMu.Unlock()
 	if resumeSid != "" {
 		opts.ResumeSessionID = resumeSid
-		log.Printf("orchestrator: agent-brain conv=%d resuming claude session %s (mode %s applies to this run)", convID, resumeSid, settings.PermissionMode)
+		log.Printf("orchestrator: agent-brain conv=%d resuming %s session %s (mode %s applies to this run)", convID, cli, resumeSid, settings.PermissionMode)
 	}
 	log.Printf("orchestrator: agent-brain turn conv=%d workdir=%s user=%s", convID, workdir, user)
 	// No worker-slot acquire here: background dispatches hold slots for the
@@ -1332,11 +1344,11 @@ func (s *Server) runAgentBrainTurn(ctx context.Context, convID int64, user, msg 
 	}
 	if full != "" {
 		meta, _ := json.Marshal(map[string]any{
-			"provider": "claude", "brain": "agent",
+			"provider": cli, "brain": "agent",
 			"tokens_in": usage.TokensIn, "tokens_out": usage.TokensOut,
 		})
 		_, _ = s.store.AppendMessage(convID, "assistant", full, string(meta))
-		_ = s.store.LogCost(convID, user, "brain:claude", usage.CostUSD, usage.TokensIn, usage.TokensOut)
+		_ = s.store.LogCost(convID, user, "brain:"+cli, usage.CostUSD, usage.TokensIn, usage.TokensOut)
 	}
 	log.Printf("orchestrator: agent-brain turn done conv=%d tokens_in=%d tokens_out=%d", convID, usage.TokensIn, usage.TokensOut)
 }
