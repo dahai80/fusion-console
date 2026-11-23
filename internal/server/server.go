@@ -223,6 +223,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/feedback/submit", s.auth.Require(s.handleFeedbackSubmit))
 	// Skills Market: fusion-skills registry consumer (Agents -> Skills -> Market).
 	m.HandleFunc("GET /api/market/registry", s.auth.Require(s.handleMarketRegistry))
+	m.HandleFunc("POST /api/market/install", s.auth.Require(s.handleMarketInstall))
 	m.HandleFunc("GET /api/team/agents", s.auth.Require(s.handleTeamAgents))
 	m.HandleFunc("GET /api/team/chat_poll", s.auth.Require(s.handleTeamChatPoll))
 	m.HandleFunc("GET /api/team/teams", s.auth.Require(s.handleTeamTeams))

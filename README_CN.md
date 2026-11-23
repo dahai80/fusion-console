@@ -100,7 +100,7 @@ make web && make build           # 前端构建到 internal/server/webdist，二
 - **`orchestrate`**：输入框旁的开关（默认开），决定 Brain 能不能自己派工。审批模式为“每次派工先问我”时，每次派工会弹出确认卡片。
 - **任务栏**：运行中和排队的派工及其阶段；手机上可以收成一个状态气泡。
 - **Dashboard**：派工队列、进行中的任务、Worker 可用情况、执行时间线，以及 Brain 和每个 Worker 的 Token 用量（今日 / 近 7 天 / 近 30 天 / 全部，日历、柱状或表格视图）。
-- **Agents**：检测到的命令行、Brain 设置和 Worker 列表。
+- **Agents**：检测到的命令行、Brain 设置和 Worker 列表。**Skills → Market** 浏览 [fusion-skills](https://github.com/dahai80/fusion-skills) 目录，技能一键装进 `~/.claude/skills/`（有固定安装包的按 sha256 校验，仓库内技能按固定提交拉取）；软链接的技能不会被替换，本地同名技能确认后才覆盖。
 - **Gateway**：网关状态、key、云端后端；**Models** 标签管理模型来源，也可以添加不经网关的 OpenAI / Anthropic 兼容地址。
 - **Knowledge Base**：一键安装 fusion-rag，之后对话里多出 `kb_search` / `kb_ask` 工具。
 - **Team**：fusion-agent-studio 团队的实时看板，团队可以在 Team 页或对话里创建。

@@ -321,7 +321,7 @@ const [caveman, setCaveman] = useState<CavemanStatus | null>(null);
                 </Card>
             )}
 
-            {tab === "market" && <SkillsMarket />}
+            {tab === "market" && <SkillsMarket onInstalled={load} />}
         </div>
     );
 

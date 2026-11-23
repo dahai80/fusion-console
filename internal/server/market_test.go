@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,5 +58,19 @@ func TestMarketDiskCacheRoundtrip(t *testing.T) {
 	got := s.loadMarketDiskCache()
 	if got == nil || len(got.Entries) != 2 {
 		t.Fatalf("roundtrip lost entries: %+v", got)
+	}
+}
+
+func TestMarketStaleOnlyForDiskFallback(t *testing.T) {
+	dir := t.TempDir()
+	s := &Server{cfgDir: dir}
+	reg, err := parseMarketRegistry([]byte(fixtureRegistry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.marketCache = reg
+	got, cached, err := s.marketRegistryLocked(context.Background())
+	if err != nil || !cached || got.Stale {
+		t.Fatalf("memory cache hit must not read as stale: cached=%v stale=%v err=%v", cached, got.Stale, err)
 	}
 }

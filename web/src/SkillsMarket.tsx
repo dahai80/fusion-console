@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, ExternalLink, RefreshCw, Store } from "lucide-react";
-import { api, type MarketEntry, type MarketRegistry } from "./api";
+import { BookOpen, Check, Download, ExternalLink, Loader2, RefreshCw, Store } from "lucide-react";
+import { api, ApiError, type MarketEntry, type MarketRegistry } from "./api";
 
 // Skills Market tab: browse the fusion-skills catalog (plugin / connector /
-// skill / app) and install entries. Install v1 opens the entry's Releases
-// page (the registry carries no pinned artifacts yet — fusion-skills#1);
-// one-click download+verify lands when upstream adds sha256 pins.
+// skill / app). Skills install in one click: the server downloads the pinned
+// artifact (sha256 + size checked) or the in-repo source_path at a pinned
+// commit, and unpacks it into ~/.claude/skills. Plugins, connectors and apps
+// keep the link to their Releases page (host-specific install targets).
 
 const KINDS = [
     { id: "all", label: "All" },
@@ -22,7 +23,7 @@ const KIND_BADGE: Record<string, string> = {
     app: "bg-zinc-500/10 text-zinc-500",
 };
 
-export function SkillsMarket() {
+export function SkillsMarket({ onInstalled }: { onInstalled?: () => void }) {
     const [reg, setReg] = useState<MarketRegistry | null>(null);
     const [err, setErr] = useState("");
     const [loading, setLoading] = useState(true);
@@ -84,14 +85,14 @@ export function SkillsMarket() {
             </div>
 
             {err && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">{err}</p>}
-            {reg?.cached && !err && (
+            {reg?.stale && !err && (
                 <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
                     Serving a cached copy (upstream unreachable). Hit Refresh to retry.
                 </p>
             )}
 
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {entries.map((e) => <MarketCard key={e.id} e={e} />)}
+                {entries.map((e) => <MarketCard key={e.id} e={e} onInstalled={() => { load(false); onInstalled?.(); }} />)}
             </div>
             {!loading && entries.length === 0 && !err && (
                 <p className="text-sm text-zinc-500">No matching entries.</p>
@@ -100,7 +101,32 @@ export function SkillsMarket() {
     );
 }
 
-function MarketCard({ e }: { e: MarketEntry }) {
+function MarketCard({ e, onInstalled }: { e: MarketEntry; onInstalled: () => void }) {
+    const [busy, setBusy] = useState(false);
+    const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+    const inst = e.installed;
+    const fromMarket = inst && inst.anchor !== "local";
+
+    const install = async (overwrite: boolean) => {
+        setBusy(true); setNote(null);
+        try {
+            const r = await api.marketInstall(e.id, overwrite);
+            const pin = r.installed.anchor === "sha256" ? "sha256 verified" : `commit ${r.installed.digest?.slice(0, 7)}`;
+            setNote({ ok: true, text: `已安装到 ${r.path}（${pin}）` + (r.warnings.length ? ` · 注意：${r.warnings.join("；")}` : "") });
+            onInstalled();
+        } catch (ex) {
+            const err = ex as ApiError;
+            if (err.status === 409 && !overwrite && !inst?.link &&
+                window.confirm(`~/.claude/skills 里已有同名技能「${e.name}」。用市场版本覆盖吗？原目录会被整体替换。`)) {
+                setBusy(false);
+                return install(true);
+            }
+            setNote({ ok: false, text: err.message });
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <div className="flex flex-col gap-2 rounded-2xl border border-zinc-200/80 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <div className="flex items-center gap-2">
@@ -115,14 +141,30 @@ function MarketCard({ e }: { e: MarketEntry }) {
                 {e.description?.zh}
                 {e.description?.en && <span className="mt-0.5 block text-zinc-400">{e.description.en}</span>}
             </p>
+            {note && (
+                <p className={`break-all rounded-lg px-2 py-1 text-[11px] ${note.ok ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-red-500/10 text-red-500"}`}>{note.text}</p>
+            )}
             <div className="flex items-center gap-2 text-[11px] text-zinc-400">
-                <span className="min-w-0 truncate">⬢ {e.source}</span>
+                <span className="min-w-0 truncate">⬢ {e.source}{e.version ? ` · ${e.version}` : ""}</span>
                 {e.doc_url && (
                     <a href={e.doc_url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1 text-indigo-500 hover:underline">
                         <BookOpen size={11} /> doc
                     </a>
                 )}
-                {e.releases_url && (
+                {inst && (
+                    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-emerald-600 dark:text-emerald-400"
+                        title={inst.link ? "symlinked skill — the market never replaces it" : fromMarket ? `${inst.anchor} ${inst.digest ?? ""}` : "a local skill with the same name"}>
+                        <Check size={11} /> {inst.link ? "已链接" : fromMarket ? "已安装" : "本地同名"}
+                    </span>
+                )}
+                {e.installable ? (
+                    <button type="button" onClick={() => install(false)} disabled={busy || inst?.link}
+                        title={inst?.link ? "symlinked skill — manage it at its source" : undefined}
+                        className={`${inst ? "" : "ml-auto "}inline-flex shrink-0 items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-500 disabled:opacity-50`}>
+                        {busy ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+                        {busy ? "安装中…" : inst ? "重新安装" : "安装"}
+                    </button>
+                ) : e.releases_url && (
                     <a href={e.releases_url} target="_blank" rel="noreferrer"
                         className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-500">
                         <ExternalLink size={11} /> Releases 安装

@@ -134,6 +134,11 @@ After that: **Start chatting**.
   execution timeline, and token usage for the brain and each worker
   (today / 7 days / 30 days / all time, calendar, chart or table view).
 - **Agents** — detected CLIs, the brain settings and the worker fleet.
+  **Skills → Market** browses the [fusion-skills](https://github.com/dahai80/fusion-skills)
+  catalog; skills install in one click into `~/.claude/skills/` (pinned
+  artifact checked against its sha256, or the in-repo folder at a pinned
+  commit). Symlinked skills are never replaced; a same-name local skill is
+  replaced only after you confirm.
 - **Gateway** — gateway status, keys, cloud backends; the **Models** tab
   manages model sources, including direct OpenAI/Anthropic-compatible
   endpoints that bypass the gateway.
