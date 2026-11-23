@@ -1167,8 +1167,13 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         setActive(conv);
         await refreshConvs();
       }
-      setEntries((e) => [...e, { role: "user", content: full }, { role: "assistant", content: "" }]);
       const idx = conv.ID;
+      // The user may switch conversations while this turn streams (switching
+      // is never blocked). Every view write below must confirm this
+      // conversation is still the one on screen, or conv A's stream paints
+      // into conv B's timeline until the turn ends.
+      const onConv = () => activeRef.current?.ID === idx;
+      if (onConv()) setEntries((e) => [...e, { role: "user", content: full }, { role: "assistant", content: "" }]);
       if (conv.Kind !== "team") {
         brainConversation = idx;
         setBrainActivity(beginBrainTurn(idx, text));
@@ -1176,7 +1181,7 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
       let view = emptyTurn();
       // issue #100 N2: render at most once per reveal window — arrival
       // lumps smooth out; the final flushNow keeps the last text exact.
-      const reveal = createPacer(() => showTurn(view));
+      const reveal = createPacer(() => { if (onConv()) showTurn(view); });
       await streamPOST("/api/chat", { conversation_id: idx, content: full, orchestrate, turn_id: turnId }, (ev) => {
         if (brainConversation !== undefined) {
           setBrainActivity(prev => prev && prev.conversation === brainConversation ? brainEvent(prev, ev) : prev);
@@ -1291,10 +1296,13 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
         setEntries([]);
         await refreshConvs();
       }
-      setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
       convId = conv.ID;
+      // Same conversation guard as the chat send: the stream must not paint
+      // into another conversation's timeline if the user switches away.
+      const onConv = () => activeRef.current?.ID === convId;
+      if (onConv()) setEntries((e) => [...e, { role: "user", content: text }, { role: "assistant", content: "" }]);
       let view = emptyTurn();
-      const reveal = createPacer(() => showTurn(view));
+      const reveal = createPacer(() => { if (onConv()) showTurn(view); });
       await streamPOST("/api/agent/run", { conversation_id: conv.ID, agent, task: text, workdir: "", turn_id: turnId }, (ev) => {
         view = applyAgentEvent(view, ev);
         reveal.tick();
