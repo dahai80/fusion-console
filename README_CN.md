@@ -141,6 +141,14 @@ Worker 和仓库绑定：派给不属于它的仓库会被拒绝。每个 Worker
 
 **Harness sidecar。** 防护由 `sidecar/harnessd.py` 调用 Python 版 fusion-harness。console 依次查找 `FUSION_CONSOLE_HARNESS_PYTHON`、安装目录和工作区的虚拟环境、PATH 里的 `python3` / `python`。`config.json` 里开启 `harness.enabled` 时，sidecar 起不来，对话会在调用模型前停下。内核 0.22 支持防护检查和预算报告；0.23 起增加模型调用指标和失败归因。
 
+内核包本身（`fusion_harness`，来自
+[dahai80/fusion-harness](https://github.com/dahai80/fusion-harness)）**不随发布包分发**。缺了它 sidecar 起不来，每次编排工具调用都会被 fail-closed 拒绝（`tool admission unavailable`）——主脑仍然照常回话，故障很容易被忽略。把它装进上面查找顺序能看到的任一解释器即可：
+
+```bash
+git clone https://github.com/dahai80/fusion-harness.git
+pip install -e fusion-harness   # 或用 FUSION_CONSOLE_HARNESS_PYTHON 指向装有它的 venv
+```
+
 **记账。** 规划轮次记为 `chat:<来源>`（或 `brain:claude`），派出的任务记为 `agent:<名字>`。失败按 MAST 分类打标（`fc1_brief`、`fc2_handoff`、`fc3_tool`），可在 Dashboard → Failures 导出 JSONL。
 
 ## 配置参考
