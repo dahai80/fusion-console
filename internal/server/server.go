@@ -191,6 +191,9 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/memoryhub/stop", s.auth.Require(s.handleMemoryHubStop))
 	m.HandleFunc("GET /api/workers/status", s.auth.Require(s.handleWorkersStatus))
 	m.HandleFunc("GET /api/dispatches", s.auth.Require(s.handleDispatches))
+	// Weekly work report (issue #114): deterministic dispatch aggregation
+	// per worker over a date range; the weekly_report brain tool reuses it.
+	m.HandleFunc("GET /api/report/weekly", s.auth.Require(s.handleWeeklyReport))
 	m.HandleFunc("POST /api/dispatches/ack", s.auth.Require(s.handleDispatchAck))
 	m.HandleFunc("POST /api/dispatches/enqueue", s.handleDispatchEnqueue)
 	m.HandleFunc("POST /api/dispatches/clear", s.auth.Require(s.handleDispatchClear))

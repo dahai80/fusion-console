@@ -24,6 +24,7 @@ const toolLabels: Record<string, string> = {
   team_inbox: "Checking team replies",
   kb_search: "Searching the knowledge base",
   kb_ask: "Querying the knowledge base",
+  weekly_report: "Compiling the weekly report",
 };
 
 export function brainEvent(activity: BrainActivity, ev: Record<string, unknown>): BrainActivity {
