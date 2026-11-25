@@ -24,10 +24,14 @@ type ragStatusOut struct {
 
 func (s *Server) handleRagStatus(w http.ResponseWriter, r *http.Request) {
 	phase, logs, jobErr := s.ragInstall.snapshot()
+	// Detection is probe-based, like the agent-studio bootstrap: a healthy
+	// service or an importable package counts as installed even when the
+	// console did not perform the install itself.
+	running := s.ragHealthy(time.Second)
 	writeJSON(w, http.StatusOK, ragStatusOut{
-		Installed: s.cfg.Rag.Installed,
+		Installed: s.cfg.Rag.Installed || running || s.ragImportable(),
 		Enabled:   s.cfg.Rag.Enabled,
-		Running:   s.cfg.Rag.Installed && s.ragHealthy(time.Second),
+		Running:   running,
 		Phase:     phase,
 		Logs:      logs,
 		Error:     jobErr,
