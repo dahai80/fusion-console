@@ -44,6 +44,7 @@ import remarkGfm from "remark-gfm";
 import { api, streamPOST, ApiError, type AgentInfo, type ChatDefault, type ChatTurn, type Conversation, type DispatchRun, type Message, type GatewayKey, type GatewayModelItem, type Provider, type WorkerSettings, type WorkerStatus } from "./api";
 import { applyAgentEvent, applyChatEvent, approvalAfter, createPacer, emptyTurn, followDelay, FOLLOW_MAX_FAILURES, isNetworkError, newTurnId, replayTurn, type TurnKind, type TurnView } from "./chatTurn";
 import { mergeEntries, supersedeWith } from "./chatTimeline";
+import { useStudio, StudioStatusCard } from "./StudioBootstrap";
 import Onboarding from "./Onboarding";
 import { progress as setupProgress, useSetupStatus } from "./setupStatus";
 import ConsoleUpdate from "./ConsoleUpdate";
@@ -501,7 +502,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   // teams as conversation-like entry points.
   const [sideTab, setSideTab] = useState<"chat" | "team">("chat");
   const [teamsLive, setTeamsLive] = useState<{ name: string }[]>([]);
-  const [studio, setStudio] = useState<{ installed: boolean; daemon_running: boolean; dir: string; phase: string; logs?: string[]; error?: string } | null>(null);
+  const { studio } = useStudio();
   const [active, setActive] = useState<Conversation | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [gwProvider, setGwProvider] = useState<Provider | null>(null);
@@ -760,14 +761,8 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
     if (c.Kind !== "team" && !busy) void resumeRunningTurn(c);
   };
 
-  // Studio bootstrap + live teams polling for the Teams sidebar tab.
-  useEffect(() => {
-    const read = () => api.studioStatus().then(setStudio).catch(() => setStudio(null));
-    read();
-    const busy = studio?.phase === "installing" || studio?.phase === "starting";
-    const t = setInterval(read, busy ? 2000 : 30000);
-    return () => clearInterval(t);
-  }, [studio?.phase]);
+  // Live teams polling for the Teams sidebar tab (studio status comes from
+  // the shared useStudio hook).
   useEffect(() => {
     if (sideTab !== "team") return;
     const read = () => api.teamTeams().then((r) => setTeamsLive((r.teams ?? []).map((x: Record<string, any>) => ({ name: String(x.name || "") })))).catch(() => setTeamsLive([]));
@@ -1050,7 +1045,6 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
       setTeamCreating(false);
     }
   };
-  const studioInstalling = studio?.phase === "installing" || studio?.phase === "starting";
   const studioReady = studio?.daemon_running || studio?.installed;
 
   const newChat = async () => {
@@ -1385,79 +1379,7 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
             </Button>
           )}
         </div>
-        {sideTab === "team" && (
-          <div className="mx-3 mb-2">
-            {studio === null && (
-              <div className="rounded-xl border border-zinc-300/80 bg-zinc-100/60 p-3 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
-                <p>无法获取 agent-studio 状态</p>
-                <button onClick={() => api.studioStatus().then(setStudio).catch(() => {})}
-                  className="mt-2 rounded-lg bg-zinc-500/20 px-2.5 py-1.5 font-medium hover:bg-zinc-500/30">重试</button>
-              </div>
-            )}
-            {studio !== null && studio.installed && studio.daemon_running && (
-              <p className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" /> agent-studio 运行中
-              </p>
-            )}
-            {studio !== null && !studioReady && (
-              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
-                {studio.installed ? (
-                  <>
-                    <p className="font-medium">fusion-agent-studio 已安装，daemon 未运行</p>
-                    <p className="mt-1 opacity-80">启动后才能使用 Team（建群、派活、收件箱都走这个守护进程）。</p>
-                  </>
-                ) : (
-                  <>
-                    <p className="font-medium">Team 需要 fusion-agent-studio</p>
-                    <p className="mt-1 opacity-80">Team 功能（建群、派活、收件箱）依赖 fusion-agent-studio 守护进程，当前这台机器上没有安装。选一种方式安装，完成后自动启动 daemon。</p>
-                  </>
-                )}
-                {studioInstalling ? (
-                  <p className="mt-2 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase === "starting" ? "启动 daemon…" : "安装中…"}（完成后自动刷新）</p>
-                ) : (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {studio.installed ? (
-                      <button
-                        onClick={() => api.studioInstall("auto").then(() => api.studioStatus().then(setStudio)).catch(() => {})}
-                        className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
-                      >
-                        启动 agent-studio
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          onClick={() => api.studioInstall("workspace").then(() => api.studioStatus().then(setStudio)).catch(() => {})}
-                          className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
-                        >
-                          一键安装（工作区 pip）
-                        </button>
-                        <button
-                          onClick={() => api.studioInstall("pypi").then(() => api.studioStatus().then(setStudio)).catch(() => {})}
-                          className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
-                        >
-                          pip（PyPI）
-                        </button>
-                        <button
-                          onClick={() => api.studioInstall("brew").then(() => api.studioStatus().then(setStudio)).catch(() => {})}
-                          className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
-                        >
-                          Homebrew
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
-                {!studio.installed && !studioInstalling && (
-                  <p className="mt-2 font-mono text-[10px] leading-4 opacity-70">命令行：pip install fusion-agent-studio 或 brew install dahai80/fusion-mlx/fusion-agent-studio</p>
-                )}
-                {studio.error && <p className="mt-2 font-mono text-[10px] opacity-80">{studio.error}</p>}
-                {(studio.logs ?? []).length > 0 && (
-                  <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] opacity-70">{(studio.logs ?? []).slice(-8).join("\n")}</pre>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        {sideTab === "team" && <div className="mx-3 mb-2"><StudioStatusCard showRunningChip /></div>}
         <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-1">
           {sideTab === "team" && studioReady && teamsLive.map((t) => (
             <button

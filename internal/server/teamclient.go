@@ -142,6 +142,11 @@ func (s *Server) teamEnsureJWT() (string, error) {
 	}
 	res, err := teamRPC(studioSocketPath(), "", "auth.login", map[string]any{"apikey": apikey})
 	if err != nil {
+		// A dead daemon dial surfaces as a raw unix-socket error otherwise;
+		// point the user at the Team-page bootstrap instead.
+		if strings.Contains(err.Error(), "connect:") {
+			return "", fmt.Errorf("agent-studio daemon is not running (socket %s) — start or install it from the Team page", studioSocketPath())
+		}
 		return "", fmt.Errorf("auth.login: %v", err)
 	}
 	jwt, _ = res["jwt"].(string)
