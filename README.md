@@ -130,6 +130,10 @@ After that: **Start chatting**.
   approval card.
 - **Task rail** — running and queued dispatches with their stage, collapsible
   to a status bubble on phones.
+- **Weekly report** — ask in chat (with `orchestrate` on) and the brain calls
+  `weekly_report`: per-worker runs, outcomes, tokens, cost and task titles for
+  any date range, narrowed to the workers you name. Same data is available at
+  `GET /api/report/weekly?start=YYYY-MM-DD&end=YYYY-MM-DD&worker=<name>`.
 - **Dashboard** — dispatch queue, running tasks, worker availability, an
   execution timeline, and token usage for the brain and each worker
   (today / 7 days / 30 days / all time, calendar, chart or table view).
