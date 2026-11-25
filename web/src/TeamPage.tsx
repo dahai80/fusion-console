@@ -327,7 +327,7 @@ export default function TeamPage() {
         </div>
       </div>
 
-      {!daemonUp && <div className="mb-4"><StudioStatusCard /></div>}
+      <div className="mb-4"><StudioStatusCard showRunningChip /></div>
       {daemonUp && err && <ReasonCard error={err} />}
 
       <div className="flex flex-col gap-4 md:flex-row md:items-start">
