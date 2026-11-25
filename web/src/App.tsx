@@ -1385,23 +1385,51 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
             </Button>
           )}
         </div>
-        {sideTab === "team" && studio && !studioReady && (
-          <div className="mx-3 mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
-            <p className="font-medium">Team needs fusion-agent-studio</p>
-            <p className="mt-1 opacity-80">The daemon is not running and the package is not installed yet. Install it into the workspace venv via pip (editable), then the daemon starts automatically.</p>
-            {studioInstalling ? (
-              <p className="mt-2 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase}: installing…</p>
-            ) : (
-              <button
-                onClick={() => api.studioInstall().then(() => api.studioStatus().then(setStudio)).catch(() => {})}
-                className="mt-2 rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
-              >
-                Install fusion-agent-studio (pip)
-              </button>
+        {sideTab === "team" && (
+          <div className="mx-3 mb-2">
+            {studio === null && (
+              <div className="rounded-xl border border-zinc-300/80 bg-zinc-100/60 p-3 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+                <p>无法获取 agent-studio 状态</p>
+                <button onClick={() => api.studioStatus().then(setStudio).catch(() => {})}
+                  className="mt-2 rounded-lg bg-zinc-500/20 px-2.5 py-1.5 font-medium hover:bg-zinc-500/30">重试</button>
+              </div>
             )}
-            {studio.error && <p className="mt-2 font-mono text-[10px] opacity-80">{studio.error}</p>}
-            {(studio.logs ?? []).length > 0 && (
-              <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] opacity-70">{(studio.logs ?? []).slice(-8).join("\n")}</pre>
+            {studio !== null && studio.installed && studio.daemon_running && (
+              <p className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" /> agent-studio 运行中
+              </p>
+            )}
+            {studio !== null && !studioReady && (
+              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+                {studio.installed ? (
+                  <>
+                    <p className="font-medium">fusion-agent-studio 已安装，daemon 未运行</p>
+                    <p className="mt-1 opacity-80">启动后才能使用 Team（建群、派活、收件箱都走这个守护进程）。</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium">Team 需要 fusion-agent-studio</p>
+                    <p className="mt-1 opacity-80">Team 功能（建群、派活、收件箱）依赖 fusion-agent-studio 守护进程，当前这台机器上没有安装。安装会通过 pip 装进 fusion 工作区共享 venv，然后自动启动 daemon。Homebrew 暂无此包的 formula，命令行安装见下方。</p>
+                  </>
+                )}
+                {studioInstalling ? (
+                  <p className="mt-2 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase === "starting" ? "启动 daemon…" : "pip 安装中…"}（完成后自动刷新）</p>
+                ) : (
+                  <button
+                    onClick={() => api.studioInstall().then(() => api.studioStatus().then(setStudio)).catch(() => {})}
+                    className="mt-2 rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
+                  >
+                    {studio.installed ? "启动 agent-studio" : "一键安装（pip）"}
+                  </button>
+                )}
+                {!studio.installed && (
+                  <p className="mt-2 font-mono text-[10px] leading-4 opacity-70">手动安装：pip install -e ~/fusion/fusion-agent-studio && bash ~/fusion/fusion-agent-studio/start.sh start</p>
+                )}
+                {studio.error && <p className="mt-2 font-mono text-[10px] opacity-80">{studio.error}</p>}
+                {(studio.logs ?? []).length > 0 && (
+                  <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] opacity-70">{(studio.logs ?? []).slice(-8).join("\n")}</pre>
+                )}
+              </div>
             )}
           </div>
         )}
