@@ -134,6 +134,9 @@ After that: **Start chatting**.
   `weekly_report`: per-worker runs, outcomes, tokens, cost and task titles for
   any date range, narrowed to the workers you name. Same data is available at
   `GET /api/report/weekly?start=YYYY-MM-DD&end=YYYY-MM-DD&worker=<name>`.
+  Dates are calendar days in the console host's time zone. Runs dismissed
+  from the task rail still count; tokens and cost are the usage booked to
+  each worker, so they also include foreground dispatches.
 - **Dashboard** — dispatch queue, running tasks, worker availability, an
   execution timeline, and token usage for the brain and each worker
   (today / 7 days / 30 days / all time, calendar, chart or table view).
@@ -218,6 +221,18 @@ then `python3` / `python` on PATH. With `harness.enabled` in `config.json`,
 chat stops before the model call if the sidecar cannot start. Kernel 0.22
 covers guard checks and budget reporting; 0.23 adds LLM metrics and failure
 attribution.
+
+The kernel package itself (`fusion_harness`, from
+[dahai80/fusion-harness](https://github.com/dahai80/fusion-harness)) is not
+bundled in release packages. Without it the sidecar cannot start and every
+orchestrated tool call is denied fail-closed (`tool admission unavailable`) —
+the planner still answers, so the breakage is easy to miss. Install it once
+into any interpreter the lookup above can see:
+
+```bash
+git clone https://github.com/dahai80/fusion-harness.git
+pip install -e fusion-harness   # or point FUSION_CONSOLE_HARNESS_PYTHON at a venv that has it
+```
 
 **Accounting.** Planner turns are booked as `chat:<provider>` (or
 `brain:claude`), dispatched runs as `agent:<name>`. Failures are tagged with

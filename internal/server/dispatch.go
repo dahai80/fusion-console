@@ -38,6 +38,16 @@ type dispatchArgs struct {
 	// "mcp-brain" bucket.
 	User    string `json:"user,omitempty"`
 	fromMCP bool   // sidecar handoffs do not start a second agent-brain turn
+	// usage, when set, receives the run's final accounting so a background
+	// run can store it on its own dispatch_runs row.
+	usage *dispatchUsage
+}
+
+// dispatchUsage is the cost/token accounting of one finished dispatch.
+type dispatchUsage struct {
+	CostUSD   float64
+	TokensIn  int
+	TokensOut int
 }
 
 // bgRun is one background dispatch: queued by the brain's run_agent call,
@@ -414,11 +424,17 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 		// must outlive it, capped at the same 30 minutes as foreground runs.
 		ctx, cancel := context.WithTimeout(context.Background(), s.dispatchTimeout())
 		defer cancel()
+		// The run row carried zero cost and tokens forever: the accounting
+		// only went to cost_log. Record it on the run as well so the card,
+		// the receipt and the weekly report show what the run used.
+		used := &dispatchUsage{}
+		args.usage = used
 		final, err := s.finishDispatch(ctx, convID, user, "run_agent", args, wk, cli, settings, budget, nil)
 
 		s.bg.mu.Lock()
 		run.FinishedAt = time.Now()
 		run.ElapsedS = int(run.FinishedAt.Sub(run.StartedAt).Seconds())
+		run.CostUSD, run.TokensIn, run.TokensOut = used.CostUSD, used.TokensIn, used.TokensOut
 		if b, ok := err.(*dispatchBlocked); ok {
 			run.Status, run.Detail = b.Status, b.Reason
 		} else if err != nil {
@@ -719,6 +735,9 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 	// Cost rows stay separate: planner chat vs agent runs.
 	_ = s.store.LogCost(convID, user, "agent:"+args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
 	log.Printf("orchestrator: agent=%s finished cost=%.4f tokens_in=%d tokens_out=%d", args.Agent, usage.CostUSD, usage.TokensIn, usage.TokensOut)
+	if args.usage != nil {
+		*args.usage = dispatchUsage{CostUSD: usage.CostUSD, TokensIn: usage.TokensIn, TokensOut: usage.TokensOut}
+	}
 	if b := blockedResult(final); b != nil {
 		return "", b
 	}
@@ -773,7 +792,8 @@ func (s *Server) handleDispatchAck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleDispatchDismiss removes one finished run (POST /api/dispatches/{id}/dismiss).
+// handleDispatchDismiss takes one finished run off the task rail
+// (POST /api/dispatches/{id}/dismiss). The stored row is kept for reports.
 func (s *Server) handleDispatchDismiss(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -781,14 +801,15 @@ func (s *Server) handleDispatchDismiss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.bg.dismiss(id)
-	if err := s.store.DeleteDispatchRun(id); err != nil {
+	if err := s.store.DismissDispatchRun(id); err != nil {
 		log.Printf("dispatch: dismiss run #%d: %v", id, err)
 	}
 	log.Printf("dispatch: run #%d dismissed", id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleDispatchClear removes every finished run (POST /api/dispatches/clear).
+// handleDispatchClear takes every finished run off the task rail
+// (POST /api/dispatches/clear). The stored rows are kept for reports.
 func (s *Server) handleDispatchClear(w http.ResponseWriter, r *http.Request) {
 	s.bg.mu.Lock()
 	defer s.bg.mu.Unlock()

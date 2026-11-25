@@ -99,7 +99,7 @@ make web && make build           # 前端构建到 internal/server/webdist，二
 - **`@Worker`**：点名某个 Worker，任务立刻在后台交给它。任务需要已有仓库时勾选 **Requires Git repository**。
 - **`orchestrate`**：输入框旁的开关（默认开），决定 Brain 能不能自己派工。审批模式为“每次派工先问我”时，每次派工会弹出确认卡片。
 - **任务栏**：运行中和排队的派工及其阶段；手机上可以收成一个状态气泡。
-- **周报**：打开 `orchestrate` 后在对话里说"出个周报"，Brain 会调用 `weekly_report` 工具：任意日期范围内每个 Worker 的派工数、结果、Token、花费和任务标题，可只选指定的 Worker。同一数据也开放为 `GET /api/report/weekly?start=YYYY-MM-DD&end=YYYY-MM-DD&worker=<名称>`。
+- **周报**：打开 `orchestrate` 后在对话里说"出个周报"，Brain 会调用 `weekly_report` 工具：任意日期范围内每个 Worker 的派工数、结果、Token、花费和任务标题，可只选指定的 Worker。同一数据也开放为 `GET /api/report/weekly?start=YYYY-MM-DD&end=YYYY-MM-DD&worker=<名称>`。日期按 console 所在机器的时区算自然日；从任务栏移除的派工仍计入周报；Token 和花费取记在每个 Worker 名下的用量，因此也包含前台派工。
 - **Dashboard**：派工队列、进行中的任务、Worker 可用情况、执行时间线，以及 Brain 和每个 Worker 的 Token 用量（今日 / 近 7 天 / 近 30 天 / 全部，日历、柱状或表格视图）。
 - **Agents**：检测到的命令行、Brain 设置和 Worker 列表。**Skills → Market** 浏览 [fusion-skills](https://github.com/dahai80/fusion-skills) 目录，技能一键装进 `~/.claude/skills/`（有固定安装包的按 sha256 校验，仓库内技能按固定提交拉取）；软链接的技能不会被替换，本地同名技能确认后才覆盖。
 - **Gateway**：网关状态、key、云端后端；**Models** 标签管理模型来源，也可以添加不经网关的 OpenAI / Anthropic 兼容地址。
@@ -141,6 +141,14 @@ Worker 和仓库绑定：派给不属于它的仓库会被拒绝。每个 Worker
 **护栏。** 每个 Worker 可单独停用，各有预算上限；后台任务共用一个有界的执行池（默认同时 4 个），单次最长 48 小时；每次派工都经过 fusion-harness 工具准入链，sidecar 不可用时直接拒绝（fail-closed）。审批模式：`confirm`（每次先问）、`auto`（预算内自动）、`off`（不给工具）。任务缺少前置条件时可以用最终回复 `{"status":"blocked","reason":"…"}` 上报，派工卡片显示 **blocked**，不会误报成功。
 
 **Harness sidecar。** 防护由 `sidecar/harnessd.py` 调用 Python 版 fusion-harness。console 依次查找 `FUSION_CONSOLE_HARNESS_PYTHON`、安装目录和工作区的虚拟环境、PATH 里的 `python3` / `python`。`config.json` 里开启 `harness.enabled` 时，sidecar 起不来，对话会在调用模型前停下。内核 0.22 支持防护检查和预算报告；0.23 起增加模型调用指标和失败归因。
+
+内核包本身（`fusion_harness`，来自
+[dahai80/fusion-harness](https://github.com/dahai80/fusion-harness)）**不随发布包分发**。缺了它 sidecar 起不来，每次编排工具调用都会被 fail-closed 拒绝（`tool admission unavailable`）——主脑仍然照常回话，故障很容易被忽略。把它装进上面查找顺序能看到的任一解释器即可：
+
+```bash
+git clone https://github.com/dahai80/fusion-harness.git
+pip install -e fusion-harness   # 或用 FUSION_CONSOLE_HARNESS_PYTHON 指向装有它的 venv
+```
 
 **记账。** 规划轮次记为 `chat:<来源>`（或 `brain:claude`），派出的任务记为 `agent:<名字>`。失败按 MAST 分类打标（`fc1_brief`、`fc2_handoff`、`fc3_tool`），可在 Dashboard → Failures 导出 JSONL。
 

@@ -141,6 +141,11 @@ func (s *Store) migrate() error {
 	if err := addColumn(s.db, "dispatch_runs", "repo", "ALTER TABLE dispatch_runs ADD COLUMN repo TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// Dismissing a card hides the run from the task rail; the row stays so
+	// the weekly report still counts the work.
+	if err := addColumn(s.db, "dispatch_runs", "dismissed", "ALTER TABLE dispatch_runs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	return s.migrateConversationModelColumns()
 }
 
@@ -881,8 +886,9 @@ func (s *Store) AckDispatchRuns(convID int64) error {
 	return nil
 }
 
-// ListDispatchRuns returns the most recent runs, oldest first (list order is
-// the caller's concern; the registry wants append order).
+// ListDispatchRuns returns the most recent runs still on the task rail (not
+// dismissed), oldest first (list order is the caller's concern; the registry
+// wants append order).
 func (s *Store) ListDispatchRuns(limit int) ([]*DispatchRunRow, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 500
@@ -890,7 +896,7 @@ func (s *Store) ListDispatchRuns(limit int) ([]*DispatchRunRow, error) {
 	rows, err := s.db.Query(
 		`SELECT id, conv_id, user, worker, agent, task, status, started_at, finished_at,
 		  elapsed_s, cost_usd, tokens_in, tokens_out, detail, result, error, read, requires_repo, repo
-		 FROM dispatch_runs ORDER BY id DESC LIMIT ?`, limit)
+		 FROM dispatch_runs WHERE dismissed=0 ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list dispatch runs: %w", err)
 	}
@@ -912,18 +918,21 @@ func (s *Store) ListDispatchRuns(limit int) ([]*DispatchRunRow, error) {
 	return out, rows.Err()
 }
 
-// DeleteDispatchRun removes one run row (dismiss).
-func (s *Store) DeleteDispatchRun(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE id=?`, id)
+// DismissDispatchRun takes one run off the task rail. The row is kept: the
+// weekly report is built from dispatch_runs, and deleting here made every
+// dismissed run vanish from it.
+func (s *Store) DismissDispatchRun(id int64) error {
+	_, err := s.db.Exec(`UPDATE dispatch_runs SET dismissed=1 WHERE id=?`, id)
 	if err != nil {
-		return fmt.Errorf("store: delete dispatch run %d: %w", id, err)
+		return fmt.Errorf("store: dismiss dispatch run %d: %w", id, err)
 	}
 	return nil
 }
 
-// ClearFinishedDispatchRuns removes all terminal run rows.
+// ClearFinishedDispatchRuns takes every terminal run off the task rail; the
+// rows are kept for the weekly report (see DismissDispatchRun).
 func (s *Store) ClearFinishedDispatchRuns() error {
-	_, err := s.db.Exec(`DELETE FROM dispatch_runs WHERE status IN ('done','blocked','error')`)
+	_, err := s.db.Exec(`UPDATE dispatch_runs SET dismissed=1 WHERE dismissed=0 AND status IN ('done','blocked','error')`)
 	if err != nil {
 		return fmt.Errorf("store: clear finished dispatch runs: %w", err)
 	}
