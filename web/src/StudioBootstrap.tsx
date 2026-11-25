@@ -47,35 +47,30 @@ export function StudioStatusCard({ showRunningChip = false }: { showRunningChip?
   const installing = studio.phase === "installing" || studio.phase === "starting";
   return (
     <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
-      {studio.installed ? (
-        <>
-          <p className="font-medium">fusion-agent-studio 已安装，daemon 未运行</p>
-          <p className="mt-1 opacity-80">启动后才能使用 Team（建群、派活、收件箱都走这个守护进程）。</p>
-        </>
-      ) : (
-        <>
-          <p className="font-medium">Team 需要 fusion-agent-studio</p>
-          <p className="mt-1 opacity-80">Team 功能（建群、派活、收件箱）依赖 fusion-agent-studio 守护进程，当前这台机器上没有安装。选一种方式安装，完成后自动启动 daemon。</p>
-        </>
-      )}
-      {installing ? (
-        <p className="mt-2 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase === "starting" ? "启动 daemon…" : "安装中…"}（完成后自动刷新）</p>
-      ) : (
-        <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1">
           {studio.installed ? (
-            <button onClick={() => void install("auto")} className={btnCls}>启动 agent-studio</button>
+            <p className="font-medium">fusion-agent-studio 已安装，daemon 未运行 — 启动后才能使用 Team</p>
           ) : (
-            <>
-              <button onClick={() => void install("workspace")} className={btnCls}>一键安装（工作区 pip）</button>
-              <button onClick={() => void install("pypi")} className={btnCls}>pip（PyPI）</button>
-              <button onClick={() => void install("brew")} className={btnCls}>Homebrew</button>
-            </>
+            <p className="font-medium">Team 需要 fusion-agent-studio — 当前这台机器上没有安装，选一种方式安装（完成后自动启动 daemon）</p>
           )}
         </div>
-      )}
-      {!studio.installed && !installing && (
-        <p className="mt-2 font-mono text-[10px] leading-4 opacity-70">命令行：pip install fusion-agent-studio 或 brew install dahai80/fusion-mlx/fusion-agent-studio</p>
-      )}
+        {installing ? (
+          <p className="flex shrink-0 items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase === "starting" ? "启动 daemon…" : "安装中…"}</p>
+        ) : (
+          <div className="flex shrink-0 flex-wrap gap-1.5">
+            {studio.installed ? (
+              <button onClick={() => void install("auto")} className={btnCls}>启动 agent-studio</button>
+            ) : (
+              <>
+                <button onClick={() => void install("workspace")} className={btnCls}>一键安装（工作区 pip）</button>
+                <button onClick={() => void install("pypi")} className={btnCls}>pip（PyPI）</button>
+                <button onClick={() => void install("brew")} className={btnCls}>Homebrew</button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
       {studio.error && <p className="mt-2 font-mono text-[10px] opacity-80">{studio.error}</p>}
       {(studio.logs ?? []).length > 0 && (
         <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] opacity-70">{(studio.logs ?? []).slice(-8).join("\n")}</pre>
