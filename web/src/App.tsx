@@ -1409,21 +1409,46 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
                 ) : (
                   <>
                     <p className="font-medium">Team 需要 fusion-agent-studio</p>
-                    <p className="mt-1 opacity-80">Team 功能（建群、派活、收件箱）依赖 fusion-agent-studio 守护进程，当前这台机器上没有安装。安装会通过 pip 装进 fusion 工作区共享 venv，然后自动启动 daemon。Homebrew 暂无此包的 formula，命令行安装见下方。</p>
+                    <p className="mt-1 opacity-80">Team 功能（建群、派活、收件箱）依赖 fusion-agent-studio 守护进程，当前这台机器上没有安装。选一种方式安装，完成后自动启动 daemon。</p>
                   </>
                 )}
                 {studioInstalling ? (
-                  <p className="mt-2 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase === "starting" ? "启动 daemon…" : "pip 安装中…"}（完成后自动刷新）</p>
+                  <p className="mt-2 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> {studio.phase === "starting" ? "启动 daemon…" : "安装中…"}（完成后自动刷新）</p>
                 ) : (
-                  <button
-                    onClick={() => api.studioInstall().then(() => api.studioStatus().then(setStudio)).catch(() => {})}
-                    className="mt-2 rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
-                  >
-                    {studio.installed ? "启动 agent-studio" : "一键安装（pip）"}
-                  </button>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {studio.installed ? (
+                      <button
+                        onClick={() => api.studioInstall("auto").then(() => api.studioStatus().then(setStudio)).catch(() => {})}
+                        className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
+                      >
+                        启动 agent-studio
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => api.studioInstall("workspace").then(() => api.studioStatus().then(setStudio)).catch(() => {})}
+                          className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
+                        >
+                          一键安装（工作区 pip）
+                        </button>
+                        <button
+                          onClick={() => api.studioInstall("pypi").then(() => api.studioStatus().then(setStudio)).catch(() => {})}
+                          className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
+                        >
+                          pip（PyPI）
+                        </button>
+                        <button
+                          onClick={() => api.studioInstall("brew").then(() => api.studioStatus().then(setStudio)).catch(() => {})}
+                          className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 font-medium hover:bg-amber-500/30"
+                        >
+                          Homebrew
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
-                {!studio.installed && (
-                  <p className="mt-2 font-mono text-[10px] leading-4 opacity-70">手动安装：pip install -e ~/fusion/fusion-agent-studio && bash ~/fusion/fusion-agent-studio/start.sh start</p>
+                {!studio.installed && !studioInstalling && (
+                  <p className="mt-2 font-mono text-[10px] leading-4 opacity-70">命令行：pip install fusion-agent-studio 或 brew install dahai80/fusion-mlx/fusion-agent-studio</p>
                 )}
                 {studio.error && <p className="mt-2 font-mono text-[10px] opacity-80">{studio.error}</p>}
                 {(studio.logs ?? []).length > 0 && (
