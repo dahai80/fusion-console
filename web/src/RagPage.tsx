@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Database, Download, ExternalLink, Power, RefreshCw } from "lucide-react";
+import { Database, Download, ExternalLink, Power } from "lucide-react";
 import { api, type RagStatus } from "./api";
 import { Button } from "./components/ui";
 
@@ -82,84 +82,76 @@ export function RagPage() {
 
       {!st && <p className="text-sm text-zinc-400">loading…</p>}
 
-      {st && !st.installed && !installing && (
-        <div className="space-y-3 rounded-2xl border border-zinc-200/80 p-4 text-sm dark:border-zinc-800">
-          <p className="text-zinc-600 dark:text-zinc-300">
-            fusion-rag is the local offline vector knowledge base (Apple Silicon native).
-            Once installed, every chat gains <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">kb_search</code> /{" "}
-            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">kb_ask</code> tools over MCP, and this menu
-            opens the knowledge base management console.
-          </p>
-          <p className="text-xs text-zinc-400">
-            Not downloaded by default. Install pip-installs fusion-rag from PyPI (Tsinghua mirror, official PyPI
-            fallback) into a local venv. Requires python3 on this machine.
-          </p>
-          <Button onClick={() => action(() => api.ragInstall(), "install")} disabled={busy !== ""}>
-            <Download size={14} /> Download &amp; install
-          </Button>
-        </div>
-      )}
-
-      {installing && (
-        <div className="space-y-2 rounded-2xl border border-zinc-200/80 p-4 dark:border-zinc-800">
-          <p className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
-            <RefreshCw size={14} className="animate-spin" /> installing fusion-rag — phase: {st?.phase}
-          </p>
-          <pre ref={logRef} className="max-h-64 overflow-auto rounded-xl bg-zinc-950 p-3 text-xs leading-5 text-zinc-300">
-            {(st?.logs ?? []).join("\n")}
-          </pre>
-          {st?.error && <p className="text-sm text-red-500">{st.error}</p>}
-        </div>
-      )}
-
-      {st?.phase === "error" && !installing && (
-        <div className="space-y-2 rounded-2xl border border-red-500/30 bg-red-500/5 p-4">
-          <p className="text-sm text-red-500">install failed: {st.error}</p>
-          <Button variant="outline" onClick={() => action(() => api.ragInstall(), "retry")} disabled={busy !== ""}>
-            <Download size={14} /> Retry install
-          </Button>
-        </div>
-      )}
-
-      {st?.installed && !installing && (
-        <div className="space-y-3 rounded-2xl border border-zinc-200/80 p-4 dark:border-zinc-800">
+      {/* Lifecycle status mirrors the Team page's agent-studio card: one row,
+          status text on the left, action on the right — always visible. */}
+      {st && (
+        <div className={`rounded-xl border p-3 text-xs ${
+          st.installed && st.running
+            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+            : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+        }`}>
           <div className="flex flex-wrap items-center gap-2">
-            {st.running ? (
-              <>
-                <Button variant="outline" onClick={() => action(() => api.ragStop(), "stop")} disabled={busy !== ""}>
-                  <Power size={14} /> Stop
-                </Button>
+            <p className="min-w-0 flex-1 font-medium">
+              {!st.installed && "Knowledge Base 需要 fusion-rag — 本机未安装，一键安装（PyPI）后每个对话自动获得 kb_search / kb_ask 工具"}
+              {st.installed && st.running && `fusion-rag 运行中 :${st.port}`}
+              {st.installed && !st.running && "fusion-rag 已安装，服务未运行 — 启动后对话才能使用 kb_search / kb_ask"}
+            </p>
+            {!st.installed && !installing && st.phase !== "error" && (
+              <Button onClick={() => action(() => api.ragInstall(), "install")} disabled={busy !== ""}>
+                <Download size={14} /> 一键安装（PyPI）
+              </Button>
+            )}
+            {st.installed && st.running && (
+              <div className="flex shrink-0 flex-wrap gap-1.5">
                 <a
                   href="/shell/fusion-rag/"
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-500"
                 >
-                  <ExternalLink size={14} /> Open management console
+                  <ExternalLink size={14} /> 打开管理控制台
                 </a>
-                <label className="ml-2 flex items-center gap-2 text-xs text-zinc-500" title="Expose kb_search / kb_ask MCP tools in chat">
+                <label className="flex items-center gap-1.5 text-xs opacity-80" title="Expose kb_search / kb_ask MCP tools in chat">
                   <input
                     type="checkbox"
                     checked={st.enabled}
                     onChange={(e) => action(() => api.ragSetEnabled(e.target.checked), "enabled")}
                   />
-                  enable in chat
+                  对话中启用
                 </label>
-              </>
-            ) : (
-              <Button onClick={() => action(() => api.ragStart(), "start")} disabled={busy !== ""}>
-                <Power size={14} /> Start fusion-rag
+                <Button variant="outline" onClick={() => action(() => api.ragStop(), "stop")} disabled={busy !== ""}>
+                  <Power size={14} /> 停止
+                </Button>
+              </div>
+            )}
+            {st.installed && !st.running && !installing && (
+              <Button onClick={() => action(() => api.ragStart(), "start")} disabled={busy !== ""} className="shrink-0">
+                <Power size={14} /> 启动 fusion-rag
               </Button>
             )}
           </div>
-          {st.running && (
-            <iframe
-              src="/shell/fusion-rag/"
-              title="fusion-rag console"
-              className="h-[70vh] w-full rounded-xl border border-zinc-200/80 dark:border-zinc-800"
-            />
+          {st.phase === "error" && !installing && (
+            <div className="mt-2 flex items-center gap-2">
+              <p className="font-mono text-[10px] opacity-80">install failed: {st.error}</p>
+              <Button variant="outline" onClick={() => action(() => api.ragInstall(), "retry")} disabled={busy !== ""}>
+                <Download size={14} /> 重试安装
+              </Button>
+            </div>
+          )}
+          {installing && (
+            <pre ref={logRef} className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-zinc-950 p-3 font-mono text-[10px] leading-5 text-zinc-300">
+              {(st.logs ?? []).join("\n")}
+            </pre>
           )}
         </div>
+      )}
+
+      {st?.installed && st.running && (
+        <iframe
+          src="/shell/fusion-rag/"
+          title="fusion-rag console"
+          className="h-[70vh] w-full rounded-xl border border-zinc-200/80 dark:border-zinc-800"
+        />
       )}
     </div>
   );
