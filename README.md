@@ -222,6 +222,18 @@ chat stops before the model call if the sidecar cannot start. Kernel 0.22
 covers guard checks and budget reporting; 0.23 adds LLM metrics and failure
 attribution.
 
+The kernel package itself (`fusion_harness`, from
+[dahai80/fusion-harness](https://github.com/dahai80/fusion-harness)) is not
+bundled in release packages. Without it the sidecar cannot start and every
+orchestrated tool call is denied fail-closed (`tool admission unavailable`) —
+the planner still answers, so the breakage is easy to miss. Install it once
+into any interpreter the lookup above can see:
+
+```bash
+git clone https://github.com/dahai80/fusion-harness.git
+pip install -e fusion-harness   # or point FUSION_CONSOLE_HARNESS_PYTHON at a venv that has it
+```
+
 **Accounting.** Planner turns are booked as `chat:<provider>` (or
 `brain:claude`), dispatched runs as `agent:<name>`. Failures are tagged with
 the MAST taxonomy (`fc1_brief`, `fc2_handoff`, `fc3_tool`) and exportable as
