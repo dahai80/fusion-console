@@ -11,7 +11,7 @@ import (
 
 // The entire final reply is reserved for this envelope. Quoted examples,
 // progress events and ordinary prose never change the dispatch status.
-const workerResultContract = "[dispatch result] If a prerequisite prevents you from completing this task, return only a JSON object of the form {\"status\":\"blocked\",\"reason\":\"what is needed to proceed\"} as your final reply. Otherwise reply normally."
+const workerResultContract = "[dispatch result] If a prerequisite prevents you from completing this task, return only a JSON object of the form {\"status\":\"blocked\",\"reason\":\"what is needed to proceed\"} as your final reply. Otherwise reply normally. Publication is part of completion: a task counts as solved only when the work is committed, pushed to a topic branch and a PR is open (report the PR URL). Never claim a merge, release or deployment that did not actually happen — list those steps as pending instead."
 
 type dispatchBlocked struct {
 	Status string `json:"status"`

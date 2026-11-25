@@ -730,10 +730,21 @@ func (s *Server) runPlannerLoop(ctx context.Context, tp chat.ToolProvider, prov 
 			if callArgs == nil {
 				callArgs = map[string]any{}
 			}
-			admit, err := s.harness.ToolAdmit(prov.convID, prov.budget, call.Name, callArgs)
-			if err != nil {
-				log.Printf("orchestrator: tool_admit unavailable for %s, failing closed: %v", call.Name, err)
-				admit = harness.Admit{Reason: "tool admission unavailable (fail-closed)", BlockedBy: "sidecar_unavailable"}
+			// When the harness is disabled in config, admission is skipped
+			// entirely (issue #115): PreLLM/PostLLM already respect the flag,
+			// so gating tool_admit unconditionally left the planner loop
+			// running with every tool call denied. The declared-tool check
+			// and confirm-mode approval in admitDecision still apply.
+			var admit harness.Admit
+			if s.cfg.Harness.Enabled {
+				var err error
+				admit, err = s.harness.ToolAdmit(prov.convID, prov.budget, call.Name, callArgs)
+				if err != nil {
+					log.Printf("orchestrator: tool_admit unavailable for %s, failing closed: %v", call.Name, err)
+					admit = harness.Admit{Reason: "tool admission unavailable (fail-closed)", BlockedBy: "sidecar_unavailable"}
+				}
+			} else {
+				admit = harness.Admit{Allowed: true}
 			}
 			allowed, needsApproval, reason, blockedBy := admitDecision(admit, call.Name, tools, s.cfg.Orchestrator.Mode == "confirm")
 			if !allowed {

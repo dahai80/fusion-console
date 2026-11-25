@@ -34,10 +34,15 @@ function compactCount(count: number) {
 function DispatchBubble({ signals, stale, loading }: { signals: Signal[]; stale: boolean; loading: boolean }) {
   const [primary, issue] = signals;
   const Icon = primary ? signalIcons[primary.kind] : stale ? CloudOff : loading ? Clock : PanelRightOpen;
+  // One number per bubble (issue #113): the ring alert used to render the
+  // issue count next to the in-circle active count, so a bubble showed "4"
+  // with a ring badge "1" and neither number labelled — readers took both
+  // for task counts. The alert only stands alone when nothing is active;
+  // active-task issues stay visible in the dispatch rail itself.
   return <span className="dispatch-bubble" data-signal={primary?.kind} aria-hidden="true">
     <Icon size={primary ? 13 : 17} />
     {primary && <b>{compactCount(primary.count)}</b>}
-    {issue && <span className="dispatch-bubble-alert">{compactCount(issue.count)}</span>}
+    {!primary && issue && <span className="dispatch-bubble-alert">{compactCount(issue.count)}</span>}
   </span>;
 }
 
