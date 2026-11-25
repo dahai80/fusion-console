@@ -134,6 +134,9 @@ After that: **Start chatting**.
   `weekly_report`: per-worker runs, outcomes, tokens, cost and task titles for
   any date range, narrowed to the workers you name. Same data is available at
   `GET /api/report/weekly?start=YYYY-MM-DD&end=YYYY-MM-DD&worker=<name>`.
+  Dates are calendar days in the console host's time zone. Runs dismissed
+  from the task rail still count; tokens and cost are the usage booked to
+  each worker, so they also include foreground dispatches.
 - **Dashboard** — dispatch queue, running tasks, worker availability, an
   execution timeline, and token usage for the brain and each worker
   (today / 7 days / 30 days / all time, calendar, chart or table view).

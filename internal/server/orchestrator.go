@@ -252,8 +252,8 @@ func orchestratorTools() []chat.ToolDecl {
 			Name:        "weekly_report",
 			Description: "Compile the weekly work report (issue #114): what the dispatched workers did in a date range — runs, outcomes, tokens, cost, elapsed time, per worker, with task titles. Deterministic data from the local store; you narrate it. Use it when the user asks for a weekly report (周报) or a work summary.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
-				`"start":{"type":"string","description":"range start date YYYY-MM-DD (inclusive); default 7 days ago"},` +
-				`"end":{"type":"string","description":"range end date YYYY-MM-DD (inclusive); default today"},` +
+				`"start":{"type":"string","description":"range start date YYYY-MM-DD (inclusive, server local time); default 6 days before today"},` +
+				`"end":{"type":"string","description":"range end date YYYY-MM-DD (inclusive, server local time); default today"},` +
 				`"workers":{"type":"array","items":{"type":"string"},"description":"worker names to include; omit for all workers"}` +
 				`},"additionalProperties":false}`),
 		},
