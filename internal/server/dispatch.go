@@ -722,6 +722,13 @@ func (s *Server) finishDispatch(ctx context.Context, convID int64, user string, 
 	if b := blockedResult(final); b != nil {
 		return "", b
 	}
+	// Publish audit: a worker that only fixed things locally must not read as
+	// "solved". Prepend the note so it survives result truncation in the
+	// dispatch summary (2000 runes) and the auto-continue wake message (1200).
+	if note := auditPublishState(workdir); note != "" {
+		log.Printf("orchestrator: publish audit worker=%s workdir=%s: local-only work detected", args.Agent, workdir)
+		final = note + "\n\n" + final
+	}
 	if s.workerMemoryModeFor(wk) == "fusion-memory" && final != "" {
 		s.commitWorkerMemory(ctx, args.Agent, args.Task, final)
 	}

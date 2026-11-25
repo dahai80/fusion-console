@@ -90,7 +90,9 @@ func TestDispatchRequiresRepo(t *testing.T) {
 			args, _ := json.Marshal(dispatchArgs{Agent: "worker", RequiresRepo: tc.required, Task: "Explain Git repositories and the word blocked"})
 			out, err := s.executeToolCall(t.Context(), chat.ToolCall{Name: "run_agent", Arguments: string(args)}, "admin", 0, nil)
 			if tc.starts {
-				if err != nil || out != "ok" || len(a.starts) != 1 {
+				// Publish audit may prepend a note (test repos have no
+				// upstream); the worker's own final text still ends it.
+				if err != nil || !strings.HasSuffix(out, "ok") || len(a.starts) != 1 {
 					t.Fatalf("result %q, err %v, starts %d", out, err, len(a.starts))
 				}
 				opts := <-a.starts
