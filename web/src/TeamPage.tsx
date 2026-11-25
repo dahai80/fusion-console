@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlarmClock, AlertTriangle, Ban, BookOpen, ChevronDown, ChevronRight, Eye, Pause, Play, RefreshCw, RotateCcw, Square, Users, X } from "lucide-react";
 import { api, ApiError, type HarnessReport, type LeadStatus, type TeamSnapshot } from "./api";
+import { useStudio, StudioStatusCard } from "./StudioBootstrap";
 import { Button, Card, Select } from "./components/ui";
 import ReasonCard from "./components/ReasonCard";
 import RunDrawer from "./components/RunDrawer";
@@ -127,6 +128,10 @@ function WakeupCard({
 }
 
 export default function TeamPage() {
+  // Shared bootstrap: while the daemon is down, team RPCs would all fail with
+  // raw dial errors — polls are gated off and the bootstrap card takes over.
+  const { studio } = useStudio();
+  const daemonUp = studio?.daemon_running === true;
   const [snap, setSnap] = useState<TeamSnapshot | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState("");
@@ -179,11 +184,12 @@ export default function TeamPage() {
         else { setPb(null); setPbError(msg); }
       });
   };
-  useEffect(() => { load(); }, [focusTeam]);
+  useEffect(() => { if (daemonUp) load(); }, [focusTeam, daemonUp]);
   useEffect(() => {
+    if (!daemonUp) return;
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
-  }, [focusTeam]);
+  }, [focusTeam, daemonUp]);
   // console#79 R5: harness guard report for the focused team's conversation
   // (report RPC from #78). Conversation lookup happens once per focus; the
   // report refreshes on its own slower cadence. Errors hide the panel.
@@ -207,6 +213,7 @@ export default function TeamPage() {
   // Tree nav options — the daemon's live teams (teams.list) with lifecycle for
   // grouping. Chat-created teams land here with the next refresh.
   useEffect(() => {
+    if (!daemonUp) { setLiveTeams([]); return; }
     const read = () =>
       api.teamTeams()
         .then((r) => setLiveTeams((r.teams ?? [])
@@ -216,7 +223,7 @@ export default function TeamPage() {
     read();
     const t = setInterval(read, 15000);
     return () => clearInterval(t);
-  }, []);
+  }, [daemonUp]);
   const op = async (op: string, task_id?: string) => {
     setBusy(task_id ? `${op}:${task_id}` : op);
     try {
@@ -320,7 +327,8 @@ export default function TeamPage() {
         </div>
       </div>
 
-      {err && <ReasonCard error={err} />}
+      {!daemonUp && <div className="mb-4"><StudioStatusCard /></div>}
+      {daemonUp && err && <ReasonCard error={err} />}
 
       <div className="flex flex-col gap-4 md:flex-row md:items-start">
         {/* Left: grouped tree of live teams. Selection deep-links via ?team=

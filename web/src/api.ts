@@ -224,11 +224,7 @@ export const api = {
   saveOrchestration: (o: Orchestrator) =>
     req<{ ok: boolean }>("/api/settings/orchestration", { method: "POST", body: JSON.stringify(o) }),
   ragStatus: () => req<RagStatus>("/api/rag/status"),
-  studioStatus: () =>
-    req<{
-      installed: boolean; daemon_running: boolean; enabled: boolean;
-      dir: string; socket: string; phase: string; logs?: string[]; error?: string;
-    }>("/api/studio/status"),
+  studioStatus: () => req<StudioStatus>("/api/studio/status"),
   studioInstall: (method?: "auto" | "workspace" | "pypi" | "brew") =>
     req<{ status: string }>("/api/studio/install", { method: "POST", body: JSON.stringify({ method }) }),
   ragInstall: () => req<{ status: string }>("/api/rag/install", { method: "POST" }),
@@ -452,6 +448,11 @@ export type HarnessReport = {
     mode_counts: Record<string, number>;
     cluster_counts: Record<string, number>;
   };
+};
+
+export type StudioStatus = {
+  installed: boolean; daemon_running: boolean; enabled: boolean;
+  dir: string; socket: string; phase: string; logs?: string[]; error?: string;
 };
 
 export type RagStatus = {
