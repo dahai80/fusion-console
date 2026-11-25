@@ -600,14 +600,74 @@ func runStream(ctx context.Context, st *ragInstallState, dir, name string, args 
 
 // startRAG launches the RAG server via its start.sh (or start.cmd on
 // Windows) and waits briefly for the health endpoint.
-func (s *Server) startRAG() error {
-	if !s.cfg.Rag.Installed {
-		return fmt.Errorf("fusion-rag is not installed")
+// ragPythonCandidates lists interpreters that may carry the fusion_rag
+// package outside the console-managed install: the console venv, the
+// monorepo shared venv, and system python3 (plain pip installs).
+func ragPythonCandidates(installDir string) []string {
+	out := []string{}
+	if installDir != "" {
+		if p := filepath.Join(installDir, ".venv", "bin", "python3"); fileExists(p) {
+			out = append(out, p)
+		}
 	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if p := filepath.Join(home, "fusion", ".venv", "bin", "python3"); fileExists(p) {
+			out = append(out, p)
+		}
+	}
+	return append(out, "python3")
+}
+
+// ragImportable reports whether some candidate interpreter can import
+// fusion_rag — an install the console did not perform itself still counts.
+func (s *Server) ragImportable() bool {
+	for _, py := range ragPythonCandidates(s.cfg.Rag.InstallDir) {
+		if exec.Command(py, "-c", "import fusion_rag").Run() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// waitRAGHealthy polls the health endpoint for the given budget.
+func (s *Server) waitRAGHealthy(budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		if s.ragHealthy(time.Second) {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("fusion-rag did not become healthy within %s", budget)
+}
+
+func (s *Server) startRAG() error {
 	if s.ragHealthy(time.Second) {
 		return nil
 	}
 	script := filepath.Join(s.cfg.Rag.InstallDir, "src", "start.sh")
+	if fileExists(script) {
+		return s.startRAGScript(script)
+	}
+	// Externally installed (PyPI pip install): serve straight from PATH.
+	bin, err := exec.LookPath("fusion-rag")
+	if err != nil {
+		return fmt.Errorf("fusion-rag is not installed")
+	}
+	logDir := filepath.Join(os.Getenv("HOME"), ".fusion", "fusion-console", "log")
+	_ = os.MkdirAll(logDir, 0o755)
+	logPath := filepath.Join(logDir, "rag-stdout.log")
+	launch := fmt.Sprintf("nohup %s serve :%d >> %q 2>> %q &", bin, s.cfg.Rag.Port, logPath, logPath)
+	if err := exec.Command("bash", "-c", launch).Run(); err != nil {
+		return fmt.Errorf("serve launch failed: %v", err)
+	}
+	log.Printf("server: rag started via PATH binary on :%d", s.cfg.Rag.Port)
+	return s.waitRAGHealthy(20 * time.Second)
+}
+
+// startRAGScript runs the console-managed install's lifecycle script and
+// waits for the health endpoint.
+func (s *Server) startRAGScript(script string) error {
 	cmd := exec.Command("bash", script, "start")
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd", "/C", filepath.Join(s.cfg.Rag.InstallDir, "src", "start.cmd"), "start")
@@ -620,19 +680,17 @@ func (s *Server) startRAG() error {
 	if err != nil {
 		return fmt.Errorf("start script failed: %v", err)
 	}
-	// Wait up to 20s for the health endpoint to answer.
-	for i := 0; i < 20; i++ {
-		time.Sleep(time.Second)
-		if s.ragHealthy(time.Second) {
-			return nil
-		}
-	}
-	return fmt.Errorf("fusion-rag did not become healthy within 20s")
+	return s.waitRAGHealthy(20 * time.Second)
 }
 
-// stopRAG stops the RAG server via its start script.
+// stopRAG stops the RAG server via its start script, falling back to a
+// process kill for externally installed (PATH binary) services.
 func (s *Server) stopRAG() error {
 	script := filepath.Join(s.cfg.Rag.InstallDir, "src", "start.sh")
+	if !fileExists(script) {
+		kill := fmt.Sprintf("pkill -f %q || true", fmt.Sprintf("fusion-rag serve :%d", s.cfg.Rag.Port))
+		return exec.Command("bash", "-c", kill).Run()
+	}
 	cmd := exec.Command("bash", script, "stop")
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd", "/C", filepath.Join(s.cfg.Rag.InstallDir, "src", "start.cmd"), "stop")
