@@ -8,13 +8,16 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -83,13 +86,10 @@ type studioStatusOut struct {
 
 func (s *Server) handleStudioStatus(w http.ResponseWriter, r *http.Request) {
 	dir := studioDir()
-	installed := false
-	if dir != "" {
-		// Installed = the entry point imports in the chosen interpreter.
-		// Cheap and authoritative (pip metadata lies after partial installs).
-		cmd := exec.Command(s.studioPythonFor(dir), "-c", "import agent_runtime")
-		installed = cmd.Run() == nil
-	}
+	// Installed = some candidate interpreter (workspace venv, Homebrew
+	// formula venv, or system python3) can import agent_runtime — pip
+	// metadata lies after partial installs, the import does not.
+	installed := studioInstalled(dir)
 	phase, logs, jobErr := s.studioInstall.snapshot()
 	writeJSON(w, http.StatusOK, studioStatusOut{
 		Installed:     installed,
@@ -117,14 +117,96 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
-// handleStudioInstall starts the consented background install: editable pip
-// installs of the in-tree dependency chain (fusion-core, fusion-harness,
-// fusion-agent-studio) into the shared venv, then start.sh start, then a
-// socket-wait. Idempotent per phase — a running job rejects re-entry.
+// brewStudioPython returns the Homebrew formula's venv interpreter when the
+// dahai80/fusion-mlx tap has fusion-agent-studio installed, else "".
+func brewStudioPython() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "brew", "--prefix").Output()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(strings.TrimSpace(string(out)), "opt", "fusion-agent-studio", "libexec", "bin", "python")
+	if fileExists(p) {
+		return p
+	}
+	return ""
+}
+
+// studioPythonCandidates lists interpreters that may carry agent_runtime, in
+// probe order: workspace shared venv (monorepo layout), Homebrew formula
+// venv, system python3 (covers plain `pip install fusion-agent-studio`).
+func studioPythonCandidates(dir string) []string {
+	out := []string{}
+	if dir != "" {
+		if p := filepath.Join(filepath.Dir(dir), ".venv", "bin", "python3"); fileExists(p) {
+			out = append(out, p)
+		}
+	}
+	if p := brewStudioPython(); p != "" {
+		out = append(out, p)
+	}
+	return append(out, "python3")
+}
+
+// studioInstalled reports whether any candidate interpreter can import
+// agent_runtime — the authoritative check regardless of install method.
+func studioInstalled(dir string) bool {
+	for _, py := range studioPythonCandidates(dir) {
+		if exec.Command(py, "-c", "import agent_runtime").Run() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// startStudioDaemon launches the daemon: via the workspace start.sh when the
+// checkout exists, otherwise detached under the first interpreter that has
+// agent_runtime importable (PyPI / Homebrew installs have no start.sh).
+func (s *Server) startStudioDaemon(ctx context.Context, st *ragInstallState, dir string) error {
+	if dir != "" && fileExists(filepath.Join(dir, "start.sh")) {
+		return runStream(ctx, st, dir, "bash", "start.sh", "start")
+	}
+	python := "python3"
+	for _, py := range studioPythonCandidates(dir) {
+		if exec.Command(py, "-c", "import agent_runtime").Run() == nil {
+			python = py
+			break
+		}
+	}
+	logDir := filepath.Join(os.Getenv("HOME"), ".fusion-agent-studio")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDir, "daemon-stdout.log")
+	st.logf("detached start: %s -m agent_runtime.daemon_server", python)
+	launch := fmt.Sprintf("nohup %s -m agent_runtime.daemon_server >> %q 2>> %q &", python, logPath, logPath)
+	return exec.CommandContext(ctx, "bash", "-c", launch).Run()
+}
+
+// studioInstallReq selects the install source. Empty means "auto": skip the
+// package step (the daemon binary is already there) and just start it.
+type studioInstallReq struct {
+	Method string `json:"method"` // auto (default) | workspace | pypi | brew
+}
+
+// handleStudioInstall starts the consented background install and daemon
+// start. Methods: workspace = editable pip of the in-tree chain into the
+// shared venv; pypi = `pip install fusion-agent-studio`; brew = Homebrew
+// formula from the dahai80/fusion-mlx tap; auto = start only. Every method
+// ends with a bounded socket-wait. Idempotent per phase — a running job
+// rejects re-entry.
 func (s *Server) handleStudioInstall(w http.ResponseWriter, r *http.Request) {
+	method := "auto"
+	var req studioInstallReq
+	if r.Body != nil {
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err == nil && req.Method != "" {
+			method = req.Method
+		}
+	}
 	dir := studioDir()
-	if dir == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "fusion-agent-studio project directory not found (set FUSION_AGENT_STUDIO_DIR)"})
+	if method == "workspace" && dir == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "fusion-agent-studio project directory not found (set FUSION_AGENT_STUDIO_DIR or install via PyPI/Homebrew)"})
 		return
 	}
 	phase, _, _ := s.studioInstall.snapshot()
@@ -143,36 +225,52 @@ func (s *Server) handleStudioInstall(w http.ResponseWriter, r *http.Request) {
 	s.studioInstall.err = ""
 	s.studioInstall.cancel = cancel
 	s.studioInstall.mu.Unlock()
-	go s.installStudio(ctx, &s.studioInstall, dir)
-	log.Printf("server: agent-studio install started dir=%s", dir)
+	go s.installStudio(ctx, &s.studioInstall, dir, method)
+	log.Printf("server: agent-studio install started dir=%s method=%s", dir, method)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-func (s *Server) installStudio(ctx context.Context, st *ragInstallState, dir string) {
-	repoRoot := filepath.Dir(dir)
-	python := s.studioPythonFor(dir)
-	st.logf("using interpreter %s", python)
-
+func (s *Server) installStudio(ctx context.Context, st *ragInstallState, dir, method string) {
 	st.setPhase("installing")
-	// In-tree dependency chain, order matters: each pip install -e registers
-	// the package the next one's dependency resolution needs.
-	for _, pkg := range []string{"fusion-core", "fusion-harness", "fusion-agent-studio"} {
-		p := filepath.Join(repoRoot, pkg)
-		if !fileExists(filepath.Join(p, "pyproject.toml")) {
-			st.logf("skip %s (not found at %s)", pkg, p)
-			continue
+	switch method {
+	case "workspace":
+		repoRoot := filepath.Dir(dir)
+		python := s.studioPythonFor(dir)
+		st.logf("using interpreter %s", python)
+		// In-tree dependency chain, order matters: each pip install -e
+		// registers the package the next one's dependency resolution needs.
+		for _, pkg := range []string{"fusion-core", "fusion-harness", "fusion-agent-studio"} {
+			p := filepath.Join(repoRoot, pkg)
+			if !fileExists(filepath.Join(p, "pyproject.toml")) {
+				st.logf("skip %s (not found at %s)", pkg, p)
+				continue
+			}
+			st.logf("pip install -e %s", pkg)
+			if err := runStream(ctx, st, p, python, "-m", "pip", "install", "-e", p); err != nil {
+				s.studioInstallFail(st, fmt.Errorf("pip install %s: %v", pkg, err))
+				return
+			}
 		}
-		st.logf("pip install -e %s", pkg)
-		if err := runStream(ctx, st, p, python, "-m", "pip", "install", "-e", p); err != nil {
-			s.studioInstallFail(st, fmt.Errorf("pip install %s: %v", pkg, err))
+	case "pypi":
+		python := s.studioPythonFor(dir)
+		st.logf("pip install fusion-agent-studio into %s", python)
+		if err := runStream(ctx, st, dir, python, "-m", "pip", "install", "fusion-agent-studio"); err != nil {
+			s.studioInstallFail(st, fmt.Errorf("pip install fusion-agent-studio: %v", err))
 			return
 		}
+	case "brew":
+		st.logf("brew install dahai80/fusion-mlx/fusion-agent-studio")
+		if err := runStream(ctx, st, dir, "brew", "install", "dahai80/fusion-mlx/fusion-agent-studio"); err != nil {
+			s.studioInstallFail(st, fmt.Errorf("brew install: %v", err))
+			return
+		}
+	default: // auto: package already present, straight to start
+		st.logf("method auto: skipping package install")
 	}
 
 	st.setPhase("starting")
-	st.logf("starting daemon via start.sh")
-	if err := runStream(ctx, st, dir, "bash", "start.sh", "start"); err != nil {
-		s.studioInstallFail(st, fmt.Errorf("start.sh: %v", err))
+	if err := s.startStudioDaemon(ctx, st, dir); err != nil {
+		s.studioInstallFail(st, fmt.Errorf("daemon start: %v", err))
 		return
 	}
 	// Wait for the UDS socket to answer (bounded — never hangs the job).

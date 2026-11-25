@@ -229,7 +229,8 @@ export const api = {
       installed: boolean; daemon_running: boolean; enabled: boolean;
       dir: string; socket: string; phase: string; logs?: string[]; error?: string;
     }>("/api/studio/status"),
-  studioInstall: () => req<{ status: string }>("/api/studio/install", { method: "POST" }),
+  studioInstall: (method?: "auto" | "workspace" | "pypi" | "brew") =>
+    req<{ status: string }>("/api/studio/install", { method: "POST", body: JSON.stringify({ method }) }),
   ragInstall: () => req<{ status: string }>("/api/rag/install", { method: "POST" }),
   ragStart: () => req<{ running: boolean }>("/api/rag/start", { method: "POST" }),
   ragStop: () => req<{ running: boolean }>("/api/rag/stop", { method: "POST" }),
