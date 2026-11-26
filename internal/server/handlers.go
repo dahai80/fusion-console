@@ -54,11 +54,12 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		}
 		if strings.TrimSpace(req.Workdir) == "" {
 			if wk != nil {
-				req.Workdir = config.ConfiguredWorkDir(wk.WorkDir)
+				req.Workdir = wk.WorkDir
 			} else {
-				req.Workdir = config.ConfiguredWorkDir(s.agentSettings(cli).WorkDir)
+				req.Workdir = s.agentSettings(cli).WorkDir
 			}
 		}
+		req.Workdir = config.ConfiguredWorkDir(req.Workdir)
 		if req.Workdir == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent session requires workdir"})
 			return
@@ -539,6 +540,7 @@ func (s *Server) handleAgentRun(w http.ResponseWriter, r *http.Request) {
 	if wk != nil && wk.PermissionMode != "" {
 		settings.PermissionMode = wk.PermissionMode
 	}
+	req.Workdir = config.ConfiguredWorkDir(req.Workdir)
 	workdir := req.Workdir
 	if workdir == "" {
 		// Dedicated workspace: named workers get their own directory.
