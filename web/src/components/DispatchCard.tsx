@@ -61,6 +61,17 @@ export function BrainCard({ activity, runningCount }: { activity: BrainActivity 
         <p className="brain-context" key={activity.phase} title={activity.detail || activity.request}>
           {activity.detail || activity.request}
         </p>}
+      {/* Fan-out ledger: one row per dispatched brief, in dispatch order —
+          the visible trace of the brain handing each issue to its worker. */}
+      {activity.dispatches.length > 0 && <ul className="brain-dispatches">
+        {activity.dispatches.map((d, i) => <li key={i} data-status={d.status} title={d.task}>
+          {d.status === "dispatching" && <Loader2 size={12} className="dispatch-spin" aria-hidden="true" />}
+          {d.status === "queued" && <Clock size={12} aria-hidden="true" />}
+          {d.status === "done" && <CheckCircle size={12} aria-hidden="true" />}
+          {d.status === "failed" && <XCircle size={12} aria-hidden="true" />}
+          <span>{d.task}</span>
+        </li>)}
+      </ul>}
       {activity.lastHandoff && <p className="brain-handoff" title={activity.lastHandoff}>
         <span>Last handoff</span> {activity.lastHandoff}
       </p>}
