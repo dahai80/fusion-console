@@ -1035,16 +1035,24 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		// The gateway is dual-protocol (/v1/messages and /v1/chat/completions
 		// on the same base URL), so the env family follows the CLI protocol.
 		if proto == agent.ProtocolClaudeStreamJSON {
-			// The Anthropic SDK appends /v1/messages itself — strip the
-			// OpenAI-style /v1 suffix the provider config carries.
+			// Anthropic-family SDKs append /v1/messages themselves — strip
+			// the OpenAI-style /v1 suffix the provider config carries.
 			base := strings.TrimSuffix(strings.TrimSuffix(prov.BaseURL, "/"), "/v1")
+			// fusion-code (claude fork) dials FUSION_BASE_URL for its cloud
+			// path and ignores ANTHROPIC_BASE_URL alone (verified on 0.8.5);
+			// plain claude reads ANTHROPIC_BASE_URL. Set both. Its auto-MLX
+			// topology probe also hijacks localhost base URLs unless a
+			// client key is present, so ride ANTHROPIC_AUTH_TOKEN.
+			env["FUSION_BASE_URL"] = base
 			env["ANTHROPIC_BASE_URL"] = base
 			env["ANTHROPIC_AUTH_TOKEN"] = key
 			if model != "" {
 				env["ANTHROPIC_MODEL"] = model
 			}
 			log.Printf("orchestrator: worker %s forced to provider %s (gateway, anthropic protocol) model=%q via env", cli, pid, model)
-			return env, "", ""
+			// fusion-code's settings.json `model` field outranks
+			// ANTHROPIC_MODEL env, so force the model via --model as well.
+			return env, model, ""
 		}
 		env["OPENAI_BASE_URL"] = prov.BaseURL
 		env["OPENAI_API_KEY"] = key
