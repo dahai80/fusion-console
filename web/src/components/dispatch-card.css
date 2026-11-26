@@ -108,6 +108,14 @@
 .dark .dispatch-brain[data-live=true] .brain-phase { color: var(--color-indigo-300); }
 .brain-context,.brain-handoff { margin-top: .3rem; font-size: .75rem; line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .brain-handoff span { margin-right: .27rem; }
+.brain-dispatches { margin-top: .35rem; display: flex; flex-direction: column; gap: .25rem; }
+.brain-dispatches li { display: flex; align-items: center; gap: .35rem; font-size: .72rem; line-height: 1.35; overflow-wrap: anywhere; }
+.brain-dispatches li svg { flex-shrink: 0; }
+.brain-dispatches li[data-status=dispatching] svg { color: var(--color-indigo-500); }
+.brain-dispatches li[data-status=queued] svg { color: var(--color-amber-500); }
+.brain-dispatches li[data-status=done] svg { color: var(--color-emerald-500); }
+.brain-dispatches li[data-status=failed] svg { color: var(--color-red-500); }
+.brain-dispatches li span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 @media(prefers-reduced-motion:no-preference) {
   .dispatch-stages li span { transition: background-color 160ms ease, box-shadow 160ms ease; }
   .dispatch-stages li[aria-current=step] span,.brain-context { animation: dispatch-reveal 160ms cubic-bezier(.23,1,.32,1); }

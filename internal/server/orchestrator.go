@@ -55,6 +55,7 @@ Rules:
 - Set requires_repo=true for work that needs an existing Git checkout. If the worker reports blocked, relay its reason before continuing dependent work.
 - After an agent finishes, verify its result (read_artifact when useful) before reporting to the user.
 - Never invent agent results; report only what run_agent actually returned.
+- Batch requests like "fix all the issues" or "handle every open bug": you are the orchestrator, never implement the fixes yourself. Enumerate the issues first (list_feedback_issues or the user's list), pick the worker that owns each issue's repo, then fan out — emit one run_agent (background=true) tool call PER ISSUE, all in the same assistant turn, so they run in parallel. Narrate each dispatch as you make it ("Dispatching issue #12 to worker X"). Summarize the dispatch list afterwards; each worker's result is posted back automatically.
 - Reply in the user's language.`
 
 // orchestratorPrompt composes the planner system prompt plus the live
@@ -98,7 +99,7 @@ func (s *Server) orchestratorPrompt() string {
 	b.WriteString("- If no worker owns the required repository, explain how to bind it in Agents > Workers or select a worker with the correct checkout.\n")
 	b.WriteString("- Dispatch workflow: " + contributionWorkflow + "\n")
 	b.WriteString("- Long dispatches: use run_agent with background=true for anything expected to run longer than ~2 minutes. Tell the user it is running in the background; the result is posted into this conversation automatically when done. Do not block the turn waiting on it.\n")
-	b.WriteString("- Dispatch sizing: each run_agent brief covers ONE bounded unit of work — a single issue, or one self-contained change. Never bundle multiple issues or phases into one brief: background dispatches are hard-killed at 30 minutes and a multi-part brief loses all unfinished parts. Split multi-part work into sequential dispatches (one issue per dispatch), verify each result, then dispatch the next.\n")
+	b.WriteString("- Dispatch sizing: each run_agent brief covers ONE bounded unit of work — a single issue, or one self-contained change. Never bundle multiple issues or phases into one brief: background dispatches are hard-killed at 30 minutes and a multi-part brief loses all unfinished parts. INDEPENDENT issues belong to DIFFERENT workers: fan them out as parallel run_agent calls in the SAME assistant turn (the console executes every tool call of a turn). Only chain dispatches sequentially when one depends on another's result.\n")
 	if g := workspaceGuidelines(s.agentsRoot(), 8*1024); g != "" {
 		b.WriteString("\nWorkspace conventions (CLAUDE.md / AGENTS.md found in the brain workspace):\n")
 		b.WriteString(g)
