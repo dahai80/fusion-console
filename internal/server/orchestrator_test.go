@@ -230,11 +230,11 @@ func TestProviderEnv(t *testing.T) {
 	}
 	s.cfg.Agent = nil
 	env, model, _ = s.providerEnv("fusion-code", s.workerConfig("fusion-code"))
-	if env == nil || env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:11432" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-test-gw" || env["ANTHROPIC_MODEL"] != "glm-5" {
+	if env == nil || env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:11432" || env["FUSION_BASE_URL"] != "http://127.0.0.1:11432" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-test-gw" || env["ANTHROPIC_MODEL"] != "glm-5" {
 		t.Fatalf("gateway anthropic env wrong: %v", env)
 	}
-	if model != "" {
-		t.Fatalf("gateway anthropic path must not force --model, got %q", model)
+	if model != "glm-5" {
+		t.Fatalf("gateway anthropic path must force --model for fusion-code (settings.json model outranks env), got %q", model)
 	}
 	for i := range s.cfg.Orchestrator.Workers {
 		if s.cfg.Orchestrator.Workers[i].Agent == "codex" {
