@@ -22,6 +22,12 @@ func TestCreateAgentConversationWorkdir(t *testing.T) {
 	if err := os.Mkdir(workerDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// A leftover literal directory must never shadow the home workspace.
+	t.Chdir(t.TempDir())
+	tilde := "~/workspace"
+	if err := os.MkdirAll(tilde, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	explicit := t.TempDir()
 	empty := ""
 	blank := " \t"
@@ -58,6 +64,19 @@ func TestCreateAgentConversationWorkdir(t *testing.T) {
 	}
 	s := New(cfg, t.TempDir(), st)
 	cookie := loginCookie(t, s)
+	t.Run("manual run checks the expanded directory before launch", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/agent/run", bytes.NewBufferString(`{"agent":"codex","workdir":"~/missing"}`))
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		var reply struct{ Error string }
+		if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != http.StatusBadRequest || reply.Error != "workdir not accessible: "+missing {
+			t.Fatalf("got %d %s; expected rejection of %q", rec.Code, rec.Body.String(), missing)
+		}
+	})
 	for _, tc := range []struct {
 		name, target string
 		workdir      *string // nil omits the field, as distinct from an explicit empty string
@@ -70,6 +89,7 @@ func TestCreateAgentConversationWorkdir(t *testing.T) {
 		{"legacy worker", "claude", nil, workerDir, ""},
 		{"bare CLI configured", "codex", nil, explicit, ""},
 		{"explicit overrides config", "codex-1", &explicit, explicit, ""},
+		{"explicit tilde ignores cwd shadow", "codex", &tilde, workerDir, ""},
 		{"unconfigured with explicit", "unconfigured", &explicit, explicit, ""},
 		{"unconfigured", "unconfigured", nil, "", "agent session requires workdir"},
 		{"bare CLI unconfigured", "opencode", nil, "", "agent session requires workdir"},
