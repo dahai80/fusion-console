@@ -513,6 +513,7 @@ function ChatPage({ onPage }: { onPage: (p: Page) => void }) {
   const [uploading, setUploading] = useState(false);
   const [listening, setListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+const composerRef = useRef<HTMLTextAreaElement>(null);
   const requiresRepo = useRef<HTMLInputElement>(null);
   const recogRef = useRef<any>(null);
   const [orchestrate, setOrchestrate] = useState(true);
@@ -1321,13 +1322,32 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
 
   // @mention: while typing an "@name" token at the end of the input, offer
   // completing agents; sending a message that @mentions one hands it off.
+  // Matching is fuzzy: names starting with the query rank first, names
+  // containing it anywhere follow ("code" offers fusion-code, then
+  // anything with "code" in the name).
   const mm = /@([a-zA-Z0-9_-]*)$/.exec(input);
   const mentionQuery = mm ? mm[1] : null;
   const mentionOptions = mentionQuery === null
     ? []
-    : detectedAgents.filter((a) => a.name.toLowerCase().startsWith(mentionQuery.toLowerCase()));
+    : detectedAgents
+        .filter((a) => a.name.toLowerCase().includes(mentionQuery.toLowerCase()))
+        .sort((x, y) => {
+          const qx = x.name.toLowerCase().startsWith(mentionQuery.toLowerCase()) ? 0 : 1;
+          const qy = y.name.toLowerCase().startsWith(mentionQuery.toLowerCase()) ? 0 : 1;
+          return qx - qy || x.name.localeCompare(y.name);
+        });
   const insertMention = (name: string) => {
-    setInput(input.replace(/@([a-zA-Z0-9_-]*)$/, `@${name} `));
+    const next = input.replace(/@([a-zA-Z0-9_-]*)$/, `@${name} `);
+    setInput(next);
+    // Restore composer focus with the caret right after "@name " so the
+    // user keeps typing the task without re-clicking the textarea.
+    const pos = next.length;
+    requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
   };
   const mentionedAgent = (() => {
     const m = input.match(/@([a-zA-Z0-9_-]+)/);
@@ -1729,6 +1749,7 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
               {uploading ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}
             </Button>
             <Textarea
+              ref={composerRef}
               rows={2}
               value={input}
               onChange={(e) => setInput(e.target.value)}
