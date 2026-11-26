@@ -207,11 +207,43 @@ func TestProviderEnv(t *testing.T) {
 		t.Fatalf("no provider configured must be empty: %v %q", env, model)
 	}
 
-	// Agent-settings override beats the wizard worker config.
+	// Agent-settings override beats the wizard worker config: an OpenAI-only
+	// provider cannot serve a claude-protocol CLI, so the binding falls back
+	// with a notice instead of injecting dead OPENAI_* env.
 	s.cfg.Agent = []config.AgentSettings{{Name: "claude", ProviderID: "p-oai"}}
-	env, model, _ = s.providerEnv("claude", s.workerConfig("claude"))
-	if env == nil || env["OPENAI_BASE_URL"] == "" || model != "gpt-test" {
-		t.Fatalf("agent settings override not honored: %v %q", env, model)
+	env, model, notice := s.providerEnv("claude", s.workerConfig("claude"))
+	if env != nil || notice == "" {
+		t.Fatalf("openai provider on claude CLI must fall back with notice: %v %q", env, notice)
+	}
+
+	// Gateway is dual-protocol: a claude-protocol CLI (fusion-code) gets
+	// ANTHROPIC_* with the /v1 suffix stripped; an OpenAI-protocol CLI
+	// (codex) gets OPENAI_* unchanged.
+	// Gateway providers resolve their key under the fixed "gateway-key" id.
+	t.Setenv("FUSION_CONSOLE_APIKEY_GATEWAY_KEY", "sk-test-gw")
+	s.cfg.Provider = append(s.cfg.Provider, config.Provider{ID: "p-gw", Name: "gw", Type: "gateway", BaseURL: "http://127.0.0.1:11432/v1", Model: "glm-5", APIKeyID: "keyoai", Enabled: true})
+	for i := range s.cfg.Orchestrator.Workers {
+		if s.cfg.Orchestrator.Workers[i].Agent == "fusion-code" {
+			s.cfg.Orchestrator.Workers[i].ProviderID = "p-gw"
+			s.cfg.Orchestrator.Workers[i].Model = "glm-5"
+		}
+	}
+	s.cfg.Agent = nil
+	env, model, _ = s.providerEnv("fusion-code", s.workerConfig("fusion-code"))
+	if env == nil || env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:11432" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-test-gw" || env["ANTHROPIC_MODEL"] != "glm-5" {
+		t.Fatalf("gateway anthropic env wrong: %v", env)
+	}
+	if model != "" {
+		t.Fatalf("gateway anthropic path must not force --model, got %q", model)
+	}
+	for i := range s.cfg.Orchestrator.Workers {
+		if s.cfg.Orchestrator.Workers[i].Agent == "codex" {
+			s.cfg.Orchestrator.Workers[i].ProviderID = "p-gw"
+		}
+	}
+	env, model, _ = s.providerEnv("codex", s.workerConfig("codex"))
+	if env == nil || env["OPENAI_BASE_URL"] != "http://127.0.0.1:11432/v1" || env["OPENAI_API_KEY"] != "sk-test-gw" || model != "glm-5" {
+		t.Fatalf("gateway openai env wrong: %v model=%q", env, model)
 	}
 }
 
