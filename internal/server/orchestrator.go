@@ -1012,8 +1012,18 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 	if model == "" {
 		model = prov.DefaultModel()
 	}
+	// The env family follows the CLI protocol, not the provider type:
+	// claude-protocol CLIs (claude, fusion-code) only honor ANTHROPIC_*,
+	// codex/opencode CLIs only honor OPENAI_*. Injecting the wrong family
+	// is silently ignored by the CLI, which then dials its default endpoint
+	// and fails with "Unable to connect" (run #99: fusion-code + gateway).
+	proto := agent.ProtocolFor(settings.Name, settings.Protocol)
 	switch prov.Type {
 	case "anthropic_compat":
+		if proto != agent.ProtocolClaudeStreamJSON {
+			log.Printf("orchestrator: worker %s: provider %s serves the Anthropic protocol but %s does not, using CLI default", cli, pid, cli)
+			return nil, "", "provider " + prov.Name + " serves the Anthropic protocol but " + cli + " needs an OpenAI-compatible endpoint — falling back to the CLI default login/model"
+		}
 		env["ANTHROPIC_BASE_URL"] = prov.BaseURL
 		env["ANTHROPIC_AUTH_TOKEN"] = key
 		if model != "" {
@@ -1021,7 +1031,28 @@ func (s *Server) providerEnv(cli string, wk *config.WorkerConfig) (map[string]st
 		}
 		log.Printf("orchestrator: worker %s forced to provider %s (anthropic_compat) model=%q via env", cli, pid, model)
 		return env, "", ""
-	case "openai_compat", "gateway":
+	case "gateway":
+		// The gateway is dual-protocol (/v1/messages and /v1/chat/completions
+		// on the same base URL), so the env family follows the CLI protocol.
+		if proto == agent.ProtocolClaudeStreamJSON {
+			// The Anthropic SDK appends /v1/messages itself — strip the
+			// OpenAI-style /v1 suffix the provider config carries.
+			base := strings.TrimSuffix(strings.TrimSuffix(prov.BaseURL, "/"), "/v1")
+			env["ANTHROPIC_BASE_URL"] = base
+			env["ANTHROPIC_AUTH_TOKEN"] = key
+			if model != "" {
+				env["ANTHROPIC_MODEL"] = model
+			}
+			log.Printf("orchestrator: worker %s forced to provider %s (gateway, anthropic protocol) model=%q via env", cli, pid, model)
+			return env, "", ""
+		}
+		env["OPENAI_BASE_URL"] = prov.BaseURL
+		env["OPENAI_API_KEY"] = key
+	case "openai_compat":
+		if proto == agent.ProtocolClaudeStreamJSON {
+			log.Printf("orchestrator: worker %s: provider %s serves only the OpenAI protocol but %s needs ANTHROPIC_*, using CLI default", cli, pid, cli)
+			return nil, "", "provider " + prov.Name + " serves only the OpenAI protocol but " + cli + " needs an Anthropic-compatible endpoint — falling back to the CLI default login/model"
+		}
 		env["OPENAI_BASE_URL"] = prov.BaseURL
 		env["OPENAI_API_KEY"] = key
 	default:
