@@ -33,10 +33,13 @@ const (
 )
 
 // defaultCommands maps agent names to their CLI executable when the settings
-// leave the command empty.
+// leave the command empty. fusion-code resolves to the standalone "fusion-code"
+// binary (brew / install.sh) — never the app-managed "fusion" shim, which the
+// FusionMLX desktop app points at its own bundle and must not be a dependency
+// of the console.
 var defaultCommands = map[string]string{
 	"claude":      "claude",
-	"fusion-code": "fusion",
+	"fusion-code": "fusion-code",
 	"codex":       "codex",
 	"opencode":    "opencode",
 	"atlascode":   "atlascode",

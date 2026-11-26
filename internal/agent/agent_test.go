@@ -220,7 +220,7 @@ func TestProtocolFor(t *testing.T) {
 	if a := NewFor("atlascode", "", ""); a.Name() != "atlascode" {
 		t.Errorf("NewFor atlascode wrong: %+v", a)
 	}
-	if ca, ok := NewFor("fusion-code", "", "").(ClaudeCompatAdapter); !ok || ca.Command != "fusion" {
+	if ca, ok := NewFor("fusion-code", "", "").(ClaudeCompatAdapter); !ok || ca.Command != "fusion-code" {
 		t.Errorf("NewFor fusion-code default command wrong: %+v", ca)
 	}
 }
