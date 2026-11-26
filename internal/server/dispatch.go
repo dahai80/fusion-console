@@ -74,6 +74,9 @@ type bgRun struct {
 	Result         string    `json:"result"`
 	Err            string    `json:"error,omitempty"`
 	Read           bool      `json:"read"`
+	// RetryInFlight: another run for the same conversation+worker is queued or
+	// running — soften the failure receipt so it does not read as the outcome.
+	RetryInFlight bool `json:"-"`
 }
 
 // dispatchToken returns the local loopback secret used by the MCP sidecar
@@ -329,6 +332,43 @@ func (r *dispatchRegistry) dismiss(id int64) {
 	}
 }
 
+// supersedeLocked drops earlier failed runs of the same conversation+worker
+// once a run finished successfully: a stale ❌ card must not outlive the ✅
+// that replaced it (failed retries stay visible only while nothing succeeded).
+// Returns the removed runs' DB ids for dismissal.
+func (r *dispatchRegistry) supersedeLocked(convID int64, worker string, keepID int64) []int64 {
+	if convID <= 0 || worker == "" {
+		return nil
+	}
+	var ids []int64
+	keep := r.runs[:0]
+	for _, run := range r.runs {
+		if run.ConversationID == convID && run.Worker == worker && run.Status == "error" && run.ID != keepID {
+			ids = append(ids, run.DBID)
+			continue
+		}
+		keep = append(keep, run)
+	}
+	r.runs = keep
+	return ids
+}
+
+// hasActiveSiblingLocked reports whether another run for the same
+// conversation+worker is still queued or running — a failing run with a live
+// retry behind it should soften its receipt instead of crying ❌ mid-plan.
+func (r *dispatchRegistry) hasActiveSiblingLocked(convID int64, worker string, excludeID int64) bool {
+	if convID <= 0 {
+		return false
+	}
+	for _, run := range r.runs {
+		if run.ID != excludeID && run.ConversationID == convID && run.Worker == worker &&
+			(run.Status == "queued" || run.Status == "running") {
+			return true
+		}
+	}
+	return false
+}
+
 // clearFinished removes terminal runs from the registry.
 func (r *dispatchRegistry) clearFinishedLocked() {
 	keep := r.runs[:0]
@@ -443,9 +483,23 @@ func (s *Server) enqueueBackgroundDispatch(convID int64, user string, args dispa
 			run.Status = "done"
 			run.Result = final
 		}
+		// A failure mid-chain is noise when a retry is already in flight; a
+		// success retires every earlier failure of the same task.
+		run.RetryInFlight = run.Status == "error" && s.bg.hasActiveSiblingLocked(run.ConversationID, run.Worker, run.ID)
 		s.persistRun(run)
+		var superseded []int64
+		if run.Status == "done" {
+			superseded = s.bg.supersedeLocked(run.ConversationID, run.Worker, run.ID)
+		}
 		s.bg.mu.Unlock()
 		log.Printf("orchestrator: background run #%d worker=%s status=%s", run.ID, run.Worker, run.Status)
+		for _, id := range superseded {
+			if err := s.store.DismissDispatchRun(id); err != nil {
+				log.Printf("dispatch: supersede DB dismiss run #%d: %v", id, err)
+				continue
+			}
+			log.Printf("dispatch: run #%d superseded by successful run #%d", id, run.ID)
+		}
 
 		// Chain continuation: wake the brain so a multi-step plan keeps
 		// moving without a human nudge between background runs. Detached —
@@ -524,6 +578,9 @@ func summarizeDispatch(run *bgRun) string {
 		fmt.Fprintf(&b, "> ⏸ background run #%d blocked — **%s**\n\n%s\n\n", run.ID, run.Worker, run.Detail)
 	default:
 		fmt.Fprintf(&b, "> ❌ background run #%d failed — **%s**\n\n", run.ID, run.Worker)
+	}
+	if run.Status == "error" && run.RetryInFlight {
+		fmt.Fprintf(&b, "_a retry is still running for this worker — this failure is not final_\n\n")
 	}
 	fmt.Fprintf(&b, "**task:** %s\n\n", oneLine(run.Task, 200))
 	if run.Err != "" {

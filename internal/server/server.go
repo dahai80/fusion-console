@@ -147,6 +147,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/agent/run", s.auth.Require(s.handleAgentRun))
 	m.HandleFunc("POST /api/attachments", s.auth.Require(s.handleAttachmentUpload))
 	m.HandleFunc("GET /api/attachments/read", s.auth.Require(s.handleAttachmentRead))
+	m.HandleFunc("GET /api/artifact", s.auth.Require(s.handleArtifact))
 	m.HandleFunc("GET /api/agents", s.auth.Require(s.handleAgents))
 
 	m.HandleFunc("GET /api/settings/providers", s.auth.Require(s.handleListProviders))
