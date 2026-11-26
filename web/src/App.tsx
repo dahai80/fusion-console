@@ -63,12 +63,36 @@ import { beginBrainTurn, brainEvent, endBrainTurn, type BrainActivity } from "./
 import { BrainCard, DispatchCard, DispatchDetails } from "./components/DispatchCard";
 import { DispatchRail, DispatchReopen, useDispatchRail } from "./components/DispatchStatus";
 
+// Plain file paths cited by workers (~/fusion/…/report.pptx, /Users/…) become
+// artifact download links. Lookbehind skips paths already inside markdown
+// link targets so existing links are not mangled.
+const artifactPathRE = /(?<!\]\()((?:~|\/(?:Users|home|Volumes|private|tmp))\/[\w.\-/]+)/g;
+
+function artifactUrl(path: string): string {
+  return `/api/artifact?path=${encodeURIComponent(path)}`;
+}
+
+// linkifyArtifactPaths links file paths outside code spans; backticked paths
+// stay literal so quoted commands and paths keep their exact text.
+function linkifyArtifactPaths(text: string): string {
+  return text.split(/(`[^`\n]*`)/).map((part) => {
+    if (part.length > 1 && part.startsWith("`") && part.endsWith("`")) return part;
+    return part.replace(artifactPathRE, (raw) => {
+      const trimmed = raw.replace(/[.,;:!?、。：；）)\]]+$/, "");
+      const trail = raw.slice(trimmed.length);
+      if (!/\.[A-Za-z0-9]{1,8}$/.test(trimmed)) return raw;
+      const name = trimmed.split("/").pop() || trimmed;
+      return `[${name}](${artifactUrl(trimmed)})${trail}`;
+    });
+  }).join("");
+}
+
 const chatMarkdownComponents: Components = {
   a({ children, href, title }) {
-    // Workers often cite files on the console host. A browser would resolve
-    // these absolute paths against the console origin, even on a phone.
-    if (href && /^\/(?:Users|home|Volumes|private|tmp)\//.test(href)) {
-      return <span>{children === href ? null : <>{children} </>}<code className="break-all">{href}</code></span>;
+    // Artifact downloads open in a new tab so the conversation stays put.
+    if (href && (href.startsWith("/api/artifact?path=") || /^\/(?:Users|home|Volumes|private|tmp)\//.test(href))) {
+      const target = href.startsWith("/api/artifact?path=") ? href : artifactUrl(href);
+      return <a href={target} title={title} target="_blank" rel="noreferrer">{children}</a>;
     }
     return <a href={href} title={title}>{children}</a>;
   },
@@ -1647,7 +1671,7 @@ const respondTyped = async (messageId: string, decision: "approve" | "reject") =
                   <p className="whitespace-pre-wrap">{m.content}</p>
                 ) : (
                   <div className="md">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={chatMarkdownComponents}>{m.content || "…"}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={chatMarkdownComponents}>{linkifyArtifactPaths(m.content || "…")}</ReactMarkdown>
                   </div>
                 )}
                 {m.meta && (() => {
