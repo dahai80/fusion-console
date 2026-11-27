@@ -38,6 +38,7 @@ import {
   Gauge,
   Users,
   Megaphone,
+  Workflow,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -57,6 +58,7 @@ import Dashboard from "./Dashboard";
 import { RagPage } from "./RagPage";
 import { ModelsPage } from "./ModelsPage";
 import TeamPage from "./TeamPage";
+import PipelinePage from "./pipeline/PipelinePage";
 import { Badge, Button, Card, Input, Select, Textarea, THEME_LABELS, ThemeProvider, nextThemeMode, useTheme } from "./components/ui";
 import RunDrawer from "./components/RunDrawer";
 import { beginBrainTurn, brainEvent, endBrainTurn, type BrainActivity } from "./components/brainActivity";
@@ -98,7 +100,7 @@ const chatMarkdownComponents: Components = {
   },
 };
 
-type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "feedback" | "onboard";
+type Page = "dashboard" | "chat" | "agents" | "gateway" | "rag" | "team" | "pipeline" | "feedback" | "onboard";
 type Navigation = { page: Page; feedbackEntry?: FeedbackEntry & { id: number } };
 
 export default function App() {
@@ -206,6 +208,7 @@ function Shell() {
         {page === "gateway" && <GatewayPage />}
         {page === "rag" && <RagPage />}
         {page === "team" && <TeamPage />}
+{page === "pipeline" && <PipelinePage />}
         {page === "feedback" && <FeedbackPage key={feedbackEntry?.id} entry={feedbackEntry} />}
         <FeedbackToastHost openFeedback={openFeedback} />
       </main>
@@ -322,6 +325,7 @@ function TopBar({
           {tab("gateway", "Gateway", Network)}
           {tab("rag", "Knowledge Base", Database)}
           {tab("team", "Team", Users)}
+          {tab("pipeline", "Pipeline", Workflow)}
           {tab("feedback", "Feedback", Megaphone)}
         </nav>
       </div>
